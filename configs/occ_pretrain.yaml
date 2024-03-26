@@ -1,0 +1,40 @@
+##Data
+data:
+  pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
+  input_within_pc_range: True
+  voxel_size: 0.2  # voxel size
+  n_input: 2  # number of input point cloud scan
+  n_output: 2  # number of output point cloud scan (for pretraining only)
+  ego_mask: True # mask the points of ego-vehicle, 4docc pretraining default=True
+#  x_flip: True  # flip the x-axis in Singapore (left hand drive)
+#  transform: True # If true, the points are pose-aligned before feeding to the model
+#  shuffle: True  # shuffle the dataset
+
+##Training
+model:
+  expt_dir: "../models/nusc/1s_4dmos-forecast_vs-0.2_debug"  # experiment directory
+  resume_ckpt:
+  loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
+  optimizer: "adam"
+  lr_start: 0.0001  # 4dmos: 0.0001, 4docc_org: 0.0005
+  lr_epoch: 1       # 4dmos: 1       4docc_org: 5
+  lr_decay: 0.9     # 4dmos: 0.99    4docc_org: 0.1
+  weight_decay: 0.0001  # not used
+  num_epoch: 15
+  batch_size: 1
+  num_workers: 1
+  num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]
+  # ACC_BATCHES: 1 # accumulate gradients over k batches before stepping into the optimizer
+  # AUGMENTATION: True
+
+# Dataset Config
+dataset:
+  name: "nuscenes"  # "kitti", "argo"
+  nuscenes:
+    root: "/root/autodl-tmp/Datasets/nuScenes"
+    version: "v1.0-trainval"
+  kitti:
+    root: "/home/user/Datasets/KITTI"
+    config: "configs/semantic-kitti.yaml"
+  argo:
+    root: "/home/user/Datasets/ArgoVerse2/LiDAR/"
