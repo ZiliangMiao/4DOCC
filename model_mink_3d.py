@@ -258,9 +258,9 @@ class Backbone3D(nn.Module):
         points_time_feats = []
         for points_4d in input_points_4d:
             points_coords.append(torch.div(points_4d[:, 0:3], self.quantization))  # 3d coords
-            t_interval = self.output_grid[0]
-            t_feats = torch.zeros(len(points_4d), t_interval).to(device='cuda')
-            for i in range(t_interval):
+            t_range = self.output_grid[0]
+            t_feats = torch.zeros(len(points_4d), t_range).to(device='cuda')
+            for i in range(t_range):
                 t_mask = points_4d[:, -1] == i
                 t_feats[t_mask, i] = 1
             points_time_feats.append(t_feats)
@@ -275,34 +275,32 @@ class Backbone3D(nn.Module):
 
         #
         s_prediction = self.MinkUNet(s_input)  # B, X, Y, Z, T; F
-        s_out_coords = s_prediction.slice(tf_input).coordinates
-        s_out_feats = s_prediction.slice(tf_input).features
         [T, Z, Y, X] = self.output_grid
 
-        dense_F = torch.zeros(torch.Size([batch_size, 2, X, Y, Z]), dtype=torch.float32, device='cuda:0')
+        # d_occ_feats, min_coord, tensor_stride = s_prediction.dense(shape=torch.Size([batch_size, 2, X, Y, Z]),
+        #                                       min_coordinate=torch.IntTensor([0, 0, 0]), contract_stride=True)
+
+        s_out_coords = s_prediction.slice(tf_input).coordinates
+        s_out_feats = s_prediction.slice(tf_input).features
+        d_occ_feats = torch.zeros(torch.Size([batch_size, 2, X, Y, Z]), dtype=torch.float32, device='cuda:0')
         coords = s_out_coords[:, 1:]
         tcoords = coords.t().long()
         batch_indices = s_out_coords[:, 0].long()
         exec(
-            "dense_F[batch_indices, :, "
+            "d_occ_feats[batch_indices, :, "
             + ", ".join([f"tcoords[{i}]" for i in range(len(tcoords))])
             + "] = s_out_feats"
         )
 
-        # output check
-        # out_coord = s_out.coordinates.cpu().numpy()
-        # pred_coord = s_prediction.coordinates.cpu().numpy()
-        # pred_feats = s_prediction.features.cpu().detach().numpy()
-        # x_min = torch.max(pred_coord[:, 1])
-        # y_min = torch.max(pred_coord[:, 2])
-        # z_min = torch.max(pred_coord[:, 3])
-        # t_min = torch.max(pred_coord[:, 4])
-
-        # occ_feats, min_coord, tensor_stride = s_prediction.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
-        #                                       min_coordinate=torch.IntTensor([0, 0, 0, 0]), contract_stride=True)
-
-        # reshape B-0, F-1, X-2, Y-3, Z-4 to the output of original 4docc
-        output = torch.squeeze(dense_F.permute(0, 1, 4, 3, 2).contiguous())
+        # permute (B-0, F-1, X-2, Y-3, Z-4) to original 4docc output (B, T, Z, Y, X)
+        output = torch.squeeze(d_occ_feats.permute(0, 1, 4, 3, 2).contiguous())
+        # dense field check
+        # feats_max = torch.max(s_prediction.features)
+        # feats_min = torch.min(s_prediction.features)
+        # d_occ_max = torch.max(output)
+        # d_occ_min = torch.min(output)
+        # num_zero = torch.sum(output == 0)
+        # output_check = output.detach().cpu().numpy()
         return output
 
 class MinkOccupancyForecastingNetwork3D(nn.Module):
