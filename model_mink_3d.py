@@ -394,6 +394,9 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
                         output_tindex,
                         loss
                     )
+                    # sigma grad check
+                    num_zero_sigma_grad = torch.sum(grad_sigma == 0)
+
                     # take care of nans and infs if any
                     invalid = torch.isnan(grad_sigma)
                     grad_sigma[invalid] = 0.0

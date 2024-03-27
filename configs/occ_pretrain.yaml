@@ -16,7 +16,7 @@ model:
   resume_ckpt:
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
   optimizer: "adam"
-  lr_start: 100  # 4dmos: 0.0001, 4docc_org: 0.0005
+  lr_start: 0.1  # 4dmos: 0.0001, 4docc_org: 0.0005
   lr_epoch: 1       # 4dmos: 1       4docc_org: 5
   lr_decay: 0.9     # 4dmos: 0.99    4docc_org: 0.1
   weight_decay: 0.0001  # not used
