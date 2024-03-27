@@ -216,6 +216,8 @@ def pretrain(cfg):
             total_val_loss = {}
             num_batch = len(data_loader)
             num_example = len(data_loader.dataset)
+            weigth_list = []
+            grad_list = []
             for i, batch in enumerate(data_loader):
                 input_points, input_tindex = batch[1:3]
                 output_origin, output_points, output_tindex = batch[3:6]
@@ -241,15 +243,18 @@ def pretrain(cfg):
                     if phase == "train":
                         optimizer.step()
 
-                        a_state_dict = model.module.state_dict(keep_vars=True)
-                        block1_weight = a_state_dict['encoder.block1.block.0.weight'].data
-                        block1_grad = a_state_dict['encoder.block1.block.0.weight'].grad
-                        weight_max = torch.max(block1_weight)
-                        weight_min = torch.min(block1_weight)
-                        grad_max = torch.max(block1_grad)
-                        grad_min = torch.min(block1_grad)
-
-                        a = 1
+                        params = list(model.named_parameters())
+                        # check whether weight and grad changed after optimization
+                        block1_weight = params[2][1].data
+                        block1_grad = params[2][1].grad
+                        weigth_list.append(block1_weight.cpu())
+                        grad_list.append(block1_grad.cpu())
+                        if i != 0:
+                            equal_weight = (weigth_list[i] == weigth_list[i-1])
+                            equal_grad = (grad_list[i] == grad_list[i-1])
+                            equal_weight_sum = torch.sum(equal_weight)
+                            equal_grad_sum = torch.sum(equal_grad)
+                            a = 1
 
                 avg_loss = ret_dict[f"{loss}_loss"].mean()
                 print(
@@ -441,10 +446,10 @@ if __name__ == "__main__":
 
     # load pretrain config
     with open("configs/occ_pretrain.yaml", "r") as f:
-        cfg_pretrain = yaml.load(f)
+        cfg_pretrain = yaml.safe_load(f)
     # load finetune config
     with open("configs/mos_finetune.yaml", "r") as f:
-        cfg_finetune = yaml.load(f)
+        cfg_finetune = yaml.safe_load(f)
 
     # point cloud forecasting pre-training
     pretrain(cfg_pretrain)

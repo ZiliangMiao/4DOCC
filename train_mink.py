@@ -12,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from data.common import CollateFn, MinkCollateFn, MosCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
+from model_mink_3d import MinkOccupancyForecastingNetwork3D
 from model_mos import MosOccupancyForecastingNetwork
 
 def make_dataloaders(cfg):
@@ -243,7 +244,7 @@ def pretrain(cfg):
     # pretrain dataset loader
     data_loaders = make_mink_dataloaders(cfg)
 
-    model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
+    model = MinkOccupancyForecastingNetwork3D(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
     model = model.to(device)
 
     # optimizer and scheduler
@@ -279,6 +280,10 @@ def pretrain(cfg):
             num_batch = len(data_loader)
             num_example = len(data_loader.dataset)
 
+            conv0p1s1_weight_list = []
+            conv0p1s1_grad_list = []
+            final_weight_list = []
+            final_grad_list = []
             for i, batch in enumerate(data_loader):
                 input_points_4d = batch[1]
                 output_origin, output_points, output_tindex = batch[2:5]
@@ -301,19 +306,35 @@ def pretrain(cfg):
                     )
 
                     if phase == "train":
+                        # check weight before optimize
+                        # conv0p1s1_weight_b = model.module.encoder.MinkUNet.conv0p1s1.kernel.data
+                        # conv0p1s1_grad_b = model.module.encoder.MinkUNet.conv0p1s1.kernel.grad
+
+                        # optimize
                         optimizer.step()
 
-                        # check whether model's parameters changed
-                        # _a_state_dict = model.module.state_dict(keep_vars=True)
-                        # conv0p1s1_weight = _a_state_dict['encoder.MinkUNet.conv0p1s1.kernel'].data
-                        # conv0p1s1_grad   = _a_state_dict['encoder.MinkUNet.conv0p1s1.kernel'].grad
-                        # conv0p1s1_weight_max, conv0p1s1_weight_min = torch.max(conv0p1s1_weight), torch.min(conv0p1s1_weight)
-                        # conv0p1s1_grad_max, conv0p1s1_grad_min = torch.max(conv0p1s1_grad), torch.min(conv0p1s1_grad)
-                        # block7conv2_weight = _a_state_dict['encoder.MinkUNet.block7.0.conv2.kernel'].data
-                        # block7conv2_grad   = _a_state_dict['encoder.MinkUNet.block7.0.conv2.kernel'].grad
-                        # block7conv2_weight_max, block7conv2_weight_min = torch.max(block7conv2_weight), torch.min(block7conv2_weight)
-                        # block7conv2_grad_max, block7conv2_grad_min = torch.max(block7conv2_grad), torch.min(block7conv2_grad)
-                        # a = 1
+                        # check weight after optimize
+                        params = list(model.named_parameters())
+                        # check whether weight and grad changed after optimization
+                        conv0p1s1_weight = params[3][1].data
+                        conv0p1s1_grad = params[3][1].grad
+                        final_weight = params[99][1].data
+                        final_grad = params[99][1].grad
+                        conv0p1s1_weight_list.append(conv0p1s1_weight.cpu())
+                        conv0p1s1_grad_list.append(conv0p1s1_grad.cpu())
+                        final_weight_list.append(final_weight.cpu())
+                        final_grad_list.append(final_grad.cpu())
+                        # check whether weight and grad equal to the previous iteration
+                        if i != 0:
+                            conv0p1s1_equal_weight = conv0p1s1_weight_list[i] == conv0p1s1_weight_list[i - 1]
+                            conv0p1s1_equal_grad = conv0p1s1_grad_list[i] == conv0p1s1_grad_list[i - 1]
+                            conv0p1s1_equal_weight_sum = torch.sum(conv0p1s1_equal_weight)
+                            conv0p1s1_equal_grad_sum = torch.sum(conv0p1s1_equal_grad)
+                            final_equal_weight = final_weight_list[i] == final_weight_list[i - 1]
+                            final_equal_grad = final_grad_list[i] == final_grad_list[i - 1]
+                            final_equal_weight_sum = torch.sum(final_equal_weight)
+                            final_equal_grad_sum = torch.sum(final_equal_grad)
+                            a = 1
 
                         # for minkowski engine
                         torch.cuda.empty_cache()
@@ -330,9 +351,7 @@ def pretrain(cfg):
                     n_iter += 1
                     for key in ret_dict:
                         if key.endswith("loss"):
-                            writer.add_scalar(
-                                    f"{phase}/{key}", ret_dict[key].mean().item(), n_iter
-                            )
+                            writer.add_scalar(f"{phase}/{key}", ret_dict[key].mean().item(), n_iter)
                 else:
                     for key in ret_dict:
                         if key.endswith("loss"):
