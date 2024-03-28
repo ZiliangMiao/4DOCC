@@ -12,6 +12,7 @@ from lib.minkowski.resnet import ResNetBase
 
 # JIT
 from torch.utils.cpp_extension import load
+from utils.layers.differentiable_voxel_rendering import DifferentiableVoxelRendering
 
 dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
 
@@ -382,10 +383,26 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
         ret_dict = {}
 
         if mode == "training":
-            if loss in ["l1", "l2", "absrel"]:
+            use_torch_dvr_layer = True
+            if use_torch_dvr_layer:
                 sigma = F.relu(output, inplace=True)
-                # sigma_max, sigma_min = sigma.max(), sigma.min()
+                pred_dist, gt_dist = DifferentiableVoxelRendering(
+                    sigma,
+                    output_origin,
+                    output_points,
+                    output_tindex
+                )
+                pred_dist *= self.voxel_size
+                gt_dist *= self.voxel_size
 
+                # pytorch loss and backward
+                lossfunc = torch.nn.L1Loss()
+                l1_loss = lossfunc(pred_dist, gt_dist)
+                ret_dict["l1_loss"] = l1_loss
+                l1_loss.backward()
+
+            elif loss in ["l1", "l2", "absrel"]:
+                sigma = F.relu(output, inplace=True)
                 if sigma.requires_grad:
                     pred_dist, gt_dist, grad_sigma = dvr.render(
                         sigma,
@@ -394,6 +411,7 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
                         output_tindex,
                         loss
                     )
+
                     # sigma grad check
                     num_zero_sigma_grad = torch.sum(grad_sigma == 0)
 
