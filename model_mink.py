@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 import MinkowskiEngine as ME
 from lib.minkowski.minkunet import MinkUNet14
+from lib.minkowski.resnet import ResNet14
 
 # JIT
 from torch.utils.cpp_extension import load
@@ -77,7 +78,7 @@ class ConvBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
 
-class CustomMinkUNet(MinkUNet14):
+class CustomMinkUNet(ResNet14):
         PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
         INIT_DIM = 8
 
@@ -102,6 +103,8 @@ class Encoder(nn.Module):
         tensor_field = ME.TensorField(features=feats, coordinates=coords.type_as(feats),
                                       quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
         s_input = tensor_field.sparse()
+
+        # import pdb ; pdb.set_trace()
 
         # s_input = ME.SparseTensor(coordinates=coords, features=feats,
         #                           quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
@@ -236,6 +239,7 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         # w/ skip connection
         # _output = self.linear(_input) + self.decoder(self.encoder(_input))
         _input = input_points
+        # import pdb ; pdb.set_trace()
         _output = self.encoder(_input)  # minkowski unet as encoder + decoder
         output = _output.reshape(len(_input), self.n_input, self.n_height, self.n_length, self.n_width)
 
@@ -245,6 +249,8 @@ class MinkOccupancyForecastingNetwork(nn.Module):
             if loss in ["l1", "l2", "absrel"]:
                 sigma = F.relu(output, inplace=True)
                 # sigma_max, sigma_min = sigma.max(), sigma.min()
+                # import pdb
+                # pdb.set_trace()
 
                 if sigma.requires_grad:
                     pred_dist, gt_dist, grad_sigma = dvr.render(
