@@ -218,6 +218,7 @@ def pretrain(cfg):
             num_example = len(data_loader.dataset)
             weigth_list = []
             grad_list = []
+            avg_loss_50_iters = 0
             for i, batch in enumerate(data_loader):
                 input_points, input_tindex = batch[1:3]
                 output_origin, output_points, output_tindex = batch[3:6]
@@ -243,34 +244,44 @@ def pretrain(cfg):
                     if phase == "train":
                         optimizer.step()
 
-                        params = list(model.named_parameters())
-                        # check whether weight and grad changed after optimization
-                        block1_weight = params[2][1].data
-                        block1_grad = params[2][1].grad
-                        weigth_list.append(block1_weight.cpu())
-                        grad_list.append(block1_grad.cpu())
-                        if i != 0:
-                            equal_weight = (weigth_list[i] == weigth_list[i-1])
-                            equal_grad = (grad_list[i] == grad_list[i-1])
-                            equal_weight_sum = torch.sum(equal_weight)
-                            equal_grad_sum = torch.sum(equal_grad)
-                            a = 1
+                        # params = list(model.named_parameters())
+                        # # check whether weight and grad changed after optimization
+                        # block1_weight = params[2][1].data
+                        # block1_grad = params[2][1].grad
+                        # weigth_list.append(block1_weight.cpu())
+                        # grad_list.append(block1_grad.cpu())
+                        # if i != 0:
+                        #     equal_weight = (weigth_list[i] == weigth_list[i-1])
+                        #     equal_grad = (grad_list[i] == grad_list[i-1])
+                        #     equal_weight_sum = torch.sum(equal_weight)
+                        #     equal_grad_sum = torch.sum(equal_grad)
+                        #     a = 1
 
                 avg_loss = ret_dict[f"{loss}_loss"].mean()
-                print(
-                            f"Phase: {phase}, Iter: {n_iter},",
-                            f"Epoch: {epoch}/{_num_epoch},",
-                            f"Batch: {i}/{num_batch},",
-                            f"{loss.upper()} Loss: {avg_loss.item():.3f}",
-                )
-
+                avg_loss_50_iters += avg_loss.item() / 50
+                
                 if phase == "train":
                     n_iter += 1
+                    # print every 50 iter:
+                    if i % 50 == 49:
+                        print(
+                                    f"Phase: {phase}, Iter: {n_iter},",
+                                    f"Epoch: {epoch}/{_num_epoch},",
+                                    f"Batch: {i}/{num_batch},",
+                                    f"{loss.upper()} Loss Per 50 Iters: {avg_loss_50_iters}",
+                        )
+                        writer.add_scalar(f"{phase}/50 iters avg l1_loss", avg_loss_50_iters, n_iter)
+                        avg_loss_50_iters = 0
                     for key in ret_dict:
                         if key.endswith("loss"):
-                            writer.add_scalar(
-                                    f"{phase}/{key}", ret_dict[key].mean().item(), n_iter
-                            )
+                            writer.add_scalar(f"{phase}/{key}", ret_dict[key].mean().item(), n_iter)
+                # if phase == "train":
+                #     n_iter += 1
+                #     for key in ret_dict:
+                #         if key.endswith("loss"):
+                #             writer.add_scalar(
+                #                     f"{phase}/{key}", ret_dict[key].mean().item(), n_iter
+                #             )
                 else:
                     for key in ret_dict:
                         if key.endswith("loss"):

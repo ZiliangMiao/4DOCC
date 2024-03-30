@@ -78,8 +78,10 @@ class ConvBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
 
-class CustomMinkUNet(ResNet14):
-        PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
+class CustomMinkUNet(MinkUNet14):
+        # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
+        # PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
+        PLANES = (8, 64, 256, 512, 512, 256, 64, 8)
         INIT_DIM = 8
 
 class Encoder(nn.Module):
