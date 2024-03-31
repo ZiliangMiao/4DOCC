@@ -91,7 +91,7 @@ def make_mink_dataloaders(cfg):
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
-        "shuffle": True,
+        "shuffle": False,
         "drop_last": True,
         "batch_size": cfg["model"]["batch_size"],
         "num_workers": cfg["model"]["num_workers"],
@@ -270,14 +270,14 @@ def pretrain(cfg):
     writer = SummaryWriter(f"{model_dir}/tf_logs")
     for epoch in range(start_epoch, _num_epoch):
         # check model weight at the begining of every epoch
-        params = list(model.named_parameters())
+        # params = list(model.named_parameters())
         # check whether weight and grad changed after optimization
-        conv0p1s1_weight = params[3][1].data
-        final_weight = params[99][1].data
+        # conv0p1s1_weight = params[3][1].data
+        # final_weight = params[99][1].data
         # print(f"Epoch{epoch}, conv0p1s1 weight: \n")
         # print(conv0p1s1_weight.cpu())
-        print(f"Epoch{epoch}, final weight: \n")
-        print(final_weight.cpu())
+        # print(f"Epoch{epoch}, final weight: \n")
+        # print(final_weight.cpu())
         
         for phase in ["train"]:  # , "val"]:
             data_loader = data_loaders[phase]
@@ -290,10 +290,10 @@ def pretrain(cfg):
             num_batch = len(data_loader)
             num_example = len(data_loader.dataset)
 
-            conv0p1s1_weight_list = []
-            conv0p1s1_grad_list = []
-            final_weight_list = []
-            final_grad_list = []
+            # conv0p1s1_weight_list = []
+            # conv0p1s1_grad_list = []
+            # final_weight_list = []
+            # final_grad_list = []
             avg_loss_50_iters = 0
             for i, batch in enumerate(data_loader):
                 input_points_4d = batch[1]
@@ -359,16 +359,16 @@ def pretrain(cfg):
                 if phase == "train":
                     n_iter += 1
                     # print every 50 iter:
-                    if i % 100 == 99:
+                    # if i % 100 == 99:
                         # check model weight at the begining of every epoch
-                        params = list(model.named_parameters())
+                        # params = list(model.named_parameters())
                         # check whether weight and grad changed after optimization
-                        conv0p1s1_weight = params[3][1].data
-                        final_weight = params[99][1].data
+                        # conv0p1s1_weight = params[3][1].data
+                        # final_weight = params[99][1].data
                         # print(f"Epoch{epoch}, conv0p1s1 weight: \n")
                         # print(conv0p1s1_weight.cpu())
-                        print(f"Epoch{epoch}, Iter{i}, final weight: \n")
-                        print(final_weight.cpu())
+                        # print(f"Epoch{epoch}, Iter{i}, final weight: \n")
+                        # print(final_weight.cpu())
                     if i % 50 == 49:
                         print(
                                     f"Phase: {phase}, Iter: {n_iter},",

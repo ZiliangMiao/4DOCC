@@ -29,76 +29,6 @@ def get_grid_mask(points_all, pc_range):
     # print("shape of mask being returned", mask.shape)
     return torch.stack(masks)
 
-
-def conv3x3(in_channels, out_channels, bias=False):
-    return nn.Conv2d(
-        in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=bias
-    )
-
-def deconv3x3(in_channels, out_channels, stride):
-    return nn.ConvTranspose2d(
-        in_channels,
-        out_channels,
-        kernel_size=3,
-        stride=stride,
-        padding=1,
-        output_padding=1,
-        bias=False,
-    )
-
-def maxpool2x2(stride):
-    return nn.MaxPool2d(kernel_size=2, stride=stride, padding=0)
-
-def relu(inplace=True):
-    return nn.ReLU(inplace=inplace)
-
-def bn(num_features):
-    return nn.BatchNorm2d(num_features=num_features)
-
-class ConvBlock(nn.Module):
-    def __init__(self, num_layer, in_channels, out_channels, max_pool=False):
-        super(ConvBlock, self).__init__()
-
-        layers = []
-        for i in range(num_layer):
-            _in_channels = in_channels if i == 0 else out_channels
-            layers.append(conv3x3(_in_channels, out_channels))
-            layers.append(bn(out_channels))
-            layers.append(relu())
-
-        if max_pool:
-            layers.append(maxpool2x2(stride=2))
-
-        self.block = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.block(x)
-
-class Decoder(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(Decoder, self).__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.block = nn.Sequential(
-            deconv3x3(in_channels, 128, stride=2),
-            bn(128),
-            relu(),
-            conv3x3(128, 128),
-            bn(128),
-            relu(),
-            deconv3x3(128, 64, stride=2),
-            bn(64),
-            relu(),
-            conv3x3(64, 64),
-            bn(64),
-            relu(),
-            conv3x3(64, out_channels, bias=True),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
 class MinkUNet14(ResNetBase):
     BLOCK = BasicBlock
     PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
@@ -246,10 +176,10 @@ class MinkUNet14(ResNetBase):
         return self.final(out)
 
 class Backbone3D(nn.Module):
-    def __init__(self, output_grid):
+    def __init__(self, in_channels, out_channels, output_grid):
         super(Backbone3D, self).__init__()
         self.output_grid = output_grid
-        self.MinkUNet = MinkUNet14(in_channels=2, out_channels=2, D=3)
+        self.MinkUNet = MinkUNet14(in_channels=in_channels, out_channels=out_channels, D=3)
         self.quantization = torch.Tensor([0.2, 0.2, 0.2]).to(device='cuda')  # x y z t
 
     def forward(self, input_points_4d):
@@ -304,6 +234,24 @@ class Backbone3D(nn.Module):
         # output_check = output.detach().cpu().numpy()
         return output
 
+class DenseDecoder(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
+        super(DenseDecoder, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv3d(
+                in_channels,
+                out_channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                stride=stride,
+            ),
+            # nn.BatchNorm3d(out_channels),
+        )
+
+    def forward(self, x):
+        out = self.conv(x)
+        return out
+
 class MinkOccupancyForecastingNetwork3D(nn.Module):
     def __init__(self, loss_type, n_input, n_output, pc_range, voxel_size):
 
@@ -339,10 +287,11 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
             torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
         )
 
-        # _in_channels = self.n_input * self.n_height
-        self.encoder = Backbone3D(self.output_grid)
+        self.encoder = Backbone3D(in_channels=self.n_input, out_channels=self.n_input, output_grid=self.output_grid)
+        self.decoder = DenseDecoder(in_channels=self.n_input, out_channels=self.n_output)
 
         # NOTE: initialize the linear predictor (no bias) over history
+        # _in_channels = self.n_input * self.n_height
         # _out_channels = self.n_output * self.n_height
         # self.linear = torch.nn.Conv2d(
         #     _in_channels, _out_channels, (3, 3), stride=1, padding=1, bias=True
@@ -361,6 +310,8 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
         eval_within_grid=False,
         eval_outside_grid=False
     ):
+        torch.autograd.set_detect_anomaly(True)
+
         if loss == None:
             loss = self.loss_type
 
@@ -375,33 +326,32 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
         output_points = ((output_points_orig - self.offset) / self.scaler).float()
 
         # w/ skip connection
-        # _output = self.linear(_input) + self.decoder(self.encoder(_input))
         _input = input_points
-        _output = self.encoder(_input)  # minkowski unet as encoder + decoder
+        _output = self.decoder(self.encoder(_input))  # sparse unet as encoder, dense 3d conv as decoder
         output = _output.reshape(len(_input), self.n_input, self.n_height, self.n_length, self.n_width)
 
         ret_dict = {}
 
         if mode == "training":
-            use_torch_dvr_layer = True
-            if use_torch_dvr_layer:
-                sigma = F.relu(output, inplace=True)
-                pred_dist, gt_dist = DifferentiableVoxelRendering(
-                    sigma,
-                    output_origin,
-                    output_points,
-                    output_tindex
-                )
-                pred_dist *= self.voxel_size
-                gt_dist *= self.voxel_size
+            # use_torch_dvr_layer = False
+            # if use_torch_dvr_layer:
+            #     sigma = F.relu(output, inplace=True)
+            #     pred_dist, gt_dist = DifferentiableVoxelRendering(
+            #         sigma,
+            #         output_origin,
+            #         output_points,
+            #         output_tindex
+            #     )
+            #     pred_dist *= self.voxel_size
+            #     gt_dist *= self.voxel_size
+            #
+            #     # pytorch loss and backward
+            #     lossfunc = torch.nn.L1Loss()
+            #     l1_loss = lossfunc(pred_dist, gt_dist)
+            #     ret_dict["l1_loss"] = l1_loss
+            #     l1_loss.backward()
 
-                # pytorch loss and backward
-                lossfunc = torch.nn.L1Loss()
-                l1_loss = lossfunc(pred_dist, gt_dist)
-                ret_dict["l1_loss"] = l1_loss
-                l1_loss.backward()
-
-            elif loss in ["l1", "l2", "absrel"]:
+            if loss in ["l1", "l2", "absrel"]:
                 sigma = F.relu(output, inplace=True)
                 if sigma.requires_grad:
                     pred_dist, gt_dist, grad_sigma = dvr.render(
@@ -424,7 +374,8 @@ class MinkOccupancyForecastingNetwork3D(nn.Module):
                     invalid = torch.isinf(pred_dist)
                     pred_dist[invalid] = 0.0
                     gt_dist[invalid] = 0.0
-                    sigma.backward(grad_sigma)
+                    with torch.autograd.detect_anomaly():
+                        sigma.backward(grad_sigma)
                 else:
                     pred_dist, gt_dist = dvr.render_forward(
                         sigma,
