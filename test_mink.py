@@ -3,7 +3,6 @@ from datetime import datetime
 import numpy as np
 import time
 import yaml
-import open3d
 
 import torch
 from torch import nn
@@ -226,6 +225,7 @@ def test(cfg):
 
                 # save pred_pcd as [sample_data_token]_pred.pcd
                 if _write_pcd:
+                    import open3d
                     pred_pcd_file = os.path.join(pred_pcds_dir, f"{filenames[j][2]}_pred.pcd")
                     o3d_pred_pcd = open3d.geometry.PointCloud()
                     o3d_pred_pcd.points = open3d.utility.Vector3dVector(pred_pcd.numpy())
@@ -262,6 +262,6 @@ if __name__ == "__main__":
     np.random.seed(666)
 
     # test point cloud forecasting
-    with open("configs/occ_test.yaml", "r") as f:
-        cfg_test = yaml.load(f)
+    with open("./configs/occ_test.yaml", "r") as f:
+        cfg_test = yaml.safe_load(f)
     test(cfg_test)

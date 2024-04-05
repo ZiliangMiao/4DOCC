@@ -13,7 +13,7 @@ data:
 
 ##Testing
 model:
-  expt_name: "1s_4dmos-forecast_vs-0.2_densedecoder"  # experiment directory
+  expt_name: "3s_sparse-dense_vs-0.2"  # experiment directory
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
   test_epoch: 14
   batch_size: 2
@@ -21,7 +21,7 @@ model:
   num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]
   metrics: ["chamfer_dist"]
   plot_metrics: True
-  write_pcd: True
+  write_pcd: False
   assume_const_velo: True
   eval_within_grid: False
   eval_outside_grid: False
@@ -29,7 +29,8 @@ model:
 # Dataset Config
 dataset:
   nusc:
-    root: "/home/user/Datasets/nuScenes"
+    root: "/root/autodl-tmp/Datasets/nuScenes"
+    # root: "/home/user/Datasets/nuScenes"
     version: "v1.0-trainval"
   kitti:
     root: "/home/user/Datasets/KITTI"
