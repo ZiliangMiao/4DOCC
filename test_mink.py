@@ -93,7 +93,7 @@ def make_mink_dataloaders(cfg):
         from nuscenes.nuscenes import NuScenes
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
         data_loader = DataLoader(
-                nuScenesDataset(nusc, "val", dataset_kwargs),
+                nuScenesDataset(nusc, "train", dataset_kwargs),
                 collate_fn=MinkCollateFn,
                 **data_loader_kwargs)
     else:
@@ -188,6 +188,10 @@ def test(cfg):
                 mode="testing",
                 eval_within_grid=cfg["model"]["eval_within_grid"],
                 eval_outside_grid=cfg["model"]["eval_outside_grid"])
+
+            from utils.vis.vis_occ import get_occupancy_as_pcd
+            occ_pcd = get_occupancy_as_pcd(ret_dict["pog"], 0.01, _voxel_size, _pc_range, "Oranges")
+            a = 1
 
         # iterate through the batch
         for j in range(output_points.shape[0]):  # iterate through the batch

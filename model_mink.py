@@ -7,12 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import MinkowskiEngine as ME
-from lib.minkowski.minkunet import MinkUNet14
-from lib.minkowski.resnet import ResNet14
+from MinkowskiEngine.modules.resnet_block import BasicBlock
+from lib.minkowski.minkunet import MinkUNetBase
 
 # JIT
 from torch.utils.cpp_extension import load
-
 dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
 
 
@@ -28,70 +27,20 @@ def get_grid_mask(points_all, pc_range):
     # print("shape of mask being returned", mask.shape)
     return torch.stack(masks)
 
+class MinkUNet14(MinkUNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
+    # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
+    PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
+    INIT_DIM = 8
 
-def conv3x3(in_channels, out_channels, bias=False):
-    return nn.Conv2d(
-        in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=bias
-    )
-
-
-def deconv3x3(in_channels, out_channels, stride):
-    return nn.ConvTranspose2d(
-        in_channels,
-        out_channels,
-        kernel_size=3,
-        stride=stride,
-        padding=1,
-        output_padding=1,
-        bias=False,
-    )
-
-
-def maxpool2x2(stride):
-    return nn.MaxPool2d(kernel_size=2, stride=stride, padding=0)
-
-
-def relu(inplace=True):
-    return nn.ReLU(inplace=inplace)
-
-
-def bn(num_features):
-    return nn.BatchNorm2d(num_features=num_features)
-
-
-class ConvBlock(nn.Module):
-    def __init__(self, num_layer, in_channels, out_channels, max_pool=False):
-        super(ConvBlock, self).__init__()
-
-        layers = []
-        for i in range(num_layer):
-            _in_channels = in_channels if i == 0 else out_channels
-            layers.append(conv3x3(_in_channels, out_channels))
-            layers.append(bn(out_channels))
-            layers.append(relu())
-
-        if max_pool:
-            layers.append(maxpool2x2(stride=2))
-
-        self.block = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.block(x)
-
-class CustomMinkUNet(MinkUNet14):
-        # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
-        PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
-        # PLANES = (8, 64, 256, 512, 512, 256, 64, 8)
-        INIT_DIM = 8
-
-class Encoder(nn.Module):
-    def __init__(self, in_channels, out_channels, output_grid):
-        super(Encoder, self).__init__()
+class SparseEncoder4D(nn.Module):
+    def __init__(self, in_channels, out_channels, voxel_size, output_grid):
+        super(SparseEncoder4D, self).__init__()
+        self.voxel_size = voxel_size
         self.output_grid = output_grid
-
-        self.MinkUNet = CustomMinkUNet(in_channels=in_channels, out_channels=out_channels, D=4)
-
-        self.quantization = torch.Tensor([0.2, 0.2, 0.2, 1.0]).to(device='cuda')  # x y z t
+        self.MinkUNet = MinkUNet14(in_channels=in_channels, out_channels=out_channels, D=4)
+        self.quantization = torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1.0]).to(device='cuda')
 
     def forward(self, input_points_4d):
         batch_size = len(input_points_4d)
@@ -142,34 +91,9 @@ class Encoder(nn.Module):
         output = torch.squeeze(dense_F.permute(0, 5, 4, 3, 2, 1).contiguous())
         return output
 
-class Decoder(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(Decoder, self).__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.block = nn.Sequential(
-            deconv3x3(in_channels, 128, stride=2),
-            bn(128),
-            relu(),
-            conv3x3(128, 128),
-            bn(128),
-            relu(),
-            deconv3x3(128, 64, stride=2),
-            bn(64),
-            relu(),
-            conv3x3(64, 64),
-            bn(64),
-            relu(),
-            conv3x3(64, out_channels, bias=True),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-class DenseDecoder(nn.Module):
+class DenseDecoder3D(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
-        super(DenseDecoder, self).__init__()
+        super(DenseDecoder3D, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv3d(
                 in_channels,
@@ -178,15 +102,15 @@ class DenseDecoder(nn.Module):
                 padding=padding,
                 stride=stride,
             ),
-            nn.BatchNorm3d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv3d(
-                in_channels,
-                out_channels,
-                kernel_size=kernel_size,
-                padding=padding,
-                stride=stride,
-            ),
+            # nn.BatchNorm3d(out_channels),
+            # nn.ReLU(inplace=True),
+            # nn.Conv3d(
+            #     in_channels,
+            #     out_channels,
+            #     kernel_size=kernel_size,
+            #     padding=padding,
+            #     stride=stride,
+            # ),
         )
 
     def forward(self, x):
@@ -195,9 +119,7 @@ class DenseDecoder(nn.Module):
 
 class MinkOccupancyForecastingNetwork(nn.Module):
     def __init__(self, loss_type, n_input, n_output, pc_range, voxel_size):
-
         super(MinkOccupancyForecastingNetwork, self).__init__()
-
         self.loss_type = loss_type.lower()
         assert self.loss_type in ["l1", "l2", "absrel"]
 
@@ -223,13 +145,13 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         self.offset_t = torch.nn.parameter.Parameter(
             torch.Tensor([self.pc_range[0], self.pc_range[1], self.pc_range[2], 0.0])[None, :], requires_grad=False
         )
-
         self.scaler = torch.nn.parameter.Parameter(
             torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
         )
 
-        self.encoder = Encoder(in_channels=1, out_channels=1, output_grid=self.output_grid)
-        self.decoder = DenseDecoder(in_channels=self.n_input, out_channels=self.n_output)
+        # with 4d sparse encoder, feature dimension = 1
+        self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, voxel_size=self.voxel_size, output_grid=self.output_grid)
+        self.decoder = DenseDecoder3D(in_channels=self.n_input, out_channels=self.n_output, kernel_size=3)
 
         # NOTE: initialize the linear predictor (no bias) over history
         # _in_channels = self.n_input * self.n_height
@@ -267,9 +189,11 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         # w/ skip connection
         # _output = self.linear(_input) + self.decoder(self.encoder(_input))
         _input = input_points
+        batch_size = len(_input)
         # import pdb ; pdb.set_trace()
-        _output = self.decoder(self.encoder(_input))  # minkowski unet as encoder
-        output = _output.reshape(len(_input), self.n_input, self.n_height, self.n_length, self.n_width)
+        _en_output = self.encoder(_input).reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
+        _de_output = self.decoder(_en_output)  # minkowski unet as encoder
+        output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
 
         ret_dict = {}
 

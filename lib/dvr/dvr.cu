@@ -6,7 +6,9 @@
 #include <string>
 #include <iostream>
 
-#define MAX_D 1446 // 700 + 700 + 45 + 1
+// when voxel size = 0.2, point cloud range = [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]: max_d = 700 + 700 + 45 + 1 = 1446
+// when voxel size = 0.1, point cloud range = [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]: max_d = 1400 + 1400 + 90 + 1 = 2891
+#define MAX_D 2891
 
 enum LossType {L1, L2, ABSREL};
 enum PhaseName {TEST, TRAIN};

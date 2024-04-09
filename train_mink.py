@@ -12,72 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from data.common import CollateFn, MinkCollateFn, MosCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
-from model_mink_3d import MinkOccupancyForecastingNetwork3D
 from model_mos import MosOccupancyForecastingNetwork
-
-def make_dataloaders(cfg):
-    dataset_kwargs = {
-        "pc_range": cfg["data"]["pc_range"],
-        "voxel_size": cfg["data"]["voxel_size"],
-        "n_input": cfg["data"]["n_input"],
-        "n_output": cfg["data"]["n_output"],
-        "nusc_version": cfg["dataset"]["nuscenes"]["version"],
-        "ego_mask": cfg["data"]["ego_mask"],
-    }
-    data_loader_kwargs = {
-        "pin_memory": False,  # NOTE
-        "shuffle": False,
-        "drop_last": True,
-        "batch_size": cfg["model"]["batch_size"],
-        "num_workers": cfg["model"]["num_workers"],
-    }
-
-    dataset_name = cfg["dataset"]["name"]
-    if dataset_name.lower() == "kitti":
-        from data.kitti import KittiDataset
-
-        data_loaders = {
-            "train": DataLoader(
-                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "trainval", dataset_kwargs),
-                collate_fn=CollateFn,
-                **data_loader_kwargs,
-            ),
-            "val": DataLoader(
-                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "test", dataset_kwargs),
-                collate_fn=CollateFn,
-                **data_loader_kwargs,
-            ),
-        }
-    elif dataset_name.lower() == "nuscenes":
-        from data.nusc import nuScenesDataset
-        from nuscenes.nuscenes import NuScenes
-
-        nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
-        Dataset = nuScenesDataset
-        data_loaders = {
-            "train": DataLoader(
-                Dataset(nusc, "train", dataset_kwargs),
-                collate_fn=CollateFn,
-                **data_loader_kwargs,
-            ),
-            "val": DataLoader(
-                Dataset(nusc, "val", dataset_kwargs),
-                collate_fn=CollateFn,
-                **data_loader_kwargs,
-            ),
-        }
-    elif dataset_name.lower() == "argoverse2":
-        from data.av2 import Argoverse2Dataset
-        data_loaders = {
-            "train": DataLoader(
-                Argoverse2Dataset(cfg["dataset"][dataset_name]["root"], "train", dataset_kwargs, subsample=cfg["dataset"][dataset_name]["subsample"]),
-                collate_fn=CollateFn,
-                **data_loader_kwargs,
-            )
-        }
-    else:
-        raise NotImplementedError("Dataset " + cfg["dataset"]["name"] + "is not supported.")
-    return data_loaders
 
 def make_mink_dataloaders(cfg):
     dataset_kwargs = {
@@ -91,29 +26,14 @@ def make_mink_dataloaders(cfg):
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
-        "shuffle": False,
+        "shuffle": cfg["data"]["shuffle"],
         "drop_last": True,
         "batch_size": cfg["model"]["batch_size"],
         "num_workers": cfg["model"]["num_workers"],
     }
 
     dataset_name = cfg["dataset"]["name"]
-    if dataset_name.lower() == "kitti":
-        from data.kitti import KittiDataset
-
-        data_loaders = {
-            "train": DataLoader(
-                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "trainval", dataset_kwargs),
-                collate_fn=MinkCollateFn,
-                **data_loader_kwargs,
-            ),
-            "val": DataLoader(
-                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "test", dataset_kwargs),
-                collate_fn=MinkCollateFn,
-                **data_loader_kwargs,
-            ),
-        }
-    elif dataset_name.lower() == "nuscenes":
+    if dataset_name.lower() == "nuscenes":
         from data.nusc_mink import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
 
@@ -130,7 +50,23 @@ def make_mink_dataloaders(cfg):
                 **data_loader_kwargs,
             ),
         }
+    elif dataset_name.lower() == "kitti":
+        raise NotImplementedError("KITTI is not supported now, wait for data.kitti_mink.py.")
+        from data.kitti import KittiDataset
+        data_loaders = {
+            "train": DataLoader(
+                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "trainval", dataset_kwargs),
+                collate_fn=MinkCollateFn,
+                **data_loader_kwargs,
+            ),
+            "val": DataLoader(
+                KittiDataset(cfg["dataset"]["name"]["root"], cfg["dataset"]["name"]["config"], "test", dataset_kwargs),
+                collate_fn=MinkCollateFn,
+                **data_loader_kwargs,
+            ),
+        }
     elif dataset_name.lower() == "argoverse2":
+        raise NotImplementedError("Argoverse is not supported now, wait for data.av2_mink.py.")
         from data.av2 import Argoverse2Dataset
         data_loaders = {
             "train": DataLoader(
@@ -154,7 +90,7 @@ def make_mos_dataloader(cfg):
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
-        "shuffle": False,
+        "shuffle": cfg["data"]["shuffle"],
         "drop_last": True,
         "batch_size": cfg["model"]["batch_size"],
         "num_workers": cfg["model"]["num_workers"],
@@ -164,7 +100,6 @@ def make_mos_dataloader(cfg):
     if dataset_name.lower() == "nuscenes":
         from data.nusc_mos import nuScenesMosDataset
         from nuscenes.nuscenes import NuScenes
-
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
         Dataset = nuScenesMosDataset
         data_loaders = {
@@ -244,6 +179,7 @@ def pretrain(cfg):
     # pretrain dataset loader
     data_loaders = make_mink_dataloaders(cfg)
 
+
     model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
     model = model.to(device)
 
@@ -257,7 +193,7 @@ def pretrain(cfg):
     with open(f"{model_dir}/config.json", "w") as f:
         json.dump(cfg, f, indent=4)
 
-    # resume
+    # resume training
     if cfg["model"]["resume_ckpt"] is not None:
         start_epoch, n_iter = resume_from_ckpts(cfg["model"]["resume_ckpt"], model, optimizer, scheduler)
     else:

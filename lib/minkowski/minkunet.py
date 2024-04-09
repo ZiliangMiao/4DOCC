@@ -1,30 +1,3 @@
-# Copyright (c) Chris Choy (chrischoy@ai.stanford.edu).
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy of
-# this software and associated documentation files (the "Software"), to deal in
-# the Software without restriction, including without limitation the rights to
-# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-# of the Software, and to permit persons to whom the Software is furnished to do
-# so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
-# Please cite "4D Spatio-Temporal ConvNets: Minkowski Convolutional Neural
-# Networks", CVPR'19 (https://arxiv.org/abs/1904.08755) if you use any part
-# of the code.
-import torch
-import torch.nn as nn
-from torch.optim import SGD
-
 import MinkowskiEngine as ME
 
 from MinkowskiEngine.modules.resnet_block import BasicBlock, Bottleneck
@@ -37,7 +10,6 @@ class MinkUNetBase(ResNetBase):
     PLANES = None
     DILATIONS = (1, 1, 1, 1, 1, 1, 1, 1)
     LAYERS = (2, 2, 2, 2, 2, 2, 2, 2)
-    PLANES = (32, 64, 128, 256, 256, 128, 96, 96)
     INIT_DIM = 32
     OUT_TENSOR_STRIDE = 1
 
@@ -243,40 +215,3 @@ class MinkUNet34B(MinkUNet34):
 
 class MinkUNet34C(MinkUNet34):
     PLANES = (32, 64, 128, 256, 256, 128, 96, 96)
-
-
-if __name__ == '__main__':
-    from tests.python.common import data_loader
-    # loss and network
-    criterion = nn.CrossEntropyLoss()
-    net = MinkUNet14A(in_channels=3, out_channels=5, D=2)
-    print(net)
-
-    # a data loader must return a tuple of coords, features, and labels.
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    net = net.to(device)
-    optimizer = SGD(net.parameters(), lr=1e-2)
-
-    for i in range(10):
-        optimizer.zero_grad()
-
-        # Get new data
-        coords, feat, label = data_loader(is_classification=False)
-        input = ME.SparseTensor(feat, coordinates=coords, device=device)
-        label = label.to(device)
-
-        # Forward
-        output = net(input)
-
-        # Loss
-        loss = criterion(output.F, label)
-        print('Iteration: ', i, ', Loss: ', loss.item())
-
-        # Gradient
-        loss.backward()
-        optimizer.step()
-
-    # Saving and loading a network
-    torch.save(net.state_dict(), 'test.pth')
-    net.load_state_dict(torch.load('test.pth'))
