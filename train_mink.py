@@ -9,6 +9,7 @@ import yaml
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torch.distributed as dist
 
 from data.common import CollateFn, MinkCollateFn, MosCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
@@ -155,6 +156,12 @@ def load_pretrained_encoder(ckpt_dir, model):
     return model
 
 def pretrain(cfg):
+    # if use distributed data parallel (ddp)
+    dist.init_process_group(backend='nccl')
+    local_rank = int(os.environ['LOCAL_RANK'])
+    torch.cuda.set_device(local_rank)
+    
+    
     # get data params
     _dataset = cfg["dataset"]["name"]
     _n_input, _n_output = cfg["data"]["n_input"], cfg["data"]["n_output"]
@@ -169,8 +176,9 @@ def pretrain(cfg):
     _lr_start, _lr_epoch, _lr_decay = cfg["model"]["lr_start"], cfg["model"]["lr_epoch"], cfg["model"]["lr_decay"]
 
     # get device status
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    num_devices = torch.cuda.device_count()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # num_devices = torch.cuda.device_count()
+    num_devices = cfg["model"]["num_devices"]
     assert num_devices == cfg["model"]["num_devices"]
     assert _batch_size % num_devices == 0
     if _batch_size % num_devices != 0:
@@ -181,7 +189,7 @@ def pretrain(cfg):
 
 
     model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
-    model = model.to(device)
+    model = model.to(local_rank)
 
     # optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=_lr_start)
@@ -200,8 +208,9 @@ def pretrain(cfg):
         start_epoch, n_iter = 0, 0
 
     # data parallel
-    model = nn.DataParallel(model)
-
+    # model = nn.DataParallel(model, device_ids=[0])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    
     # writer
     writer = SummaryWriter(f"{model_dir}/tf_logs")
     for epoch in range(start_epoch, _num_epoch):
@@ -361,6 +370,9 @@ def pretrain(cfg):
         scheduler.step()
     #
     writer.close()
+    
+    # if use ddp
+    dist.destroy_process_group()
 
 def finetune(cfg):
     # get data params
