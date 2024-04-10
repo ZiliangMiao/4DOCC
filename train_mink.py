@@ -200,7 +200,7 @@ def pretrain(cfg):
         start_epoch, n_iter = 0, 0
 
     # data parallel
-    model = nn.DataParallel(model)
+    model = nn.DataParallel(model, device_ids=[0])
 
     # writer
     writer = SummaryWriter(f"{model_dir}/tf_logs")
