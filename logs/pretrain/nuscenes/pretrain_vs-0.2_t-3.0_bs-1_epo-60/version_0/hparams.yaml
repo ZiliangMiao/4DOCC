@@ -1,0 +1,41 @@
+data:
+  ego_mask: true
+  fgbg_label: false
+  flip: true
+  input_within_pc_range: true
+  n_input: 6
+  n_output: 6
+  pc_range:
+  - -70.0
+  - -70.0
+  - -4.5
+  - 70.0
+  - 70.0
+  - 4.5
+  shuffle: false
+  time_interval: 0.5
+  voxel_size: 0.2
+dataset:
+  argo:
+    root: /home/user/Datasets/ArgoVerse2/LiDAR/
+  kitti:
+    config: configs/semantic-kitti.yaml
+    root: /home/user/Datasets/KITTI
+  name: nuscenes
+  nuscenes:
+    root: /home/user/Datasets/nuScenes
+    version: v1.0-trainval
+model:
+  acc_batches: 1
+  batch_size: 1
+  expt_dir: ./models/nusc/3s_sparse-dense_vs-0.1
+  loss_type: l1
+  lr_decay: 0.9
+  lr_epoch: 1
+  lr_start: 0.001
+  num_devices: 1
+  num_epoch: 60
+  num_workers: 8
+  optimizer: adam
+  resume_ckpt: null
+  weight_decay: 0.0001

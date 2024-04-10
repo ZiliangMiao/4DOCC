@@ -1,18 +1,16 @@
 import os
 import re
 import json
-import argparse
-
-import torch
-import numpy as np
 import yaml
+import numpy as np
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torch.distributed as dist
 
-from data.common import CollateFn, MinkCollateFn, MosCollateFn
+from data.common import MinkCollateFn, MosCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
-from model_mos import MosOccupancyForecastingNetwork
 
 def make_mink_dataloaders(cfg):
     dataset_kwargs = {
@@ -21,8 +19,8 @@ def make_mink_dataloaders(cfg):
         "voxel_size": cfg["data"]["voxel_size"],
         "n_input": cfg["data"]["n_input"],
         "n_output": cfg["data"]["n_output"],
-        "nusc_version": cfg["dataset"]["nuscenes"]["version"],
         "ego_mask": cfg["data"]["ego_mask"],
+        "flip": cfg["data"]["flip"],
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
@@ -120,12 +118,10 @@ def make_mos_dataloader(cfg):
 
 def resume_from_ckpts(ckpt_pth, model, optimizer, scheduler):
     print(f"Resume training from checkpoint {ckpt_pth}")
-
     checkpoint = torch.load(ckpt_pth)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-
     start_epoch = 1 + checkpoint["epoch"]
     n_iter = checkpoint["n_iter"]
     return start_epoch, n_iter
@@ -155,8 +151,13 @@ def load_pretrained_encoder(ckpt_dir, model):
     return model
 
 def pretrain(cfg):
+    # if use distributed data parallel (ddp)
+    dist.init_process_group(backend='nccl')
+    local_rank = int(os.environ['LOCAL_RANK'])
+    torch.cuda.set_device(local_rank)
+
     # get data params
-    _dataset = cfg["dataset"]["name"]
+    _dataset_name = cfg["dataset"]["name"]
     _n_input, _n_output = cfg["data"]["n_input"], cfg["data"]["n_output"]
     _pc_range, _voxel_size = cfg["data"]["pc_range"], cfg["data"]["voxel_size"]
 
@@ -169,8 +170,9 @@ def pretrain(cfg):
     _lr_start, _lr_epoch, _lr_decay = cfg["model"]["lr_start"], cfg["model"]["lr_epoch"], cfg["model"]["lr_decay"]
 
     # get device status
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    num_devices = torch.cuda.device_count()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # num_devices = torch.cuda.device_count()
+    num_devices = cfg["model"]["num_devices"]
     assert num_devices == cfg["model"]["num_devices"]
     assert _batch_size % num_devices == 0
     if _batch_size % num_devices != 0:
@@ -178,10 +180,8 @@ def pretrain(cfg):
 
     # pretrain dataset loader
     data_loaders = make_mink_dataloaders(cfg)
-
-
     model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
-    model = model.to(device)
+    model = model.to(local_rank)
 
     # optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=_lr_start)
@@ -200,292 +200,251 @@ def pretrain(cfg):
         start_epoch, n_iter = 0, 0
 
     # data parallel
-    model = nn.DataParallel(model, device_ids=[0])
+    # model = nn.DataParallel(model, device_ids=[0])
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     # writer
     writer = SummaryWriter(f"{model_dir}/tf_logs")
     for epoch in range(start_epoch, _num_epoch):
-        # check model weight at the begining of every epoch
-        # params = list(model.named_parameters())
-        # check whether weight and grad changed after optimization
-        # conv0p1s1_weight = params[3][1].data
-        # final_weight = params[99][1].data
-        # print(f"Epoch{epoch}, conv0p1s1 weight: \n")
-        # print(conv0p1s1_weight.cpu())
-        # print(f"Epoch{epoch}, final weight: \n")
-        # print(final_weight.cpu())
-        
-        for phase in ["train"]:  # , "val"]:
-            data_loader = data_loaders[phase]
-            if phase == "train":
-                model.train()
-            else:
-                model.eval()
+        # training phase:
+        data_loader = data_loaders["train"]
+        model.train()
 
-            total_val_loss = {}
-            num_batch = len(data_loader)
-            num_example = len(data_loader.dataset)
+        num_batch = len(data_loader)
+        avg_loss_50_iters = 0
+        total_val_loss = {}
+        for batch_index, batch_data in enumerate(data_loader):
+            input_points_4d = batch_data[1]
+            output_origin, output_points, output_tindex = batch_data[2:5]
+            output_labels = batch_data[5] if _dataset_name == "nuscenes" and cfg["data"]["fgbg_label"] else None
 
-            # conv0p1s1_weight_list = []
-            # conv0p1s1_grad_list = []
-            # final_weight_list = []
-            # final_grad_list = []
-            avg_loss_50_iters = 0
-            for i, batch in enumerate(data_loader):
-                input_points_4d = batch[1]
-                output_origin, output_points, output_tindex = batch[2:5]
-                if _dataset == "nuscenes":
-                    output_labels = batch[5]
-                else:
-                    output_labels = None
+            optimizer.zero_grad()
+            with torch.set_grad_enabled(True):
+                ret_dict = model(
+                    input_points_4d,
+                    output_origin,
+                    output_points,
+                    output_tindex,
+                    output_labels=output_labels,
+                    mode="training",
+                    loss=_loss_type
+                )  # do backward during model forward
+                optimizer.step()
+                torch.cuda.empty_cache()
+                n_iter += 1
 
-                optimizer.zero_grad()
-                # import pdb ; pdb.set_trace()
-                with torch.set_grad_enabled(phase == "train"):
-                    loss = _loss_type
-                    ret_dict = model(
-                        input_points_4d,
-                        output_origin,
-                        output_points,
-                        output_tindex,
-                        output_labels=output_labels,
-                        mode="training",
-                        loss=loss
-                    )
+            # logging: printer and writer
+            avg_loss_50_iters += ret_dict[f"{_loss_type}_loss"].item() / 50
+            if batch_index % 50 == 49:
+                print(f"Train Iter: {n_iter},",
+                      f"Epoch: {epoch}/{_num_epoch},",
+                      f"Batch: {batch_index}/{num_batch},",
+                      f"{loss.upper()} Loss Per 50 Iters: {avg_loss_50_iters}",)
+                writer.add_scalar("train/50 iters avg l1_loss", avg_loss_50_iters, n_iter)
+                avg_loss_50_iters = 0
+            for ret_item in ret_dict:
+                if ret_item.endswith("loss"):
+                    writer.add_scalar(f"train/{ret_item}", ret_dict[ret_item].item(), n_iter)
 
-                    if phase == "train":
-                        # check weight before optimize
-                        # conv0p1s1_weight_b = model.module.encoder.MinkUNet.conv0p1s1.kernel.data
-                        # conv0p1s1_grad_b = model.module.encoder.MinkUNet.conv0p1s1.kernel.grad
-
-                        # optimize
-                        optimizer.step()
-                        # import pdb
-                        # pdb.set_trace()
-
-                        # # check weight after optimize
-                        # params = list(model.named_parameters())
-                        # # check whether weight and grad changed after optimization
-                        # conv0p1s1_weight = params[3][1].data
-                        # conv0p1s1_grad = params[3][1].grad
-                        # final_weight = params[99][1].data
-                        # final_grad = params[99][1].grad
-                        # conv0p1s1_weight_list.append(conv0p1s1_weight.cpu())
-                        # conv0p1s1_grad_list.append(conv0p1s1_grad.cpu())
-                        # final_weight_list.append(final_weight.cpu())
-                        # final_grad_list.append(final_grad.cpu())
-                        # # check whether weight and grad equal to the previous iteration
-                        # if i != 0:
-                        #     conv0p1s1_equal_weight = conv0p1s1_weight_list[i] == conv0p1s1_weight_list[i - 1]
-                        #     conv0p1s1_equal_grad = conv0p1s1_grad_list[i] == conv0p1s1_grad_list[i - 1]
-                        #     conv0p1s1_equal_weight_sum = torch.sum(conv0p1s1_equal_weight)
-                        #     conv0p1s1_equal_grad_sum = torch.sum(conv0p1s1_equal_grad)
-                        #     final_equal_weight = final_weight_list[i] == final_weight_list[i - 1]
-                        #     final_equal_grad = final_grad_list[i] == final_grad_list[i - 1]
-                        #     final_equal_weight_sum = torch.sum(final_equal_weight)
-                        #     final_equal_grad_sum = torch.sum(final_equal_grad)
-                        #     a = 1
-
-                        # for minkowski engine
-                        torch.cuda.empty_cache()
-
-                avg_loss = ret_dict[f"{loss}_loss"].mean()
-                avg_loss_50_iters += avg_loss.item() / 50
-
-                if phase == "train":
-                    n_iter += 1
-                    # print every 50 iter:
-                    # if i % 100 == 99:
-                        # check model weight at the begining of every epoch
-                        # params = list(model.named_parameters())
-                        # check whether weight and grad changed after optimization
-                        # conv0p1s1_weight = params[3][1].data
-                        # final_weight = params[99][1].data
-                        # print(f"Epoch{epoch}, conv0p1s1 weight: \n")
-                        # print(conv0p1s1_weight.cpu())
-                        # print(f"Epoch{epoch}, Iter{i}, final weight: \n")
-                        # print(final_weight.cpu())
-                    if i % 50 == 49:
-                        print(
-                                    f"Phase: {phase}, Iter: {n_iter},",
-                                    f"Epoch: {epoch}/{_num_epoch},",
-                                    f"Batch: {i}/{num_batch},",
-                                    f"{loss.upper()} Loss Per 50 Iters: {avg_loss_50_iters}",
-                        )
-                        writer.add_scalar(f"{phase}/50 iters avg l1_loss", avg_loss_50_iters, n_iter)
-                        avg_loss_50_iters = 0
-                    for key in ret_dict:
-                        if key.endswith("loss"):
-                            writer.add_scalar(f"{phase}/{key}", ret_dict[key].mean().item(), n_iter)
-                else:
-                    for key in ret_dict:
-                        if key.endswith("loss"):
-                            if key not in total_val_loss:
-                                total_val_loss[key] = 0
-                            total_val_loss[key] += ret_dict[key].mean().item() * len(input_points_4d)
-
-                if phase == "train" and (i + 1) % (num_batch // 10) == 0:
-                    os.makedirs(os.path.join(_expt_dir, "ckpts"), exist_ok=True)
-                    ckpt_path = f"{_expt_dir}/ckpts/model_epoch_{epoch}_iter_{n_iter}.pth"
-                    torch.save(
-                            {
-                                "epoch": epoch,
-                                "n_iter": n_iter,
-                                "model_state_dict": model.module.state_dict(),
-                                "optimizer_state_dict": optimizer.state_dict(),
-                                "scheduler_state_dict": scheduler.state_dict(),
-                            },
-                            ckpt_path,
-                            _use_new_zipfile_serialization=False,
-                    )
-
-            if phase == "train":
+            if (batch_index + 1) % (num_batch // 10) == 0:  # // meams divide + floor
                 os.makedirs(os.path.join(_expt_dir, "ckpts"), exist_ok=True)
-                ckpt_path = f"{_expt_dir}/ckpts/model_epoch_{epoch}.pth"
+                ckpt_path = f"{_expt_dir}/ckpts/model_epoch_{epoch}_iter_{n_iter}.pth"
                 torch.save(
-                        {
-                            "epoch": epoch,
-                            "n_iter": n_iter,
-                            "model_state_dict": model.module.state_dict(),
-                            "optimizer_state_dict": optimizer.state_dict(),
-                            "scheduler_state_dict": scheduler.state_dict(),
-                        },
-                        ckpt_path,
-                        _use_new_zipfile_serialization=False,
+                    {
+                        "epoch": epoch,
+                        "n_iter": n_iter,
+                        "model_state_dict": model.module.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scheduler_state_dict": scheduler.state_dict(),
+                    },
+                    ckpt_path,
+                    _use_new_zipfile_serialization=False,
                 )
-            else:
-                for key in total_val_loss:
-                    mean_val_loss = total_val_loss[key] / num_example
-                    writer.add_scalar(f"{phase}/{key}", mean_val_loss, n_iter)
 
+        os.makedirs(os.path.join(_expt_dir, "ckpts"), exist_ok=True)
+        ckpt_path = f"{_expt_dir}/ckpts/model_epoch_{epoch}.pth"
+        torch.save(
+            {
+                "epoch": epoch,
+                "n_iter": n_iter,
+                "model_state_dict": model.module.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+            },
+            ckpt_path,
+            _use_new_zipfile_serialization=False,
+        )
+
+        # validation phase:
+        data_loader = data_loaders["validation"]
+        model.eval()
+
+        total_val_loss = {}
+        num_batch = len(data_loader)
+        num_example = len(data_loader.dataset)
+
+        avg_loss_50_iters = 0
+        for batch_index, batch_data in enumerate(data_loader):
+            input_points_4d = batch_data[1]
+            output_origin, output_points, output_tindex = batch_data[2:5]
+            if _dataset_name == "nuscenes":
+                output_labels = batch_data[5]
+            else:
+                output_labels = None
+
+            optimizer.zero_grad()
+            with torch.set_grad_enabled(False):
+                loss = _loss_type
+                ret_dict = model(
+                    input_points_4d,
+                    output_origin,
+                    output_points,
+                    output_tindex,
+                    output_labels=output_labels,
+                    mode="training",
+                    loss=loss
+                )
+
+            avg_loss = ret_dict[f"{loss}_loss"].mean()
+            avg_loss_50_iters += avg_loss.item() / 50
+            for ret_item in ret_dict:
+                if ret_item.endswith("loss"):
+                    if ret_item not in total_val_loss:
+                        total_val_loss[ret_item] = 0
+                    total_val_loss[ret_item] += ret_dict[ret_item].mean().item() * len(input_points_4d)
+        for ret_item in total_val_loss:
+            mean_val_loss = total_val_loss[ret_item] / num_example
+            writer.add_scalar(f"validation/{ret_item}", mean_val_loss, n_iter)
         scheduler.step()
     #
     writer.close()
+    # if use ddp
+    dist.destroy_process_group()
 
-def finetune(cfg):
-    # get data params
-    _n_input, _n_mos_class = cfg["data"]["n_input"], cfg["data"]["n_mos_class"]
-    _pc_range, _voxel_size = cfg["data"]["pc_range"], cfg["data"]["voxel_size"]
-
-    # get model params
-    _expt_dir = cfg["model"]["expt_dir"]
-    _num_epoch = cfg["model"]["num_epoch"]
-    _batch_size = cfg["model"]["batch_size"]
-    _num_workers = cfg["model"]["num_workers"]
-    _loss_type = cfg["model"]["loss_type"]
-    _lr_start, _lr_epoch, _lr_decay = cfg["model"]["lr_start"], cfg["model"]["lr_epoch"], cfg["model"]["lr_decay"]
-
-    # get device status
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    num_devices = torch.cuda.device_count()
-    assert num_devices == cfg["model"]["num_devices"]
-    assert _batch_size % num_devices == 0
-    if _batch_size % num_devices != 0:
-        raise RuntimeError(f"Batch size ({_batch_size}) cannot be divided by device count ({num_devices})")
-
-    # make mos dataset loader
-    data_loaders = make_mos_dataloader(cfg)
-
-    # instantiate a finetune model
-    finetune_model = MosOccupancyForecastingNetwork(
-        _loss_type,
-        _n_input,
-        _n_mos_class,
-        _pc_range,
-        _voxel_size,).to(device)
-
-    # load the pretrained encoder parameters
-    pretrain_ckpt_dir = os.path.join(_expt_dir, "ckpts", "pretrain")
-    assert os.path.exists(pretrain_ckpt_dir)
-    finetune_model = load_pretrained_encoder(pretrain_ckpt_dir, finetune_model)
-
-    # adam optimizer
-    optimizer = torch.optim.Adam(finetune_model.parameters(), lr=_lr_start)
-    # learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=_lr_epoch, gamma=_lr_decay)
-
-    # data parallel
-    model = nn.DataParallel(finetune_model)
-
-    # writer
-    writer = SummaryWriter(os.path.join(_expt_dir, "tf_logs"))
-    n_iter = 0
-    finetune_model_dir = os.path.join(_expt_dir, "ckpts", "finetune")  # save finetuned model to this directory
-    os.makedirs(finetune_model_dir, exist_ok=True)
-    for epoch in range(_num_epoch):
-        # store loss and iou metrics while training
-        metrics = {
-            "count": 0,
-            "nll": 0.0,
-            "iou": 0.0,
-        }
-        for phase in ["train"]:  # , "val"] train and validation process
-            data_loader = data_loaders[phase]
-            if phase == "train":
-                model.train()
-            else:
-                model.eval()
-
-            num_batch = len(data_loader)
-            for i, batch in enumerate(data_loader):
-                input_points, input_tindex, mos_labels = batch[1:4]
-
-                optimizer.zero_grad()  # clear the previous gradient
-                with torch.set_grad_enabled(phase == "train"):
-                    ret_dict = model(input_points, input_tindex, mos_labels, mode="training", eval_within_grid=True)
-                    if phase == "train":
-                        optimizer.step()
-                        # for minkowski engine
-                        torch.cuda.empty_cache()
-
-                metrics["count"] += 1
-                metrics["nll"] += ret_dict["nll"]
-                metrics["iou"] += ret_dict["iou"]
-
-                avg_loss = ret_dict["nll"].mean()
-                avg_iou = ret_dict["iou"].mean()
-                print(f"Phase: {phase}, Iter: {n_iter},",
-                      f"Epoch: {epoch}/{_num_epoch},",
-                      f"Batch: {i}/{num_batch},",
-                      f"NLL Loss: {avg_loss.item():.3f}",
-                      f"IoU: {avg_iou.item():.3f}",)
-
-                if phase == "train":
-                    n_iter += 1
-                    writer.add_scalar(f"Epoch-{epoch} steps nll-loss", metrics["nll"] / metrics["count"], n_iter)
-                    writer.add_scalar(f"Epoch-{epoch} steps iou", metrics["iou"] / metrics["count"], n_iter)
-                if phase == "train" and (i + 1) % (num_batch // 10) == 0:
-                    finetune_ckpt_path = os.path.join(finetune_model_dir, f"model_epoch_{epoch}_iter_{n_iter}.pth")
-                    torch.save(
-                            {
-                                "epoch": epoch,
-                                "n_iter": n_iter,
-                                "model_state_dict": model.module.state_dict(),
-                                "optimizer_state_dict": optimizer.state_dict(),
-                                "scheduler_state_dict": scheduler.state_dict(),
-                            },
-                            finetune_ckpt_path,
-                            _use_new_zipfile_serialization=False,
-                    )
-
-            if phase == "train":  # save model_epoch_x.pth
-                finetune_ckpt_path = os.path.join(finetune_model_dir, f"model_epoch_{epoch}.pth")
-                torch.save(
-                        {
-                            "epoch": epoch,
-                            "n_iter": n_iter,
-                            "model_state_dict": model.module.state_dict(),
-                            "optimizer_state_dict": optimizer.state_dict(),
-                            "scheduler_state_dict": scheduler.state_dict(),
-                        },
-                        finetune_ckpt_path,
-                        _use_new_zipfile_serialization=False,
-                )
-                # save tensorboard log to track epoch loss
-                writer.add_scalar("epochs nll-loss", metrics["nll"] / metrics["count"], epoch)
-                writer.add_scalar("epochs iou", metrics["iou"] / metrics["count"], epoch)
-        scheduler.step()
-    writer.close()
+# def finetune(cfg):
+#     # get data params
+#     _n_input, _n_mos_class = cfg["data"]["n_input"], cfg["data"]["n_mos_class"]
+#     _pc_range, _voxel_size = cfg["data"]["pc_range"], cfg["data"]["voxel_size"]
+#
+#     # get model params
+#     _expt_dir = cfg["model"]["expt_dir"]
+#     _num_epoch = cfg["model"]["num_epoch"]
+#     _batch_size = cfg["model"]["batch_size"]
+#     _num_workers = cfg["model"]["num_workers"]
+#     _loss_type = cfg["model"]["loss_type"]
+#     _lr_start, _lr_epoch, _lr_decay = cfg["model"]["lr_start"], cfg["model"]["lr_epoch"], cfg["model"]["lr_decay"]
+#
+#     # get device status
+#     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+#     num_devices = torch.cuda.device_count()
+#     assert num_devices == cfg["model"]["num_devices"]
+#     assert _batch_size % num_devices == 0
+#     if _batch_size % num_devices != 0:
+#         raise RuntimeError(f"Batch size ({_batch_size}) cannot be divided by device count ({num_devices})")
+#
+#     # make mos dataset loader
+#     data_loaders = make_mos_dataloader(cfg)
+#
+#     # instantiate a finetune model
+#     finetune_model = MosOccupancyForecastingNetwork(
+#         _loss_type,
+#         _n_input,
+#         _n_mos_class,
+#         _pc_range,
+#         _voxel_size,).to(device)
+#
+#     # load the pretrained encoder parameters
+#     pretrain_ckpt_dir = os.path.join(_expt_dir, "ckpts", "pretrain")
+#     assert os.path.exists(pretrain_ckpt_dir)
+#     finetune_model = load_pretrained_encoder(pretrain_ckpt_dir, finetune_model)
+#
+#     # adam optimizer
+#     optimizer = torch.optim.Adam(finetune_model.parameters(), lr=_lr_start)
+#     # learning rate scheduler
+#     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=_lr_epoch, gamma=_lr_decay)
+#
+#     # data parallel
+#     model = nn.DataParallel(finetune_model)
+#
+#     # writer
+#     writer = SummaryWriter(os.path.join(_expt_dir, "tf_logs"))
+#     n_iter = 0
+#     finetune_model_dir = os.path.join(_expt_dir, "ckpts", "finetune")  # save finetuned model to this directory
+#     os.makedirs(finetune_model_dir, exist_ok=True)
+#     for epoch in range(_num_epoch):
+#         # store loss and iou metrics while training
+#         metrics = {
+#             "count": 0,
+#             "nll": 0.0,
+#             "iou": 0.0,
+#         }
+#         for phase in ["train"]:  # , "val"] train and validation process
+#             data_loader = data_loaders[phase]
+#             if phase == "train":
+#                 model.train()
+#             else:
+#                 model.eval()
+#
+#             num_batch = len(data_loader)
+#             for i, batch in enumerate(data_loader):
+#                 input_points, input_tindex, mos_labels = batch[1:4]
+#
+#                 optimizer.zero_grad()  # clear the previous gradient
+#                 with torch.set_grad_enabled(phase == "train"):
+#                     ret_dict = model(input_points, input_tindex, mos_labels, mode="training", eval_within_grid=True)
+#                     if phase == "train":
+#                         optimizer.step()
+#                         # for minkowski engine
+#                         torch.cuda.empty_cache()
+#
+#                 metrics["count"] += 1
+#                 metrics["nll"] += ret_dict["nll"]
+#                 metrics["iou"] += ret_dict["iou"]
+#
+#                 avg_loss = ret_dict["nll"].mean()
+#                 avg_iou = ret_dict["iou"].mean()
+#                 print(f"Phase: {phase}, Iter: {n_iter},",
+#                       f"Epoch: {epoch}/{_num_epoch},",
+#                       f"Batch: {i}/{num_batch},",
+#                       f"NLL Loss: {avg_loss.item():.3f}",
+#                       f"IoU: {avg_iou.item():.3f}",)
+#
+#                 if phase == "train":
+#                     n_iter += 1
+#                     writer.add_scalar(f"Epoch-{epoch} steps nll-loss", metrics["nll"] / metrics["count"], n_iter)
+#                     writer.add_scalar(f"Epoch-{epoch} steps iou", metrics["iou"] / metrics["count"], n_iter)
+#                 if phase == "train" and (i + 1) % (num_batch // 10) == 0:
+#                     finetune_ckpt_path = os.path.join(finetune_model_dir, f"model_epoch_{epoch}_iter_{n_iter}.pth")
+#                     torch.save(
+#                             {
+#                                 "epoch": epoch,
+#                                 "n_iter": n_iter,
+#                                 "model_state_dict": model.module.state_dict(),
+#                                 "optimizer_state_dict": optimizer.state_dict(),
+#                                 "scheduler_state_dict": scheduler.state_dict(),
+#                             },
+#                             finetune_ckpt_path,
+#                             _use_new_zipfile_serialization=False,
+#                     )
+#
+#             if phase == "train":  # save model_epoch_x.pth
+#                 finetune_ckpt_path = os.path.join(finetune_model_dir, f"model_epoch_{epoch}.pth")
+#                 torch.save(
+#                         {
+#                             "epoch": epoch,
+#                             "n_iter": n_iter,
+#                             "model_state_dict": model.module.state_dict(),
+#                             "optimizer_state_dict": optimizer.state_dict(),
+#                             "scheduler_state_dict": scheduler.state_dict(),
+#                         },
+#                         finetune_ckpt_path,
+#                         _use_new_zipfile_serialization=False,
+#                 )
+#                 # save tensorboard log to track epoch loss
+#                 writer.add_scalar("epochs nll-loss", metrics["nll"] / metrics["count"], epoch)
+#                 writer.add_scalar("epochs iou", metrics["iou"] / metrics["count"], epoch)
+#         scheduler.step()
+#     writer.close()
 
 if __name__ == "__main__":
     # set random seeds
@@ -495,11 +454,9 @@ if __name__ == "__main__":
     # load pretrain config
     with open("./configs/occ_pretrain.yaml", "r") as f:
         cfg_pretrain = yaml.safe_load(f)
-    # load finetune config
-    with open("./configs/mos_finetune.yaml", "r") as f:
-        cfg_finetune = yaml.safe_load(f)
-
-    # point cloud forecasting pre-training
     pretrain(cfg_pretrain)
-    # moving object segmentation fine-tuning
+
+    # moving object segmentation fine-tuning (finetune at mos project, not 4docc project)
+    # with open("./configs/mos_finetune.yaml", "r") as f:
+    #     cfg_finetune = yaml.safe_load(f)
     # finetune(cfg_finetune)

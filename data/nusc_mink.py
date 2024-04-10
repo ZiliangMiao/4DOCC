@@ -68,7 +68,7 @@ class nuScenesDataset(Dataset):
             # location
             log = self.nusc.get("log", scene["log_token"])
             # flip x axis if in left-hand traffic (singapore)
-            flip_flag = True if log["location"].startswith("singapore") else False
+            flip_flag = True if kwargs["flip"] and log["location"].startswith("singapore") else False
             #
             start_index = len(self.sample_tokens)
             first_sample = self.nusc.get("sample", scene["first_sample_token"])
@@ -143,7 +143,6 @@ class nuScenesDataset(Dataset):
         return mask
 
     def __getitem__(self, idx):
-
         ref_index = self.valid_index[idx]  # ref index = current index?
 
         ref_sample_token = self.sample_tokens[ref_index]
