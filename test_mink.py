@@ -7,8 +7,7 @@ import yaml
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from chamferdist import ChamferDistance
-from data.common import CollateFn, MinkCollateFn, MosCollateFn
+from data.common import MinkCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
 from utils.evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors, clamp
 from torch.utils.cpp_extension import load

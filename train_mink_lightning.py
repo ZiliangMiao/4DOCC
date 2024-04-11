@@ -158,11 +158,10 @@ def pretrain(cfg):
         callbacks=[lr_monitor, checkpoint_saver],
         check_val_every_n_epoch=5,
         # val_check_interval=100,
-        resume_from_checkpoint=resume_ckpt_path,
     )
 
     # pl training
-    trainer.fit(model, train_dataloaders=data_loaders["train"], val_dataloaders=data_loaders["val"])
+    trainer.fit(model, train_dataloaders=data_loaders["train"], val_dataloaders=data_loaders["val"], ckpt_path=resume_ckpt_path)
 
 if __name__ == "__main__":
     # set random seeds
