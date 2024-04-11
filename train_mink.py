@@ -12,6 +12,11 @@ import torch.distributed as dist
 from data.common import MinkCollateFn, MosCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
 
+# JIT
+import torch.nn.functional as F
+from torch.utils.cpp_extension import load
+dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
+
 def make_mink_dataloaders(cfg):
     dataset_kwargs = {
         "pc_range": cfg["data"]["pc_range"],
@@ -151,11 +156,6 @@ def load_pretrained_encoder(ckpt_dir, model):
     return model
 
 def pretrain(cfg):
-    # if use distributed data parallel (ddp)
-    dist.init_process_group(backend='nccl')
-    local_rank = int(os.environ['LOCAL_RANK'])
-    torch.cuda.set_device(local_rank)
-
     # get data params
     _dataset_name = cfg["dataset"]["name"]
     _n_input, _n_output = cfg["data"]["n_input"], cfg["data"]["n_output"]
@@ -181,7 +181,7 @@ def pretrain(cfg):
     # pretrain dataset loader
     data_loaders = make_mink_dataloaders(cfg)
     model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size)
-    model = model.to(local_rank)
+    model = model.to(device)
 
     # optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=_lr_start)
@@ -200,8 +200,13 @@ def pretrain(cfg):
         start_epoch, n_iter = 0, 0
 
     # data parallel
-    # model = nn.DataParallel(model, device_ids=[0])
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    model = nn.DataParallel(model, device_ids=[0])
+
+    # if use distributed data parallel (ddp)
+    # dist.init_process_group(backend='nccl')
+    # local_rank = int(os.environ['LOCAL_RANK'])
+    # torch.cuda.set_device(local_rank)
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     # writer
     writer = SummaryWriter(f"{model_dir}/tf_logs")
@@ -220,7 +225,7 @@ def pretrain(cfg):
 
             optimizer.zero_grad()
             with torch.set_grad_enabled(True):
-                ret_dict = model(
+                output = model(
                     input_points_4d,
                     output_origin,
                     output_points,
@@ -229,6 +234,47 @@ def pretrain(cfg):
                     mode="training",
                     loss=_loss_type
                 )  # do backward during model forward
+
+                ret_dict = {}
+                # calculate loss and backward
+                sigma = F.relu(output, inplace=True)
+                if sigma.requires_grad:
+                    pred_dist, gt_dist, grad_sigma = dvr.render(
+                        sigma,
+                        output_origin.cuda(),
+                        output_points.cuda(),
+                        output_tindex.cuda(),
+                        _loss_type
+                    )
+                    # take care of nans and infs if any
+                    invalid = torch.isnan(grad_sigma)
+                    grad_sigma[invalid] = 0.0
+                    invalid = torch.isnan(pred_dist)
+                    pred_dist[invalid] = 0.0
+                    gt_dist[invalid] = 0.0
+                    invalid = torch.isinf(pred_dist)
+                    pred_dist[invalid] = 0.0
+                    gt_dist[invalid] = 0.0
+                    sigma.backward(grad_sigma)
+
+                pred_dist *= _voxel_size
+                gt_dist *= _voxel_size
+                # compute training losses
+                valid = gt_dist >= 0
+                count = valid.sum()
+                l1_loss = torch.abs(gt_dist - pred_dist)
+                l2_loss = ((gt_dist - pred_dist) ** 2) / 2
+                absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
+                # record training losses
+                if count == 0:
+                    count = 1
+                ret_dict["l1_loss"] = l1_loss[valid].sum() / count
+                ret_dict["l2_loss"] = l2_loss[valid].sum() / count
+                ret_dict["absrel_loss"] = absrel_loss[valid].sum() / count
+
+
+
+
                 optimizer.step()
                 torch.cuda.empty_cache()
                 n_iter += 1
@@ -239,7 +285,7 @@ def pretrain(cfg):
                 print(f"Train Iter: {n_iter},",
                       f"Epoch: {epoch}/{_num_epoch},",
                       f"Batch: {batch_index}/{num_batch},",
-                      f"{loss.upper()} Loss Per 50 Iters: {avg_loss_50_iters}",)
+                      f"{_loss_type} Loss Per 50 Iters: {avg_loss_50_iters}",)
                 writer.add_scalar("train/50 iters avg l1_loss", avg_loss_50_iters, n_iter)
                 avg_loss_50_iters = 0
             for ret_item in ret_dict:
@@ -276,7 +322,7 @@ def pretrain(cfg):
         )
 
         # validation phase:
-        data_loader = data_loaders["validation"]
+        data_loader = data_loaders["val"]
         model.eval()
 
         total_val_loss = {}

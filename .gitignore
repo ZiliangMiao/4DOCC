@@ -15,3 +15,5 @@ __pycache__/
 
 models/
 models
+logs/
+logs

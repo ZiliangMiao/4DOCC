@@ -1,17 +1,14 @@
 import os
 import re
-import json
 import yaml
 import numpy as np
 import torch
-from torch import nn
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
-from data.common import MinkCollateFn, MosCollateFn
+from data.common import MinkCollateFn
 from model_mink_lightning import MinkOccupancyForecastingNetwork
 
 def make_mink_dataloaders(cfg):
@@ -32,8 +29,8 @@ def make_mink_dataloaders(cfg):
         "num_workers": cfg["model"]["num_workers"],
     }
 
-    dataset_name = cfg["dataset"]["name"]
-    if dataset_name.lower() == "nuscenes":
+    dataset_name = cfg["dataset"]["name"].lower()
+    if dataset_name == "nuscenes":
         from data.nusc_mink import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
 
@@ -50,7 +47,7 @@ def make_mink_dataloaders(cfg):
                 **data_loader_kwargs,
             ),
         }
-    elif dataset_name.lower() == "kitti":
+    elif dataset_name == "kitti":
         raise NotImplementedError("KITTI is not supported now, wait for data.kitti_mink.py.")
         from data.kitti import KittiDataset
         data_loaders = {
@@ -65,7 +62,7 @@ def make_mink_dataloaders(cfg):
                 **data_loader_kwargs,
             ),
         }
-    elif dataset_name.lower() == "argoverse2":
+    elif dataset_name == "argoverse2":
         raise NotImplementedError("Argoverse is not supported now, wait for data.av2_mink.py.")
         from data.av2 import Argoverse2Dataset
         data_loaders = {
@@ -128,12 +125,6 @@ def pretrain(cfg):
     num_epoch = cfg["model"]["num_epoch"]
     model_name = f"pretrain_vs-{voxel_size}_t-{time}_bs-{batch_size}_epo-{num_epoch}"
 
-    # dump pretraining config (pl save hyparams)
-    model_dir = cfg["model"]["expt_dir"]
-    os.makedirs(model_dir, exist_ok=True)
-    with open(f"{model_dir}/config.json", "w") as f:
-        json.dump(cfg, f, indent=4)
-
     # pl lr monitoring
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
@@ -143,7 +134,7 @@ def pretrain(cfg):
         verbose=True,
         save_top_k=cfg["model"]["num_epoch"],
         mode="max",
-        filename=model_name + "_{epoch}_{train_epoch_acc_loss:.3f}",
+        filename=model_name + "_{epoch}_{train_epoch_loss:.5f}",
         every_n_epochs=1,
         save_last=True,
     )
@@ -161,58 +152,17 @@ def pretrain(cfg):
         strategy="ddp",
         devices=cfg["model"]["num_devices"],
         logger=tb_logger,
+        log_every_n_steps=1,
         max_epochs=cfg["model"]["num_epoch"],
         accumulate_grad_batches=cfg["model"]["acc_batches"],  # accumulate batches, default=1
         callbacks=[lr_monitor, checkpoint_saver],
-        # check_val_every_n_epoch=5,
+        check_val_every_n_epoch=5,
         # val_check_interval=100,
         resume_from_checkpoint=resume_ckpt_path,
     )
 
     # pl training
-    trainer.fit(model, data_loaders["train"])
-    # trainer.fit(model, data_loaders["train"], data_loaders["val"])
-
-    # validation phase:
-    # data_loader = data_loaders["validation"]
-    # model.eval()
-    #
-    # total_val_loss = {}
-    # num_batch = len(data_loader)
-    # num_example = len(data_loader.dataset)
-    #
-    # avg_loss_50_iters = 0
-    # for batch_index, batch_data in enumerate(data_loader):
-    #     input_points_4d = batch_data[1]
-    #     output_origin, output_points, output_tindex = batch_data[2:5]
-    #     if _dataset_name == "nuscenes":
-    #         output_labels = batch_data[5]
-    #     else:
-    #         output_labels = None
-    #
-    #     optimizer.zero_grad()
-    #     with torch.set_grad_enabled(False):
-    #         loss = _loss_type
-    #         ret_dict = model(
-    #             input_points_4d,
-    #             output_origin,
-    #             output_points,
-    #             output_tindex,
-    #             output_labels=output_labels,
-    #             mode="training",
-    #             loss=loss
-    #         )
-    #
-    #     avg_loss = ret_dict[f"{loss}_loss"].mean()
-    #     avg_loss_50_iters += avg_loss.item() / 50
-    #     for ret_item in ret_dict:
-    #         if ret_item.endswith("loss"):
-    #             if ret_item not in total_val_loss:
-    #                 total_val_loss[ret_item] = 0
-    #             total_val_loss[ret_item] += ret_dict[ret_item].mean().item() * len(input_points_4d)
-    # for ret_item in total_val_loss:
-    #     mean_val_loss = total_val_loss[ret_item] / num_example
-    #     writer.add_scalar(f"validation/{ret_item}", mean_val_loss, n_iter)
+    trainer.fit(model, train_dataloaders=data_loaders["train"], val_dataloaders=data_loaders["val"])
 
 if __name__ == "__main__":
     # set random seeds

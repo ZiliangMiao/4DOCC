@@ -1,5 +1,6 @@
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -177,7 +178,6 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.training_step_outputs = []
         self.validation_step_outputs = []
         self.iters_acc_loss = 0
-        self.epoch_acc_loss = 0
 
 
     def forward(self, input_points_4d, output_origin, output_points, output_tindex):
@@ -193,10 +193,10 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         _output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
         # w/ skip connection
         # _output = self.linear(_input) + self.decoder(self.encoder(_input))
-        sigma = F.relu(_output, inplace=True)
 
+        sigma = F.relu(_output, inplace=True)
         # dvr rendering
-        if sigma.requires_grad:
+        if sigma.requires_grad:  # for training
             pred_dist, gt_dist, grad_sigma = dvr.render(
                 sigma,
                 output_origin,
@@ -210,15 +210,18 @@ class MinkOccupancyForecastingNetwork(LightningModule):
             gt_dist[torch.isinf(pred_dist)] = 0.0
             pred_dist[torch.isnan(pred_dist)] = 0.0
             gt_dist[torch.isnan(pred_dist)] = 0.0
+
+            pred_dist *= self.voxel_size
+            gt_dist *= self.voxel_size
             return sigma, pred_dist, gt_dist, grad_sigma
-        else:
+        else:  # for validation or testing
             pred_dist, gt_dist = dvr.render_forward(
                 sigma,
                 output_origin,
                 output_points,
                 output_tindex,
                 self.output_grid,
-                "test"  # what does "train" and "test" means here?
+                "test"  # original setting: "train" for train and validation, "test" for test
             )
             # take care of nans if any
             pred_dist[torch.isnan(pred_dist)] = 0.0
@@ -230,19 +233,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=self.lr_epoch, gamma=self.lr_decay)
         return [optimizer], [scheduler]
 
-    def training_step(self, batch: tuple, batch_idx, dataloader_idx=0):
-        # unfold batch data
-        meta = batch[0]
-        input_points_4d = batch[1]
-        output_origin, output_points, output_tindex = batch[2:5]
-        output_labels = batch[5] if self.dataset_name == "nuscenes" and self.cfg["data"]["fgbg_label"] else None
-
-        # forward
-        sigma, pred_dist, gt_dist, grad_sigma = self.forward(input_points_4d, output_origin, output_points, output_tindex)
-        pred_dist *= self.voxel_size
-        gt_dist *= self.voxel_size
-
-        # compute training losses
+    def get_losses(self, gt_dist, pred_dist):
         l1_loss = torch.abs(gt_dist - pred_dist)
         l2_loss = ((gt_dist - pred_dist) ** 2) / 2
         absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
@@ -251,36 +242,103 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         l1_loss = torch.sum(l1_loss[valid]) / valid_pts_count
         l2_loss = torch.sum(l2_loss[valid]) / valid_pts_count
         absrel_loss = torch.sum(absrel_loss[valid]) / valid_pts_count
+        return (l1_loss, l2_loss, absrel_loss)
+
+    def training_step(self, batch: tuple, batch_idx):
+        # unfold batch data
+        meta = batch[0]
+        input_points_4d = batch[1]
+        output_origin, output_points, output_tindex = batch[2:5]
+        output_labels = batch[5] if self.dataset_name == "nuscenes" and self.cfg["data"]["fgbg_label"] else None
+
+        # forward
+        sigma, pred_dist, gt_dist, grad_sigma = self.forward(input_points_4d, output_origin, output_points, output_tindex)
+
+        # compute training losses
+        l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)
 
         # log training losses
-        self.log("train_l1_loss", l1_loss.detach().cpu())
-        self.log("train_l2_loss", l2_loss.detach().cpu())
-        self.log("train_absrel_loss", absrel_loss.detach().cpu())
-        loss_dict = {"train_l1_loss": l1_loss.detach().cpu(),
-                     "train_l2_loss": l1_loss.detach().cpu(),
-                     "train_absrel_loss": absrel_loss.detach().cpu()}
-        self.training_step_outputs.append(loss_dict)
+        self.log("train_l1_loss", l1_loss.item(), on_step=True)  # logger=True default
+        self.log("train_l2_loss", l2_loss.item(), on_step=True)
+        self.log("train_absrel_loss", absrel_loss.item(), on_step=True)
+        train_loss_dict = {"train_l1_loss": l1_loss.item(),
+                     "train_l2_loss": l1_loss.item(),
+                     "train_absrel_loss": absrel_loss.item()}
+        self.training_step_outputs.append(train_loss_dict)
         # iters accumulated loss
-        self.iters_acc_loss += loss_dict[f"train_{self.loss_type}_loss"] / 50
+        self.iters_acc_loss += train_loss_dict[f"train_{self.loss_type}_loss"] / 50
         if (self.global_step + 1) % 50 == 0:  # self.current_batch
             self.log("train_50_iters_acc_loss", self.iters_acc_loss, prog_bar=True)
             self.iters_acc_loss = 0
-        # epoch accumulated loss
-        num_train_batches = self.trainer.num_training_batches
-        self.epoch_acc_loss += loss_dict[f"train_{self.loss_type}_loss"] / num_train_batches
 
         # manual backward and optimization
-        sch = self.lr_schedulers()
         opt = self.optimizers()
         opt.zero_grad()
         self.manual_backward(sigma, gradient=grad_sigma)
         opt.step()
-        sch.step()
         torch.cuda.empty_cache()
 
+        # check model parameters
+        # epoch_idx = self.current_epoch
+        # global_idx = self.global_step
+        # encoder_params = list(self.encoder.named_parameters())
+        # decoder_params = list(self.decoder.named_parameters())
+        # encoder_kernel_0 = encoder_params[0]
+        # decoder_kernel_0 = decoder_params[0]
+
     def on_train_epoch_end(self):
-        self.log("train_epoch_acc_loss", self.epoch_acc_loss, on_epoch=True, logger=True, prog_bar=True)
-        self.epoch_acc_loss = 0
+        # step lr per each epoch
+        sch = self.lr_schedulers()
+        sch.step()
+
+        # epoch logging
+        epoch_loss_list = []
+        for train_loss_dict in self.training_step_outputs:
+            epoch_loss_list.append(train_loss_dict[f"val_{self.loss_type}_loss"])
+        self.log("train_epoch_loss", np.array(epoch_loss_list).mean(), on_epoch=True, prog_bar=True)
+
+        # clear
+        self.training_step_outputs = []
+
+    def validation_step(self, batch: tuple, batch_idx):
+        # unfold batch data
+        meta = batch[0]
+        input_points_4d = batch[1]
+        output_origin, output_points, output_tindex = batch[2:5]
+        output_labels = batch[5] if self.dataset_name == "nuscenes" and self.cfg["data"]["fgbg_label"] else None
+
+        # forward (dvr.render_forward)
+        sigma, pred_dist, gt_dist = self.forward(input_points_4d, output_origin, output_points, output_tindex)
+
+        # compute validation losses
+        l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)
+
+        # store validation loss
+        val_loss_dict = {"val_l1_loss": l1_loss.item(),
+                     "val_l2_loss": l1_loss.item(),
+                     "val_absrel_loss": absrel_loss.item()}  # .item(): tensor -> float
+        self.log("val_l1_loss_step", l1_loss.item(), on_step=True, prog_bar=True, logger=False)
+        self.validation_step_outputs.append(val_loss_dict)
+        torch.cuda.empty_cache()
+
+    def on_validation_epoch_end(self):
+        val_l1_loss_list = []
+        val_l2_loss_list = []
+        val_absrel_loss_list = []
+        for val_loss_dict in self.validation_step_outputs:
+            val_l1_loss_list.append(val_loss_dict["val_l1_loss"])
+            val_l2_loss_list.append(val_loss_dict["val_l2_loss"])
+            val_absrel_loss_list.append(val_loss_dict["val_absrel_loss"])
+        val_l1_loss = np.array(val_l1_loss_list).mean()
+        val_l2_loss = np.array(val_l2_loss_list).mean()
+        val_absrel_loss = np.array(val_absrel_loss_list).mean()
+        self.log("val_l1_loss", val_l1_loss, on_epoch=True, prog_bar=True)
+        self.log("val_l2_loss", val_l2_loss, on_epoch=True)
+        self.log("val_absrel_loss", val_absrel_loss, on_epoch=True)
+
+        # clear
+        self.validation_step_outputs = []
+
 
 
 # if mode in ["testing", "plotting"]:
