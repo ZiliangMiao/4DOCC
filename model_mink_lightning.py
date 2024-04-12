@@ -158,6 +158,8 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.scaler = torch.nn.parameter.Parameter(
             torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
         )
+        self.quantization = torch.nn.parameter.Parameter(
+            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1.0]), requires_grad=False)
 
         # with 4d sparse encoder, feature dimension = 1
         self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, voxel_size=self.voxel_size,
@@ -165,9 +167,8 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.decoder = DenseDecoder3D(in_channels=self.n_input, out_channels=self.n_output, kernel_size=3)
 
         # NOTE: initialize the linear predictor (no bias) over history
-        # self.linear = torch.nn.Conv2d(
-        #     _in_channels, _out_channels, (3, 3), stride=1, padding=1, bias=True
-        # )
+        self.linear = torch.nn.Conv3d(in_channels=self.n_input, out_channels=self.n_output,
+                                      kernel_size=3, stride=1, padding=1, bias=True)
 
         # pytorch-lightning settings
         self.save_hyperparameters(cfg)
@@ -220,15 +221,27 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         gt_dist *= self.voxel_size
         return sigma, pred_dist, gt_dist
 
-
-
     def forward(self, _input):
+        # generate dense occ input for skip connection layer
         batch_size = len(_input)
+        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in _input]
+        features = [
+            torch.ones(len(point_cloud), 1).type_as(point_cloud)
+            for point_cloud in past_point_clouds
+        ]
+        coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
+        s_input = ME.SparseTensor(coordinates=coords, features=feats,
+                                  quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
+        [T, Z, Y, X] = self.output_grid
+        d_input, _, _ = s_input.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]), min_coordinate=torch.IntTensor([0, 0, 0, 0]))
+        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
+        d_input = d_input.permute(0, 5, 4, 3, 2, 1).contiguous().reshape(batch_size, T, Z, Y, X)
+
+        _li_output = self.linear(d_input)
         _en_output = self.encoder(_input).reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
-        _de_output = self.decoder(_en_output)  # minkowski unet as encoder
-        _output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
+        _de_output = self.decoder(_en_output)
         # w/ skip connection
-        # _output = self.linear(_input) + self.decoder(self.encoder(_input))
+        _output = (_li_output + _de_output).reshape(batch_size, self.n_output, self.n_height, self.n_length, self.n_width)
         return _output
 
     def configure_optimizers(self):
