@@ -20,6 +20,7 @@ def make_mink_dataloaders(cfg):
         "n_output": cfg["data"]["n_output"],
         "ego_mask": cfg["data"]["ego_mask"],
         "flip": cfg["data"]["flip"],
+        "fgbg_label": cfg["data"]["fgbg_label"],
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
@@ -163,10 +164,16 @@ def pretrain(cfg):
     # pl training
     trainer.fit(model, train_dataloaders=data_loaders["train"], val_dataloaders=data_loaders["val"], ckpt_path=resume_ckpt_path)
 
+def set_deterministic(random_seed=666):
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(random_seed)
+
 if __name__ == "__main__":
-    # set random seeds
-    np.random.seed(666)
-    torch.random.manual_seed(666)
+    set_deterministic(666)
 
     # load pretrain config
     with open("./configs/occ_pretrain.yaml", "r") as f:

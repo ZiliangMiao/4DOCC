@@ -179,54 +179,57 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.validation_step_outputs = []
         self.iters_acc_loss = 0
 
+    def dvr_render(self, net_output, output_origin, output_points, output_tindex):
+        assert net_output.requires_grad  # for training
+        sigma = F.relu(net_output, inplace=True)
+        pred_dist, gt_dist, grad_sigma = dvr.render(
+            sigma,
+            output_origin,
+            output_points,
+            output_tindex,
+            self.loss_type
+        )
+        # take care of nans and infs if any
+        grad_sigma[torch.isnan(grad_sigma)] = 0.0
+        pred_dist[torch.isinf(pred_dist)] = 0.0
+        gt_dist[torch.isinf(pred_dist)] = 0.0
+        pred_dist[torch.isnan(pred_dist)] = 0.0
+        gt_dist[torch.isnan(pred_dist)] = 0.0
 
-    def forward(self, input_points_4d, output_origin, output_points, output_tindex):
-        # preprocess input/output points
-        input_points = [(points_4d - self.offset_t) for points_4d in input_points_4d]
-        output_origin = ((output_origin - self.offset) / self.scaler).float()
-        output_points = ((output_points - self.offset) / self.scaler).float()
+        pred_dist *= self.voxel_size
+        gt_dist *= self.voxel_size
+        return sigma, pred_dist, gt_dist, grad_sigma
 
-        _input = input_points
+    def dvr_render_forward(self, net_output, output_origin, output_points, output_tindex):
+        assert net_output.requires_grad == False  # for validation or test
+        sigma = F.relu(net_output, inplace=True)
+        pred_dist, gt_dist = dvr.render_forward(
+            sigma,
+            output_origin,
+            output_points,
+            output_tindex,
+            self.output_grid,
+            "test"  # original setting: "train" for train and validation, "test" for test
+        )
+        # take care of nans if any
+        invalid = torch.isnan(pred_dist)
+        pred_dist[invalid] = 0.0
+        gt_dist[invalid] = 0.0
+
+        pred_dist *= self.voxel_size
+        gt_dist *= self.voxel_size
+        return sigma, pred_dist, gt_dist
+
+
+
+    def forward(self, _input):
         batch_size = len(_input)
         _en_output = self.encoder(_input).reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
         _de_output = self.decoder(_en_output)  # minkowski unet as encoder
         _output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
         # w/ skip connection
         # _output = self.linear(_input) + self.decoder(self.encoder(_input))
-
-        sigma = F.relu(_output, inplace=True)
-        # dvr rendering
-        if sigma.requires_grad:  # for training
-            pred_dist, gt_dist, grad_sigma = dvr.render(
-                sigma,
-                output_origin,
-                output_points,
-                output_tindex,
-                self.loss_type
-            )
-            # take care of nans and infs if any
-            grad_sigma[torch.isnan(grad_sigma)] = 0.0
-            pred_dist[torch.isinf(pred_dist)] = 0.0
-            gt_dist[torch.isinf(pred_dist)] = 0.0
-            pred_dist[torch.isnan(pred_dist)] = 0.0
-            gt_dist[torch.isnan(pred_dist)] = 0.0
-
-            pred_dist *= self.voxel_size
-            gt_dist *= self.voxel_size
-            return sigma, pred_dist, gt_dist, grad_sigma
-        else:  # for validation or testing
-            pred_dist, gt_dist = dvr.render_forward(
-                sigma,
-                output_origin,
-                output_points,
-                output_tindex,
-                self.output_grid,
-                "test"  # original setting: "train" for train and validation, "test" for test
-            )
-            # take care of nans if any
-            pred_dist[torch.isnan(pred_dist)] = 0.0
-            gt_dist[torch.isnan(pred_dist)] = 0.0
-            return sigma, pred_dist, gt_dist
+        return _output
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr_start)
@@ -244,15 +247,29 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         absrel_loss = torch.sum(absrel_loss[valid]) / valid_pts_count
         return (l1_loss, l2_loss, absrel_loss)
 
-    def training_step(self, batch: tuple, batch_idx):
-        # unfold batch data
+    def unpack_batch(self, batch):
         meta = batch[0]
         input_points_4d = batch[1]
         output_origin, output_points, output_tindex = batch[2:5]
-        output_labels = batch[5] if self.dataset_name == "nuscenes" and self.cfg["data"]["fgbg_label"] else None
+        net_input = [(points_4d - self.offset_t) for points_4d in input_points_4d]
+        output_origin = ((output_origin - self.offset) / self.scaler).float()
+        output_points = ((output_points - self.offset) / self.scaler).float()
+        if self.cfg["data"]["fgbg_label"]:
+            output_labels = batch[5] if self.dataset_name == "nuscenes" else None
+            return net_input, output_origin, output_points, output_tindex, output_labels
+        else:
+            return net_input, output_origin, output_points, output_tindex
+
+    def training_step(self, batch: tuple, batch_idx):
+        # unpack batch data
+        if self.cfg["data"]["fgbg_label"]:
+            net_input, output_origin, output_points, output_tindex, output_labels = self.unpack_batch(batch)
+        else:
+            net_input, output_origin, output_points, output_tindex = self.unpack_batch(batch)
 
         # forward
-        sigma, pred_dist, gt_dist, grad_sigma = self.forward(input_points_4d, output_origin, output_points, output_tindex)
+        net_output = self.forward(net_input)
+        sigma, pred_dist, gt_dist, grad_sigma = self.dvr_render(net_output, output_origin, output_points, output_tindex)
 
         # compute training losses
         l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)
@@ -301,14 +318,15 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.training_step_outputs = []
 
     def validation_step(self, batch: tuple, batch_idx):
-        # unfold batch data
-        meta = batch[0]
-        input_points_4d = batch[1]
-        output_origin, output_points, output_tindex = batch[2:5]
-        output_labels = batch[5] if self.dataset_name == "nuscenes" and self.cfg["data"]["fgbg_label"] else None
+        # unpack batch data
+        if self.cfg["data"]["fgbg_label"]:
+            net_input, output_origin, output_points, output_tindex, output_labels = self.unpack_batch(batch)
+        else:
+            net_input, output_origin, output_points, output_tindex = self.unpack_batch(batch)
 
         # forward (dvr.render_forward)
-        sigma, pred_dist, gt_dist = self.forward(input_points_4d, output_origin, output_points, output_tindex)
+        net_output = self.forward(net_input)
+        sigma, pred_dist, gt_dist = self.dvr_render_forward(net_output, output_origin, output_points, output_tindex)
 
         # compute validation losses
         l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)

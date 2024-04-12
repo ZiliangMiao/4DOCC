@@ -45,6 +45,7 @@ class nuScenesDataset(Dataset):
         # number of samples (every 10 sweeps / 0.5s)
         self.n_output = kwargs["n_output"]
         self.ego_mask = kwargs["ego_mask"]
+        self.fgbg_label = kwargs["fgbg_label"]
 
         scenes = self.nusc.scene
         if self.nusc_split == "train":
@@ -206,7 +207,8 @@ class nuScenesDataset(Dataset):
         output_origin_list = []
         output_points_list = []
         output_tindex_list = []
-        output_labels_list = []
+        if self.fgbg_label:
+            output_labels_list = []
         for i in range(self.n_output):
             index = ref_index + i + 1
             # if this exists a valid target
@@ -233,20 +235,17 @@ class nuScenesDataset(Dataset):
 
                 origin_tf = np.array(ref_from_curr[:3, 3], dtype=np.float32)
                 points_tf = np.array(curr_lidar_pc.points[:3].T, dtype=np.float32)
-                if self.nusc_split != "test":
+                if self.fgbg_label and self.nusc_split != "test":
                     labels = self.load_fg_labels(curr_sd_token).astype(np.float32)
                     if self.ego_mask:
                         labels = labels[np.logical_not(ego_mask)]
-                else:
-                    labels = np.full((len(points_tf),), -1, dtype=np.float32)
+                        assert len(labels) == len(points_tf)
             else:  # filler
                 origin_tf = np.array([0.0, 0.0, 0.0], dtype=np.float32)
                 points_tf = np.full((0, 3), float("nan"), dtype=np.float32)
-                labels = np.full((len(points_tf),), -1, dtype=np.float32)
-
-            #
-            assert len(labels) == len(points_tf)
-
+                if self.fgbg_label:
+                    labels = np.full((len(points_tf),), -1, dtype=np.float32)
+                    assert len(labels) == len(points_tf)
             # origin
             output_origin_list.append(origin_tf)
 
@@ -256,20 +255,28 @@ class nuScenesDataset(Dataset):
             # timestamp index
             tindex = np.full(len(points_tf), i, dtype=np.float32)
             output_tindex_list.append(tindex)
-
-            output_labels_list.append(labels)
+            if self.fgbg_label:
+                output_labels_list.append(labels)
 
         output_origin_tensor = torch.from_numpy(np.stack(output_origin_list))
         output_points_tensor = torch.from_numpy(np.concatenate(output_points_list))
         output_tindex_tensor = torch.from_numpy(np.concatenate(output_tindex_list))
-        output_labels_tensor = torch.from_numpy(np.concatenate(output_labels_list))
-
-        return (
+        if self.fgbg_label:
+            output_labels_tensor = torch.from_numpy(np.concatenate(output_labels_list))
+            return (
+                    (ref_scene_token, ref_sample_token, ref_sd_token, displacement),
+                    input_points_4d_tensor,
+                    output_origin_tensor,
+                    output_points_tensor,
+                    output_tindex_tensor,
+                    output_labels_tensor
+                )
+        else:
+            return (
                 (ref_scene_token, ref_sample_token, ref_sd_token, displacement),
                 input_points_4d_tensor,
                 output_origin_tensor,
                 output_points_tensor,
-                output_tindex_tensor,
-                output_labels_tensor
+                output_tindex_tensor
             )
 
