@@ -13,11 +13,11 @@ data:
 
 ##Testing
 model:
-  model_name: "pretrain_vs-0.2_t-3.0_bs-1_epo-60"  # model directory
-  model_version: "version_0"
+  model_name: "pretrain_vs-0.2_t-3.0_bs-2_epo-60"  # model directory
+  model_version: "version_1"
   test_epoch: 9
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
-  batch_size: 1
+  batch_size: 2
   num_workers: 8
   num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]
   metrics: ["chamfer_dist"]
@@ -30,8 +30,8 @@ model:
 # Dataset Config
 dataset:
   nuscenes:
-#    root: "/root/autodl-tmp/Datasets/nuScenes"
-    root: "/home/user/Datasets/nuScenes"
+    root: "/root/autodl-tmp/Datasets/nuScenes"
+    # root: "/home/user/Datasets/nuScenes"
     version: "v1.0-trainval"
   kitti:
     root: "/home/user/Datasets/KITTI"

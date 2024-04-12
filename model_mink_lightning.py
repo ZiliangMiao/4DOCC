@@ -132,7 +132,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
     def __init__(self, cfg: dict):
         super().__init__()
         self.cfg = cfg
-        self.dataset_name = cfg["dataset"]["name"].lower()
+        self.dataset_name = cfg["data"]["dataset_name"].lower()
         self.loss_type = cfg["model"]["loss_type"].lower()
         assert self.loss_type in ["l1", "l2", "absrel"]
 
@@ -294,7 +294,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         # epoch logging
         epoch_loss_list = []
         for train_loss_dict in self.training_step_outputs:
-            epoch_loss_list.append(train_loss_dict[f"val_{self.loss_type}_loss"])
+            epoch_loss_list.append(train_loss_dict[f"train_{self.loss_type}_loss"])
         self.log("train_epoch_loss", np.array(epoch_loss_list).mean(), on_epoch=True, prog_bar=True)
 
         # clear

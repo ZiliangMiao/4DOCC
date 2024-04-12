@@ -171,8 +171,8 @@ if __name__ == "__main__":
     # load pretrain config
     with open("./configs/occ_pretrain.yaml", "r") as f:
         cfg_pretrain = yaml.safe_load(f)
-    if cfg_pretrain["model"]["resume_ckpt"] is not None:
-        cfg_pretrain = torch.load(cfg_pretrain["model"]["resume_ckpt"])["hyper_parameters"]
+    # if cfg_pretrain["model"]["resume_ckpt"] is not None:
+    #     cfg_pretrain = torch.load(cfg_pretrain["model"]["resume_ckpt"])["hyper_parameters"]
     pretrain(cfg_pretrain)
 
     # moving object segmentation fine-tuning (finetune at mos project, not 4docc project)
