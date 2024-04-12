@@ -29,7 +29,7 @@ def make_mink_dataloaders(cfg):
         "num_workers": cfg["model"]["num_workers"],
     }
 
-    dataset_name = cfg["dataset"]["name"].lower()
+    dataset_name = cfg["data"]["dataset_name"].lower()
     if dataset_name == "nuscenes":
         from data.nusc_mink import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
@@ -134,13 +134,13 @@ def pretrain(cfg):
         verbose=True,
         save_top_k=cfg["model"]["num_epoch"],
         mode="max",
-        filename=model_name + "_{epoch}_{train_epoch_loss:.5f}",
+        filename=model_name + "_{epoch}",
         every_n_epochs=1,
         save_last=True,
     )
 
     # pl logger
-    dataset_name = cfg["dataset"]["name"]
+    dataset_name = cfg["data"]["dataset_name"].lower()
     logs_dir = f"./logs/pretrain/{dataset_name}"
     os.makedirs(name=logs_dir, exist_ok=True)
     tb_logger = pl_loggers.TensorBoardLogger(logs_dir, name=model_name, default_hp_metric=False)

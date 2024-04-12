@@ -1,5 +1,6 @@
 ##Data
 data:
+  dataset_name: "nuscenes"  # "kitti", "argo"
   pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
   input_within_pc_range: True
   voxel_size: 0.2  # voxel size
@@ -31,7 +32,6 @@ model:
 
 # Dataset Config
 dataset:
-  name: "nuscenes"  # "kitti", "argo"
   nuscenes:
 #    root: "/root/autodl-tmp/Datasets/nuScenes"
     root: "/home/user/Datasets/nuScenes"

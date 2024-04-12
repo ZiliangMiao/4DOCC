@@ -5,10 +5,10 @@ import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 
-# # JIT
-# import torch.nn.functional as F
-# from torch.utils.cpp_extension import load
-# dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
+# JIT
+import torch.nn.functional as F
+from torch.utils.cpp_extension import load
+dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True, extra_cuda_cflags=['-allow-unsupported-compiler'])
 
 
 def get_grid_mask(points_all, pc_range):
@@ -191,116 +191,113 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         _de_output = self.decoder(_en_output)  # minkowski unet as encoder
         output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
 
-        # ret_dict = {}
-        # if mode == "training":
-        #     if loss in ["l1", "l2", "absrel"]:
-        #         sigma = F.relu(output, inplace=True)
-        #         # sigma_max, sigma_min = sigma.max(), sigma.min()
-        #         # import pdb
-        #         # pdb.set_trace()
-        #
-        #         if sigma.requires_grad:
-        #             pred_dist, gt_dist, grad_sigma = dvr.render(
-        #                 sigma,
-        #                 output_origin,
-        #                 output_points,
-        #                 output_tindex,
-        #                 loss
-        #             )
-        #             # take care of nans and infs if any
-        #             invalid = torch.isnan(grad_sigma)
-        #             grad_sigma[invalid] = 0.0
-        #             invalid = torch.isnan(pred_dist)
-        #             pred_dist[invalid] = 0.0
-        #             gt_dist[invalid] = 0.0
-        #             invalid = torch.isinf(pred_dist)
-        #             pred_dist[invalid] = 0.0
-        #             gt_dist[invalid] = 0.0
-        #             sigma.backward(grad_sigma)
-        #         else:
-        #             pred_dist, gt_dist = dvr.render_forward(
-        #                 sigma,
-        #                 output_origin,
-        #                 output_points,
-        #                 output_tindex,
-        #                 self.output_grid,
-        #                 "train"
-        #             )
-        #             # take care of nans if any
-        #             invalid = torch.isnan(pred_dist)
-        #             pred_dist[invalid] = 0.0
-        #             gt_dist[invalid] = 0.0
-        #
-        #         pred_dist *= self.voxel_size
-        #         gt_dist *= self.voxel_size
-        #
-        #         # compute training losses
-        #         valid = gt_dist >= 0
-        #         count = valid.sum()
-        #         l1_loss = torch.abs(gt_dist - pred_dist)
-        #         l2_loss = ((gt_dist - pred_dist) ** 2) / 2
-        #         absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
-        #
-        #         # record training losses
-        #         if count == 0:
-        #             count = 1
-        #         ret_dict["l1_loss"] = l1_loss[valid].sum() / count
-        #         ret_dict["l2_loss"] = l2_loss[valid].sum() / count
-        #         ret_dict["absrel_loss"] = absrel_loss[valid].sum() / count
-        #
-        #     else:
-        #         raise RuntimeError(f"Unknown loss type: {loss}")
+        ret_dict = {}
+        if mode == "training":
+            if loss in ["l1", "l2", "absrel"]:
+                sigma = F.relu(output, inplace=True)
 
-        # elif mode in ["testing", "plotting"]:
-        #
-        #     if loss in ["l1", "l2", "absrel"]:
-        #         sigma = F.relu(output, inplace=True)
-        #         pred_dist, gt_dist = dvr.render_forward(
-        #             sigma, output_origin, output_points, output_tindex, self.output_grid, "test")
-        #         pog = 1 - torch.exp(-sigma)
-        #
-        #         pred_dist = pred_dist.detach()
-        #         gt_dist = gt_dist.detach()
-        #
-        #     #
-        #     pred_dist *= self.voxel_size
-        #     gt_dist *= self.voxel_size
-        #
-        #     if mode == "testing":
-        #         # L1 distance and friends
-        #         mask = gt_dist > 0
-        #         if eval_within_grid:
-        #             mask = torch.logical_and(mask, inner_grid_mask)
-        #         if eval_outside_grid:
-        #             mask = torch.logical_and(mask, outer_grid_mask)
-        #         count = mask.sum()
-        #         l1_loss = torch.abs(gt_dist - pred_dist)
-        #         l2_loss = ((gt_dist - pred_dist) ** 2) / 2
-        #         absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
-        #
-        #         ret_dict["l1_loss"] = l1_loss[mask].sum() / count
-        #         ret_dict["l2_loss"] = l2_loss[mask].sum() / count
-        #         ret_dict["absrel_loss"] = absrel_loss[mask].sum() / count
-        #
-        #         ret_dict["gt_dist"] = gt_dist
-        #         ret_dict["pred_dist"] = pred_dist
-        #         ret_dict['pog'] = pog.detach()
-        #         ret_dict["sigma"] = sigma.detach()
-        #
-        #     if mode == "plotting":
-        #         ret_dict["gt_dist"] = gt_dist
-        #         ret_dict["pred_dist"] = pred_dist
-        #         ret_dict["pog"] = pog
-        #
-        # elif mode == "dumping":
-        #     if loss in ["l1", "l2", "absrel"]:
-        #         sigma = F.relu(output, inplace=True)
-        #         pog = 1 - torch.exp(-sigma)
-        #
-        #     pog_max, _ = pog.max(dim=1)
-        #     ret_dict["pog_max"] = pog_max
-        #
-        # else:
-        #     raise RuntimeError(f"Unknown mode: {mode}")
+                if sigma.requires_grad:
+                    pred_dist, gt_dist, grad_sigma = dvr.render(
+                        sigma,
+                        output_origin,
+                        output_points,
+                        output_tindex,
+                        loss
+                    )
+                    # take care of nans and infs if any
+                    invalid = torch.isnan(grad_sigma)
+                    grad_sigma[invalid] = 0.0
+                    invalid = torch.isnan(pred_dist)
+                    pred_dist[invalid] = 0.0
+                    gt_dist[invalid] = 0.0
+                    invalid = torch.isinf(pred_dist)
+                    pred_dist[invalid] = 0.0
+                    gt_dist[invalid] = 0.0
+                    sigma.backward(grad_sigma)
+                else:
+                    pred_dist, gt_dist = dvr.render_forward(
+                        sigma,
+                        output_origin,
+                        output_points,
+                        output_tindex,
+                        self.output_grid,
+                        "train"
+                    )
+                    # take care of nans if any
+                    invalid = torch.isnan(pred_dist)
+                    pred_dist[invalid] = 0.0
+                    gt_dist[invalid] = 0.0
 
-        return output
+                pred_dist *= self.voxel_size
+                gt_dist *= self.voxel_size
+
+                # compute training losses
+                valid = gt_dist >= 0
+                count = valid.sum()
+                l1_loss = torch.abs(gt_dist - pred_dist)
+                l2_loss = ((gt_dist - pred_dist) ** 2) / 2
+                absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
+
+                # record training losses
+                if count == 0:
+                    count = 1
+                ret_dict["l1_loss"] = l1_loss[valid].sum() / count
+                ret_dict["l2_loss"] = l2_loss[valid].sum() / count
+                ret_dict["absrel_loss"] = absrel_loss[valid].sum() / count
+
+            else:
+                raise RuntimeError(f"Unknown loss type: {loss}")
+
+        elif mode in ["testing", "plotting"]:
+
+            if loss in ["l1", "l2", "absrel"]:
+                sigma = F.relu(output, inplace=True)
+                pred_dist, gt_dist = dvr.render_forward(
+                    sigma, output_origin, output_points, output_tindex, self.output_grid, "test")
+                pog = 1 - torch.exp(-sigma)
+
+                pred_dist = pred_dist.detach()
+                gt_dist = gt_dist.detach()
+
+            #
+            pred_dist *= self.voxel_size
+            gt_dist *= self.voxel_size
+
+            if mode == "testing":
+                # L1 distance and friends
+                mask = gt_dist > 0
+                if eval_within_grid:
+                    mask = torch.logical_and(mask, inner_grid_mask)
+                if eval_outside_grid:
+                    mask = torch.logical_and(mask, outer_grid_mask)
+                count = mask.sum()
+                l1_loss = torch.abs(gt_dist - pred_dist)
+                l2_loss = ((gt_dist - pred_dist) ** 2) / 2
+                absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
+
+                ret_dict["l1_loss"] = l1_loss[mask].sum() / count
+                ret_dict["l2_loss"] = l2_loss[mask].sum() / count
+                ret_dict["absrel_loss"] = absrel_loss[mask].sum() / count
+
+                ret_dict["gt_dist"] = gt_dist
+                ret_dict["pred_dist"] = pred_dist
+                ret_dict['pog'] = pog.detach()
+                ret_dict["sigma"] = sigma.detach()
+
+            if mode == "plotting":
+                ret_dict["gt_dist"] = gt_dist
+                ret_dict["pred_dist"] = pred_dist
+                ret_dict["pog"] = pog
+
+        elif mode == "dumping":
+            if loss in ["l1", "l2", "absrel"]:
+                sigma = F.relu(output, inplace=True)
+                pog = 1 - torch.exp(-sigma)
+
+            pog_max, _ = pog.max(dim=1)
+            ret_dict["pog_max"] = pog_max
+
+        else:
+            raise RuntimeError(f"Unknown mode: {mode}")
+
+        return ret_dict

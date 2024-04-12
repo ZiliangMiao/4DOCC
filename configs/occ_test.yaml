@@ -1,34 +1,35 @@
 ##Data
 data:
-  dataset_name: "nusc"
+  dataset_name: "nuscenes"
   pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
   input_within_pc_range: True
   voxel_size: 0.2  # voxel size
-  n_input: 2  # number of input point cloud scan
-  n_output: 2  # number of output point cloud scan (for pretraining only)
-  ego_mask: True # mask the points of ego-vehicle, 4docc pretraining default=True
-#  x_flip: True  # flip the x-axis in Singapore (left hand drive)
+  n_input: 6  # number of input point cloud scan
+  n_output: 6  # number of output point cloud scan (for pretraining only)
+  ego_mask: True # mask the pointgit as of ego-vehicle, 4docc pretraining default=True
+  flip: True  # flip the x-axis in Singapore (left hand drive)
 #  transform: True # If true, the points are pose-aligned before feeding to the model
-#  shuffle: True  # shuffle the dataset
+  shuffle: False  # shuffle the dataset
 
 ##Testing
 model:
-  expt_name: "1s_sparse-dense_vs-0.2"  # experiment directory
+  model_name: "pretrain_vs-0.2_t-3.0_bs-1_epo-60"  # model directory
+  model_version: "version_0"
+  test_epoch: 9
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
-  test_epoch: 13
-  batch_size: 2
+  batch_size: 1
   num_workers: 8
   num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]
   metrics: ["chamfer_dist"]
   plot_metrics: True
-  write_pcd: True
+  write_pcd: False
   assume_const_velo: True
   eval_within_grid: False
   eval_outside_grid: False
 
 # Dataset Config
 dataset:
-  nusc:
+  nuscenes:
 #    root: "/root/autodl-tmp/Datasets/nuScenes"
     root: "/home/user/Datasets/nuScenes"
     version: "v1.0-trainval"

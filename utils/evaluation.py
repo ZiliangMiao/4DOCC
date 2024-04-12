@@ -7,7 +7,6 @@ import struct
 import numpy as np
 import copy
 import json
-from plyfile import PlyData
 import argparse
 from tqdm import tqdm
 import cv2

@@ -75,35 +75,36 @@ def make_mink_dataloaders(cfg):
         "voxel_size": cfg["data"]["voxel_size"],
         "n_input": cfg["data"]["n_input"],
         "n_output": cfg["data"]["n_output"],
-        "nusc_version": cfg["dataset"]["nusc"]["version"],
         "ego_mask": cfg["data"]["ego_mask"],
+        "flip": cfg["data"]["flip"],
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
-        "shuffle": False,
+        "shuffle": cfg["data"]["shuffle"],
         "drop_last": True,
         "batch_size": cfg["model"]["batch_size"],
         "num_workers": cfg["model"]["num_workers"],
     }
 
-    dataset_name = cfg["data"]["dataset_name"]
-    if dataset_name.lower() == "nusc":
+    dataset_name = cfg["data"]["dataset_name"].lower()
+    if dataset_name == "nuscenes":
         from data.nusc_mink import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
         data_loader = DataLoader(
-                nuScenesDataset(nusc, "train", dataset_kwargs),
+                nuScenesDataset(nusc, "val", dataset_kwargs),
                 collate_fn=MinkCollateFn,
                 **data_loader_kwargs)
     else:
-        raise NotImplementedError("Dataset " + cfg["dataset"]["name"] + "is not supported.")
+        raise NotImplementedError("Dataset " + cfg["data"]["dataset_name"] + "is not supported.")
     return data_loader
 
 
 def test(cfg):
     # get params
     _batch_size = cfg["model"]["batch_size"]
-    _expt_name = cfg["model"]["expt_name"]
+    _model_name = cfg["model"]["model_name"]
+    _model_version = cfg["model"]["model_version"]
     _loss_type = cfg["model"]["loss_type"]
     _test_epoch = cfg["model"]["test_epoch"]
     _dataset = cfg["data"]["dataset_name"]
@@ -112,7 +113,7 @@ def test(cfg):
 
     # vis settings
     _write_pcd = cfg["model"]["write_pcd"]
-    vis_dir = os.path.join("models", _dataset, _expt_name, "results", f"epoch_{_test_epoch}", "visualization")
+    vis_dir = os.path.join("logs", "pretrain", _dataset, _model_name, _model_version, "results", f"epoch_{_test_epoch}", "visualization")
     os.makedirs(vis_dir, exist_ok=True)
     pred_pcds_dir = os.path.join(vis_dir, "pred_pcds")
     os.makedirs(pred_pcds_dir, exist_ok=True)
@@ -134,11 +135,11 @@ def test(cfg):
     model = MinkOccupancyForecastingNetwork(_loss_type, _n_input, _n_output, _pc_range, _voxel_size).to(device)
 
     # load trained model
-    _expt_dir = os.path.join("models", _dataset, _expt_name)
-    ckpt_path = f"{_expt_dir}/ckpts/model_epoch_{_test_epoch}.pth"
+    _model_dir = os.path.join("logs", "pretrain", _dataset, _model_name, _model_version)
+    ckpt_path = f"{_model_dir}/checkpoints/{_model_name}_epoch={_test_epoch}.ckpt"
     assert os.path.exists(ckpt_path)
     ckpt = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)  # NOTE: ignore renderer's parameters
+    model.load_state_dict(ckpt["state_dict"], strict=False)  # NOTE: ignore renderer's parameters
 
     # data parallel
     model = nn.DataParallel(model)
@@ -146,8 +147,8 @@ def test(cfg):
 
     # logging
     dt = datetime.now()
-    os.makedirs(f"{_expt_dir}/results/{_expt_name}/epoch_{_test_epoch}", exist_ok=True)
-    logfile = open(f"{_expt_dir}/results/{_expt_name}/epoch_{_test_epoch}/{dt}.txt", "w")
+    os.makedirs(f"{_model_dir}/results/epoch_{_test_epoch}", exist_ok=True)
+    logfile = open(f"{_model_dir}/results/epoch_{_test_epoch}/{dt}.txt", "w")
 
     metrics = {
         "count": 0.0,
@@ -188,9 +189,9 @@ def test(cfg):
                 eval_within_grid=cfg["model"]["eval_within_grid"],
                 eval_outside_grid=cfg["model"]["eval_outside_grid"])
 
-            from utils.vis.vis_occ import get_occupancy_as_pcd
-            occ_pcd = get_occupancy_as_pcd(ret_dict["pog"], 0.01, _voxel_size, _pc_range, "Oranges")
-            a = 1
+            # from utils.vis.vis_occ import get_occupancy_as_pcd
+            # occ_pcd = get_occupancy_as_pcd(ret_dict["pog"], 0.01, _voxel_size, _pc_range, "Oranges")
+            # a = 1
 
         # iterate through the batch
         for j in range(output_points.shape[0]):  # iterate through the batch

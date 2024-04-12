@@ -225,7 +225,7 @@ def pretrain(cfg):
 
             optimizer.zero_grad()
             with torch.set_grad_enabled(True):
-                output = model(
+                ret_dict = model(
                     input_points_4d,
                     output_origin,
                     output_points,
@@ -234,47 +234,6 @@ def pretrain(cfg):
                     mode="training",
                     loss=_loss_type
                 )  # do backward during model forward
-
-                ret_dict = {}
-                # calculate loss and backward
-                sigma = F.relu(output, inplace=True)
-                if sigma.requires_grad:
-                    pred_dist, gt_dist, grad_sigma = dvr.render(
-                        sigma,
-                        output_origin.cuda(),
-                        output_points.cuda(),
-                        output_tindex.cuda(),
-                        _loss_type
-                    )
-                    # take care of nans and infs if any
-                    invalid = torch.isnan(grad_sigma)
-                    grad_sigma[invalid] = 0.0
-                    invalid = torch.isnan(pred_dist)
-                    pred_dist[invalid] = 0.0
-                    gt_dist[invalid] = 0.0
-                    invalid = torch.isinf(pred_dist)
-                    pred_dist[invalid] = 0.0
-                    gt_dist[invalid] = 0.0
-                    sigma.backward(grad_sigma)
-
-                pred_dist *= _voxel_size
-                gt_dist *= _voxel_size
-                # compute training losses
-                valid = gt_dist >= 0
-                count = valid.sum()
-                l1_loss = torch.abs(gt_dist - pred_dist)
-                l2_loss = ((gt_dist - pred_dist) ** 2) / 2
-                absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
-                # record training losses
-                if count == 0:
-                    count = 1
-                ret_dict["l1_loss"] = l1_loss[valid].sum() / count
-                ret_dict["l2_loss"] = l2_loss[valid].sum() / count
-                ret_dict["absrel_loss"] = absrel_loss[valid].sum() / count
-
-
-
-
                 optimizer.step()
                 torch.cuda.empty_cache()
                 n_iter += 1
