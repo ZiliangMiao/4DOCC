@@ -1,3 +1,5 @@
+mode: "train"
+
 ##Data
 data:
   dataset_name: "nuscenes"  # "kitti", "argo"

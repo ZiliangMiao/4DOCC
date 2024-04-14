@@ -1,17 +1,22 @@
+import logging
 import os
-from datetime import datetime
+import sys
+import datetime
 import numpy as np
 import time
 import yaml
 
 import torch
 from torch import nn
+import torch.nn.functional as F
+from pytorch_lightning import Trainer
 from torch.utils.data import DataLoader
 from data.common import MinkCollateFn
 from model_mink import MinkOccupancyForecastingNetwork
 from utils.evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors, clamp
-from torch.utils.cpp_extension import load
+from utils.vis.vis_occ import get_occupancy_as_pcd
 
+from torch.utils.cpp_extension import load
 dvr = load("dvr", sources=["lib/dvr/dvr.cpp", "lib/dvr/dvr.cu"], verbose=True)
 
 def get_grid_mask(points, pc_range):
@@ -77,6 +82,7 @@ def make_mink_dataloaders(cfg):
         "n_output": cfg["data"]["n_output"],
         "ego_mask": cfg["data"]["ego_mask"],
         "flip": cfg["data"]["flip"],
+        "fgbg_label": cfg["data"]["fgbg_label"],
     }
     data_loader_kwargs = {
         "pin_memory": False,  # NOTE
@@ -99,7 +105,6 @@ def make_mink_dataloaders(cfg):
         raise NotImplementedError("Dataset " + cfg["data"]["dataset_name"] + "is not supported.")
     return data_loader
 
-
 def test(cfg):
     # get params
     _batch_size = cfg["model"]["batch_size"]
@@ -119,6 +124,8 @@ def test(cfg):
     os.makedirs(pred_pcds_dir, exist_ok=True)
     gt_pcds_dir = os.path.join(vis_dir, "gt_pcds")
     os.makedirs(gt_pcds_dir, exist_ok=True)
+    occ_pcds_dir = os.path.join(vis_dir, "occ_pcds")
+    os.makedirs(occ_pcds_dir, exist_ok=True)
 
     # get device status
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -146,9 +153,14 @@ def test(cfg):
     model.eval()
 
     # logging
-    dt = datetime.now()
     os.makedirs(f"{_model_dir}/results/epoch_{_test_epoch}", exist_ok=True)
-    logfile = open(f"{_model_dir}/results/epoch_{_test_epoch}/{dt}.txt", "w")
+    date = datetime.date.today().strftime('%Y%m%d')
+    log_file = os.path.join(f"{_model_dir}/results/epoch_{_test_epoch}/{date}.txt")
+    logging.basicConfig(filename=log_file, level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(cfg))
+    logging.info(log_file)
 
     metrics = {
         "count": 0.0,
@@ -163,10 +175,10 @@ def test(cfg):
         output_origin, output_points, output_tindex = batch[2:5]  # removed output_labels as the last returned argument
 
         if cfg["model"]["assume_const_velo"]:
-                displacement = np.array([fname[-1].numpy() for fname in filenames]).reshape((-1, 1, 3))
-                output_origin = torch.zeros_like(output_origin)
-                displacements = torch.arange(_n_output) + 1
-                output_origin = (output_origin + displacements[None, :, None]) * displacement
+            displacement = np.array([fname[-1].numpy() for fname in filenames]).reshape((-1, 1, 3))
+            output_origin = torch.zeros_like(output_origin)
+            displacements = torch.arange(_n_output) + 1
+            output_origin = (output_origin + displacements[None, :, None]) * displacement
 
         if _dataset.lower() == "nusc":
             output_labels = batch[5]
@@ -189,13 +201,9 @@ def test(cfg):
                 eval_within_grid=cfg["model"]["eval_within_grid"],
                 eval_outside_grid=cfg["model"]["eval_outside_grid"])
 
-            # from utils.vis.vis_occ import get_occupancy_as_pcd
-            # occ_pcd = get_occupancy_as_pcd(ret_dict["pog"], 0.01, _voxel_size, _pc_range, "Oranges")
-            # a = 1
-
-        # iterate through the batch
-        for j in range(output_points.shape[0]):  # iterate through the batch
-            pred_pcds = get_rendered_pcds(
+            # iterate through the batch
+            for j in range(len(output_points)):
+                pred_pcds = get_rendered_pcds(
                     output_origin[j].cpu().numpy(),
                     output_points[j].cpu().numpy(),
                     output_tindex[j].cpu().numpy(),
@@ -204,7 +212,7 @@ def test(cfg):
                     _pc_range,
                     cfg["model"]["eval_within_grid"],
                     cfg["model"]["eval_outside_grid"])
-            gt_pcds = get_clamped_output(
+                gt_pcds = get_clamped_output(
                     output_origin[j].cpu().numpy(),
                     output_points[j].cpu().numpy(),
                     output_tindex[j].cpu().numpy(),
@@ -213,19 +221,24 @@ def test(cfg):
                     cfg["model"]["eval_within_grid"],
                     cfg["model"]["eval_outside_grid"])
 
-            # load predictions (loop in time-axis)
-            for k in range(len(gt_pcds)):
-                pred_pcd = pred_pcds[k]
-                gt_pcd = gt_pcds[k]
-                origin = output_origin[j][k].cpu().numpy()
+                # load predictions (loop in time-axis)
+                for k in range(len(gt_pcds)):
+                    pred_pcd = pred_pcds[k]
+                    gt_pcd = gt_pcds[k]
+                    origin = output_origin[j][k].cpu().numpy()
 
-                # get the metrics
-                metrics["count"] += 1
-                metrics["chamfer_distance"] += compute_chamfer_distance(pred_pcd, gt_pcd, device)
-                metrics["chamfer_distance_inner"] += compute_chamfer_distance_inner(pred_pcd, gt_pcd, device)
-                l1_error, absrel_error = compute_ray_errors(pred_pcd, gt_pcd, torch.from_numpy(origin), device)
-                metrics["l1_error"] += l1_error
-                metrics["absrel_error"] += absrel_error
+                    # get the metrics
+                    metrics["count"] += 1
+                    metrics["chamfer_distance"] += compute_chamfer_distance(pred_pcd, gt_pcd, device)
+                    metrics["chamfer_distance_inner"] += compute_chamfer_distance_inner(pred_pcd, gt_pcd, device)
+                    l1_error, absrel_error = compute_ray_errors(pred_pcd, gt_pcd, torch.from_numpy(origin), device)
+                    metrics["l1_error"] += l1_error
+                    metrics["absrel_error"] += absrel_error
+
+                # save occ pred
+                # filename = occ_pcds_dir + f"/{filenames[j][2]}"
+                # get_occupancy_as_pcd(ret_dict["pog"][j].detach().cpu().numpy(), 0.5,
+                #                      _voxel_size, _pc_range, "Oranges", filename)
 
                 # save pred_pcd as [sample_data_token]_pred.pcd
                 if _write_pcd:
@@ -234,30 +247,28 @@ def test(cfg):
                     o3d_pred_pcd = open3d.geometry.PointCloud()
                     o3d_pred_pcd.points = open3d.utility.Vector3dVector(pred_pcd.numpy())
                     open3d.io.write_point_cloud(pred_pcd_file, o3d_pred_pcd)
-                    print(f"Predicted pcd saved: {filenames[j][2]}_pred.pcd")
+                    # print(f"Predicted pcd saved: {filenames[j][2]}_pred.pcd")
                     gt_pcd_file = os.path.join(gt_pcds_dir, f"{filenames[j][2]}_gt.pcd")
                     o3d_gt_pcd = open3d.geometry.PointCloud()
                     o3d_gt_pcd.points = open3d.utility.Vector3dVector(gt_pcd.numpy())
                     open3d.io.write_point_cloud(gt_pcd_file, o3d_gt_pcd)
-                    print(f"Ground truth pcd saved: {filenames[j][2]}_gt.pcd")
+                    # print(f"Ground truth pcd saved: {filenames[j][2]}_gt.pcd")
 
-        print("Batch {"+str(i)+"/"+str(len(data_loader))+"}:", "Chamfer Distance:", metrics["chamfer_distance"] / metrics["count"])
-        print("Batch {"+str(i)+"/"+str(len(data_loader))+"}:", "Chamfer Distance Inner:", metrics["chamfer_distance_inner"] / metrics["count"])
-        print("Batch {"+str(i)+"/"+str(len(data_loader))+"}:", "L1 Error:", metrics["l1_error"] / metrics["count"])
-        print("Batch {"+str(i)+"/"+str(len(data_loader))+"}:", "AbsRel Error:", metrics["absrel_error"] / metrics["count"])
-        print("Batch {"+str(i)+"/"+str(len(data_loader))+"}:", "Count:", metrics["count"])
+        count = metrics["count"]
+        chamfer_distance = metrics["chamfer_distance"]
+        chamfer_distance_inner = metrics["chamfer_distance_inner"]
+        l1_error = metrics["l1_error"]
+        absrel_error = metrics["absrel_error"]
+        logging.info(f"Batch {i} / {len(data_loader)}, Chamfer Distance: {chamfer_distance / count}")
+        logging.info(f"Batch {i} / {len(data_loader)}, Chamfer Distance Inner: {chamfer_distance_inner / count}")
+        logging.info(f"Batch {i} / {len(data_loader)}, L1 Error: {l1_error / count}")
+        logging.info(f"Batch {i} / {len(data_loader)}, AbsRel Error: {absrel_error / count}")
+        logging.info(f"Batch {i} / {len(data_loader)}, Count: {count}")
 
-    print("Final Chamfer Distance:", metrics["chamfer_distance"] / metrics["count"])
-    print("Final Chamfer Distance Inner:", metrics["chamfer_distance_inner"] / metrics["count"])
-    print("Final L1 Error:", metrics["l1_error"] / metrics["count"])
-    print("Final AbsRel Error:", metrics["absrel_error"] / metrics["count"])
-
-    logfile.write("\nFinal Chamfer Distance: " + str(metrics["chamfer_distance"] / metrics["count"]))
-    logfile.write("\nFinal Chamfer Distance Inner: " + str(metrics["chamfer_distance_inner"] / metrics["count"]))
-    logfile.write("\nFinal L1 Error: " + str(metrics["l1_error"] / metrics["count"]))
-    logfile.write("\nFinal AbsRel Error: " + str(metrics["absrel_error"] / metrics["count"]))
-
-    logfile.close()
+    logging.info("Final Chamfer Distance: " + str(metrics["chamfer_distance"] / metrics["count"]))
+    logging.info("Final Chamfer Distance Inner: " + str(metrics["chamfer_distance_inner"] / metrics["count"]))
+    logging.info("Final L1 Error: " + str(metrics["l1_error"] / metrics["count"]))
+    logging.info("Final AbsRel Error: " + str(metrics["absrel_error"] / metrics["count"]))
 
 def set_deterministic(random_seed=666):
     torch.backends.cudnn.deterministic = True
@@ -273,5 +284,43 @@ if __name__ == "__main__":
 
     # test point cloud forecasting
     with open("./configs/occ_test.yaml", "r") as f:
-        cfg_test = yaml.safe_load(f)
-    test(cfg_test)
+        cfg = yaml.safe_load(f)
+    test(cfg)
+
+    # pytorch-lightning predict
+    # # get params
+    # _batch_size = cfg["model"]["batch_size"]
+    # _model_name = cfg["model"]["model_name"]
+    # _model_version = cfg["model"]["model_version"]
+    # _loss_type = cfg["model"]["loss_type"]
+    # _test_epoch = cfg["model"]["test_epoch"]
+    # _dataset = cfg["data"]["dataset_name"]
+    # _n_input, _n_output = cfg["data"]["n_input"], cfg["data"]["n_output"]
+    # _pc_range, _voxel_size = cfg["data"]["pc_range"], cfg["data"]["voxel_size"]
+    #
+    # # get device status
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # num_devices = torch.cuda.device_count()
+    # assert num_devices == cfg["model"]["num_devices"]
+    # assert _batch_size % num_devices == 0
+    # if _batch_size % num_devices != 0:
+    #     raise RuntimeError(f"Batch size ({_batch_size}) cannot be divided by device count ({num_devices})")
+    #
+    # # dataset
+    # data_loader = make_mink_dataloaders(cfg)
+    #
+    # # init model on cuda device
+    # model = MinkOccupancyForecastingNetwork(cfg).to(device)
+    #
+    # # load trained model
+    # _model_dir = os.path.join("logs", "pretrain", _dataset, _model_name, _model_version)
+    # ckpt_path = f"{_model_dir}/checkpoints/{_model_name}_epoch={_test_epoch}.ckpt"
+    # # assert os.path.exists(ckpt_path)
+    # # ckpt = torch.load(ckpt_path, map_location=device)
+    # # model.load_state_dict(ckpt["state_dict"], strict=False)  # NOTE: ignore renderer's parameters
+    #
+    # trainer = Trainer(accelerator="gpu", strategy="ddp", devices=num_devices)
+    # trainer.predict(model, dataloaders=data_loader, return_predictions=False, ckpt_path=ckpt_path)
+
+
+
