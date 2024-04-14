@@ -9,7 +9,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from data.common import MinkCollateFn
-from model_mink_lightning import MinkOccupancyForecastingNetwork
+from model_mink_lightning_2d import MinkOccupancyForecastingNetwork
 
 def make_mink_dataloaders(cfg):
     dataset_kwargs = {
