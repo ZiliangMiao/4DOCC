@@ -12,16 +12,29 @@ def color_by_z(pts, pc_range, cmap):
     n_z = np.maximum(0, np.minimum(1, n_z))
     return cmap(n_z)[:, :3]
 
+def color_by_density(density, cmap):
+    cmap = plt.get_cmap(cmap)
+    d_min, d_max = np.min(density), np.max(density)
+    n_d = (density - d_min) / (d_max - d_min)  # (0, 1)
+    n_d = np.maximum(0, np.minimum(1, n_d))    # (0, 1)
+    return cmap(n_d)[:, :3]
+
 def get_occupancy_as_pcd(pog, thresh, voxel_size, pc_range, cmap, filename):
     x_min, y_min, z_min = pc_range[:3]
     for t in range(len(pog)):  # time loop
         coord_min = np.array([z_min, y_min, x_min]).reshape(1, 3)
         coords = np.argwhere(pog[t] > thresh) * voxel_size + coord_min
+
+        density = pog[t].reshape(-1, 1)
+        density = np.squeeze(density[density > thresh])
+        assert len(density) == len(coords)
+
         z = coords[:, 0].reshape(-1, 1)
         y = coords[:, 1].reshape(-1, 1)
         x = coords[:, 2].reshape(-1, 1)
         pts = np.concatenate((x, y, z), axis=1)
         colors = color_by_z(pts, pc_range, cmap)
+        # colors = color_by_density(density, cmap)
 
         # write occ pcd
         pred_pcd_file = os.path.join(f"{filename}_occ-{t}.pcd")

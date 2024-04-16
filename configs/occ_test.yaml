@@ -18,9 +18,9 @@ data:
 ##Testing
 model:
   model_dataset: "nuscenes"
-  model_name: "pretrain_vs-0.2_t-3.0_bs-4_epo-60"  # model directory
+  model_name: "pretrain_vs-0.2_t-3.0_bs-1_epo-60"  # model directory
   model_version: "version_0"
-  test_epoch: 24
+  test_epoch: 14
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
   batch_size: 1
   num_workers: 8

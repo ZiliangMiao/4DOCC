@@ -113,6 +113,44 @@ class DenseDecoder3D(nn.Module):
         out = self.conv(x)
         return out
 
+class DenseDecoder2D(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DenseDecoder2D, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.planes = [128, 64]  # original 4docc default
+        if self.in_channels == 90 or 180:  # voxel_size=0.2, t=2, z=45 -> c=90; voxel_size=0.1, t=2. z=90 -> c=180
+            self.planes = [128, 128]
+        elif self.in_channels == 270:  # voxel_size=0.2, t=6, z=45 -> c=270
+            self.planes = [256, 256]
+        elif self.in_channels == 540: # voxel_size=0.1, t=6, z=90 -> c=540
+            self.planes = [512, 512]
+
+        self.block = nn.Sequential(
+            # plane-0
+            nn.Conv2d(self.in_channels, self.planes[0], kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(self.planes[0]),
+            nn.ReLU(inplace=True),
+            # plane-1
+            nn.Conv2d(self.planes[0], self.planes[1], kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(self.planes[1]),
+            nn.ReLU(inplace=True),
+            # # plane-2
+            # nn.Conv2d(self.planes[1], self.planes[2], kernel_size=3, stride=1, padding=1, bias=False),
+            # nn.BatchNorm2d(self.planes[2]),
+            # nn.ReLU(inplace=True),
+            # # plane-3
+            # nn.Conv2d(self.planes[2], self.planes[3], kernel_size=3, stride=1, padding=1, bias=False),
+            # nn.BatchNorm2d(self.planes[3]),
+            # nn.ReLU(inplace=True),
+            # final
+            nn.Conv2d(self.planes[1], self.out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
 class MinkOccupancyForecastingNetwork(nn.Module):
     def __init__(self, loss_type, n_input, n_output, pc_range, voxel_size):
         super(MinkOccupancyForecastingNetwork, self).__init__()
@@ -149,10 +187,13 @@ class MinkOccupancyForecastingNetwork(nn.Module):
 
         # with 4d sparse encoder, feature dimension = 1
         self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, voxel_size=self.voxel_size, output_grid=self.output_grid)
-        self.decoder = DenseDecoder3D(in_channels=self.n_input, out_channels=self.n_output, kernel_size=3)
+
+        self.decoder = DenseDecoder2D(in_channels=self.n_input * self.n_height,
+                                      out_channels=self.n_output * self.n_height)
 
         # NOTE: initialize the linear predictor (no bias) over history
-        self.linear = torch.nn.Conv3d(in_channels=self.n_input, out_channels=self.n_output,
+        self.linear = torch.nn.Conv2d(in_channels=self.n_input * self.n_height,
+                                      out_channels=self.n_output * self.n_height,
                                       kernel_size=3, stride=1, padding=1, bias=True)
 
     def forward(
@@ -182,8 +223,8 @@ class MinkOccupancyForecastingNetwork(nn.Module):
 
         # w/ skip connection
         _input = input_points
+        # generate dense occ input for skip connection layer
         batch_size = len(_input)
-        # linear
         past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in _input]
         features = [
             torch.ones(len(point_cloud), 1).type_as(point_cloud)
@@ -196,24 +237,19 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         d_input, _, _ = s_input.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
                                       min_coordinate=torch.IntTensor([0, 0, 0, 0]))
         # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
-        d_input = d_input.permute(0, 5, 4, 3, 2, 1).contiguous().reshape(batch_size, T, Z, Y, X)
+        d_input = d_input.permute(0, 5, 4, 3, 2, 1).contiguous().reshape(batch_size, -1, Y, X)
 
         _li_output = self.linear(d_input)
-        _en_output = self.encoder(_input).reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
-        _de_output = self.decoder(_en_output)
+        _en_output = self.encoder(_input)
+        _de_output = self.decoder(_en_output.reshape(batch_size, -1, Y, X))
         # w/ skip connection
-        output = (_li_output + _de_output).reshape(batch_size, self.n_output, self.n_height, self.n_length,
+        _output = (_li_output + _de_output).reshape(batch_size, self.n_output, self.n_height, self.n_length,
                                                     self.n_width)
-
-
-        # _en_output = self.encoder(_input).reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
-        # _de_output = self.decoder(_en_output)  # minkowski unet as encoder
-        # output = _de_output.reshape(batch_size, self.n_input, self.n_height, self.n_length, self.n_width)
 
         ret_dict = {}
         if mode == "training":
             if loss in ["l1", "l2", "absrel"]:
-                sigma = F.relu(output, inplace=True)
+                sigma = F.relu(_output, inplace=True)
 
                 if sigma.requires_grad:
                     pred_dist, gt_dist, grad_sigma = dvr.render(
@@ -270,7 +306,7 @@ class MinkOccupancyForecastingNetwork(nn.Module):
         elif mode in ["testing", "plotting"]:
 
             if loss in ["l1", "l2", "absrel"]:
-                sigma = F.relu(output, inplace=True)
+                sigma = F.relu(_output, inplace=True)
                 pred_dist, gt_dist = dvr.render_forward(
                     sigma, output_origin, output_points, output_tindex, self.output_grid, "test")
                 pog = 1 - torch.exp(-sigma)
@@ -310,7 +346,7 @@ class MinkOccupancyForecastingNetwork(nn.Module):
 
         elif mode == "dumping":
             if loss in ["l1", "l2", "absrel"]:
-                sigma = F.relu(output, inplace=True)
+                sigma = F.relu(_output, inplace=True)
                 pog = 1 - torch.exp(-sigma)
 
             pog_max, _ = pog.max(dim=1)
