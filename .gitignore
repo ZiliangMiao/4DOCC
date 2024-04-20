@@ -13,8 +13,6 @@ __pycache__/
 
 .ipynb_checkpoints/
 
-models/
-models
 logs/
 logs
 backups/
