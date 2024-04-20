@@ -1,0 +1,47 @@
+##Mode
+mode: "finetune" # train, finetune, test
+
+##Data
+data:
+  dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
+  dataset_pct: 100   # use 10% of training dataset to train the model
+  voxel_size: 0.2 # Used for discretization in x,y,z when creating a sparse tensor
+  time_interval: 0.05 # Temporal resolution of scans, nusc: 0.05, kitti: 0.1
+  n_input: 10
+  ego_mask: True
+  flip: # currently not used in 4dmos
+  transform: True # If true, the points are pose-aligned before feeding to the model
+  shuffle: # not used, random sampler default shuffle?
+  augmentation: True
+
+##Training
+model:
+  resume_ckpt: "/home/user/Projects/4DOCC/logs/mos4d/100%nuscenes/occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-0.2_t-0.5_bs-8/version_0/checkpoints/occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-0.2_t-0.5_bs-8_epoch=24.ckpt"
+  pretrain_method: "occ4d"
+  pretrain_dataset: "100%nuscenes"
+  pretrain_model_name: "vs-0.2_t-3.0_bs-1"
+  pretrain_version: "version_0"
+  pretrain_epoch: 14  # finetuned model name: occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-xx_t-xx_bs-xx
+  lr_start: 0.0001
+  lr_epoch: 1
+  lr_decay: 0.99
+  weight_decay: 0.0001
+  num_epoch: 120
+  batch_size: 8
+  acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
+  num_workers: 12
+  num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]
+
+# Dataset Config
+dataset:
+  nuscenes: # ours label
+    root: "/home/user/Datasets/nuScenes"  # /root/autodl-tmp/Datasets/nuScenes /home/user/Datasets/nuScenes
+    version: "v1.0-trainval" # "v1.0-mini"
+  SEKITTI:
+    PATH: "/home/user/Datasets/SeKITTI/sequences" # labeled by PRPonn, seq 00-21
+    SEMANTIC_CONFIG_FILE: "../config/semantic-kitti-mos.yaml"
+    POSES: "poses.txt" # Name of the pose file provided in each sequence folder (OPTIONS: FastLIO2 and poses provided by dataset)
+    LIDAR_NAME: "velodyne"
+    TRAIN: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
+    VAL: [8]
+    TEST: [8]

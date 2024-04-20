@@ -17,3 +17,7 @@ models/
 models
 logs/
 logs
+backups/
+backup
+lightning_logs/
+lightning_logs
