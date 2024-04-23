@@ -35,9 +35,7 @@ class MOSModel(nn.Module):
     def forward(self, past_point_clouds):
         quantization = self.quantization.type_as(past_point_clouds[0])
 
-        past_point_clouds = [
-            torch.div(point_cloud, quantization) for point_cloud in past_point_clouds
-        ]
+        past_point_clouds = [torch.div(point_cloud, quantization) for point_cloud in past_point_clouds]
         features = [
             0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)
             for point_cloud in past_point_clouds
@@ -71,6 +69,7 @@ class MOSNet(LightningModule):
 
         self.dt_prediction = self.hparams["data"]["time_interval"]
         self.n_input = hparams["data"]["n_input"]
+        self.n_output = self.cfg["data"]["n_output"]  # should be 1
 
         if self.cfg["mode"] != "test":
             self.lr_start = self.hparams["model"]["lr_start"]
@@ -154,16 +153,19 @@ class MOSNet(LightningModule):
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # check state dict
         # model_dict = self.state_dict()
+        # unfold batch
         _, point_clouds, mos_labels = batch
+        # model forward
         _, curr_feats_list = self.forward(point_clouds)
+        # loss
         loss = self.getLoss(curr_feats_list, mos_labels)
-
-        # Logging metrics
+        # metrics
         conf_mat = self.get_confusion_matrix(curr_feats_list, mos_labels)  # confusion matrix
         tp, fp, fn = self.ClassificationMetrics.getStats(conf_mat)  # stat of current sample
         iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
-        self.log("train_loss_step", loss.item(), on_step=True, prog_bar=True, logger=True)
-        self.log("train_iou_step", iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        # logging
+        self.log("train_loss", loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("train_iou", iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.training_step_outputs.append({"train_loss": loss.item(), "confusion_matrix": conf_mat})
         torch.cuda.empty_cache()
         return loss
@@ -243,6 +245,7 @@ class MOSNet(LightningModule):
         # unfold batch data
         sample_data_tokens, point_clouds, mos_labels = batch
         batch_size = len(point_clouds)
+
         # network prediction
         curr_coords_list, curr_feats_list = self.forward(point_clouds)
         # loop batch data list

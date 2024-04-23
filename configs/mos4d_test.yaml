@@ -22,10 +22,10 @@ model:
 
   # 0.  mask_train-100%sekitti_epo-60_finetune-10%nusc_epo-60_bs-4_vs-0.1_ss-10
   # 1.  train-100%sekitti_epo-60_finetune-10%nusc_epo-60_bs-16_vs-0.1_ss-10
-  model_dataset: "10%nuscenes"
+  model_dataset: "100%nuscenes"
   model_name: "vs-0.2_t-0.5_bs-8"
   model_version: "version_1"
-  test_epoch: 94
+  test_epoch: 34
   num_devices: 1
   batch_size: 4
   num_workers: 1

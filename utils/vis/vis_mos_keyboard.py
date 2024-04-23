@@ -354,6 +354,12 @@ def render_mos_samples(nusc, sample_tokens, pred_dir):
         pts_gt = open3d.geometry.PointCloud()
         pts_gt.points = open3d.utility.Vector3dVector(points[:, :3])
         pts_pred = open3d.geometry.PointCloud()
+
+        ###################################
+        # visualize flipped x-axis for singapore dataset
+        # points[:, 0] *= -1
+        ###################################
+
         pts_pred.points = open3d.utility.Vector3dVector(points[:, :3])
         vis_gt.add_geometry(pts_gt)
         vis_pred.add_geometry(pts_pred)
@@ -427,16 +433,40 @@ def split_to_samples(nusc, split_logs):
             sample_tokens.append(sample['token'])
     return sample_tokens, sample_data_tokens
 
+def split_to_samples_singapore(nusc, split_logs):
+    sample_tokens = []  # store the sample tokens
+    sample_data_tokens = []
+    for sample in nusc.sample:
+        sample_data_token = sample['data']['LIDAR_TOP']
+        scene = nusc.get('scene', sample['scene_token'])
+        log = nusc.get('log', scene['log_token'])
+        logfile = log['logfile']
+        if logfile in split_logs:
+            if log["location"].startswith("singapore"):
+                sample_data_tokens.append(sample_data_token)
+                sample_tokens.append(sample['token'])
+    return sample_tokens, sample_data_tokens
+
+def split_to_samples_boston(nusc, split_logs):
+    sample_tokens = []  # store the sample tokens
+    sample_data_tokens = []
+    for sample in nusc.sample:
+        sample_data_token = sample['data']['LIDAR_TOP']
+        scene = nusc.get('scene', sample['scene_token'])
+        log = nusc.get('log', scene['log_token'])
+        logfile = log['logfile']
+        if logfile in split_logs:
+            if log["location"].startswith("boston"):
+                sample_data_tokens.append(sample_data_token)
+                sample_tokens.append(sample['token'])
+    return sample_tokens, sample_data_tokens
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate nuScenes lidar panaptic gt.')
     parser.add_argument('--root_dir', type=str, default='/home/user/Datasets/nuScenes')
-    parser.add_argument('--pred_dir', type=str, default=
-    '/home/user/Projects/MosPretrain/logs/train/100%NUSC/vs-0.2_t-0.5_bs-8_epo-120/version_0/results/epoch_19'
-    '/predictions/mos_pred')
-    # /home/user/Projects/MosPretrain/logs/train/10%NUSC/4docc_100%nuscenes_vs-0.2_t-3.0_bs-1_epo-60_vs-0.2_t-0.5_bs-8_epo-120/version_0/results/epoch_84
-    # /home/user/Projects/MosPretrain/logs/train/100%NUSC/4docc_100%nuscenes_vs-0.2_t-3.0_bs-1_epo-60_vs-0.2_t-0.5_bs-8_epo-120/version_0/results/epoch_24
-    # /home/user/Projects/MosPretrain/logs/train/100%NUSC/vs-0.2_t-0.5_bs-8_epo-120/version_0/results/epoch_19
+    parser.add_argument('--pred_dir', type=str, default="/home/user/Projects/4DOCC/logs/mos4d/100%nuscenes/vs-0.2_t-0.5_bs-8/version_1/results/epoch_34/predictions/mos_pred")
 
     parser.add_argument('--version', type=str, default='v1.0-trainval')
     parser.add_argument('--verbose', type=bool, default=True, help='Whether to print to stdout.')
@@ -452,7 +482,7 @@ if __name__ == '__main__':
     # split train, val, test samples
     split = "val"
     split_logs = create_splits_logs(split, nusc)
-    sample_tokens, sample_data_tokens = split_to_samples(nusc, split_logs)
+    sample_tokens, sample_data_tokens = split_to_samples_singapore(nusc, split_logs)
 
     # render mos samples
     # render_samples(nusc, sample_tokens, show_mos_gt=False, show_mos_pred=True, show_inconsistent=False, show_inside=False)

@@ -56,7 +56,8 @@ def main(cfg):
     voxel_size = cfg["data"]["voxel_size"]
     time_interval = cfg["data"]["time_interval"]
     n_input = cfg["data"]["n_input"]
-    time = time_interval * n_input
+    n_skip = cfg["data"]["n_skip"]
+    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
     # model params
     num_epoch = cfg["model"]["num_epoch"]
     batch_size = cfg["model"]["batch_size"]
@@ -124,13 +125,13 @@ def main(cfg):
         max_epochs=num_epoch,
         accumulate_grad_batches=cfg["model"]["acc_batches"],  # accumulate batches, default=1
         callbacks=[lr_monitor, checkpoint_saver],
-        check_val_every_n_epoch=5,
+        # check_val_every_n_epoch=5,
         # val_check_interval=100,
     )
 
     # fit
     resume_ckpt_path = cfg["model"]["resume_ckpt"]
-    trainer.fit(model, train_dataloader, val_dataloader, ckpt_path=resume_ckpt_path)
+    trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
 
 def create_sekitti_mos_labels(dataset_path):
     semantic_config = yaml.safe_load(open("./config/semantic-kitti-mos.yaml"))

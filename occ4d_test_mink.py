@@ -205,6 +205,11 @@ def test(cfg):
 
             # iterate through the batch
             for j in range(len(output_points)):
+                # save occupancy predictions
+                filename = occ_pcds_dir + f"/{filenames[j][2]}"
+                get_occupancy_as_pcd(ret_dict["pog"][j].detach().cpu().numpy(), 0.5,
+                                     _voxel_size, _pc_range, "Oranges", filename)
+
                 pred_pcds = get_rendered_pcds(
                     output_origin[j].cpu().numpy(),
                     output_points[j].cpu().numpy(),
@@ -237,24 +242,19 @@ def test(cfg):
                     metrics["l1_error"] += l1_error
                     metrics["absrel_error"] += absrel_error
 
-                # save occ pred
-                filename = occ_pcds_dir + f"/{filenames[j][2]}"
-                get_occupancy_as_pcd(ret_dict["pog"][j].detach().cpu().numpy(), 0.5,
-                                     _voxel_size, _pc_range, "Oranges", filename)
-
-                # save pred_pcd as [sample_data_token]_pred.pcd
-                if _write_pcd:
-                    import open3d
-                    pred_pcd_file = os.path.join(pred_pcds_dir, f"{filenames[j][2]}_pred.pcd")
-                    o3d_pred_pcd = open3d.geometry.PointCloud()
-                    o3d_pred_pcd.points = open3d.utility.Vector3dVector(pred_pcd.numpy())
-                    open3d.io.write_point_cloud(pred_pcd_file, o3d_pred_pcd)
-                    # print(f"Predicted pcd saved: {filenames[j][2]}_pred.pcd")
-                    gt_pcd_file = os.path.join(gt_pcds_dir, f"{filenames[j][2]}_gt.pcd")
-                    o3d_gt_pcd = open3d.geometry.PointCloud()
-                    o3d_gt_pcd.points = open3d.utility.Vector3dVector(gt_pcd.numpy())
-                    open3d.io.write_point_cloud(gt_pcd_file, o3d_gt_pcd)
-                    # print(f"Ground truth pcd saved: {filenames[j][2]}_gt.pcd")
+                    # save pred_pcd as [sample_data_token]_pred.pcd
+                    if _write_pcd:
+                        import open3d
+                        pred_pcd_file = os.path.join(pred_pcds_dir, f"{filenames[j][2]}_pred-{k}.pcd")
+                        o3d_pred_pcd = open3d.geometry.PointCloud()
+                        o3d_pred_pcd.points = open3d.utility.Vector3dVector(pred_pcd.numpy())
+                        open3d.io.write_point_cloud(pred_pcd_file, o3d_pred_pcd)
+                        gt_pcd_file = os.path.join(gt_pcds_dir, f"{filenames[j][2]}_gt-{k}.pcd")
+                        o3d_gt_pcd = open3d.geometry.PointCloud()
+                        o3d_gt_pcd.points = open3d.utility.Vector3dVector(gt_pcd.numpy())
+                        open3d.io.write_point_cloud(gt_pcd_file, o3d_gt_pcd)
+                        # print(f"Predicted pcd saved: {filenames[j][2]}_pred.pcd")
+                        # print(f"Ground truth pcd saved: {filenames[j][2]}_gt.pcd")
 
         count = metrics["count"]
         chamfer_distance = metrics["chamfer_distance"]

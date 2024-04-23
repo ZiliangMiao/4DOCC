@@ -1,5 +1,5 @@
 ##Mode
-mode: "finetune" # train, finetune, test
+mode: "train" # train, finetune, test
 
 ##Data
 data:
@@ -7,7 +7,9 @@ data:
   dataset_pct: 100   # use 10% of training dataset to train the model
   voxel_size: 0.2 # Used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.05 # Temporal resolution of scans, nusc: 0.05, kitti: 0.1
-  n_input: 10
+  n_input: 12
+  n_skip: 4
+  n_output: 1  # only predict the moving status of current scan
   ego_mask: True
   flip: # currently not used in 4dmos
   transform: True # If true, the points are pose-aligned before feeding to the model
@@ -16,7 +18,7 @@ data:
 
 ##Training
 model:
-  resume_ckpt: "/home/user/Projects/4DOCC/logs/mos4d/100%nuscenes/occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-0.2_t-0.5_bs-8/version_0/checkpoints/occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-0.2_t-0.5_bs-8_epoch=24.ckpt"
+  resume_ckpt:
   pretrain_method: "occ4d"
   pretrain_dataset: "100%nuscenes"
   pretrain_model_name: "vs-0.2_t-3.0_bs-1"

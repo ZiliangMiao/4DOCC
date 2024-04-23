@@ -112,6 +112,8 @@ class NuscSequentialDataset(Dataset):
         self.nusc = nusc
 
         self.n_input = self.cfg["data"]["n_input"]  # use how many past scans, default = 10
+        self.n_skip = self.cfg["data"]["n_skip"]  # number of skip between sample data
+        self.n_output = self.cfg["data"]["n_output"]  # should be 1
         self.dt_pred = self.cfg["data"]["time_interval"]  # time resolution used for prediction
 
         split_logs = create_splits_logs(split, self.nusc)
@@ -127,10 +129,10 @@ class NuscSequentialDataset(Dataset):
     def __len__(self):
         return len(self.sample_lidar_tokens_dict)
 
-    def __getitem__(self, sample_idx):  # define how to load each sample
+    def __getitem__(self, idx):  # define how to load each sample
         # sample
         sample_tokens = list(self.sample_lidar_tokens_dict.keys())
-        sample_token = sample_tokens[sample_idx]
+        sample_token = sample_tokens[idx]
         sample = self.nusc.get("sample", sample_token)
         sample_data_token = sample['data']['LIDAR_TOP']
         sample_data = self.nusc.get('sample_data', sample_data_token)
@@ -138,41 +140,48 @@ class NuscSequentialDataset(Dataset):
         # reference pose (current timestamp)
         ref_pose_token = sample_data['ego_pose_token']
         ref_pose = self.nusc.get('ego_pose', ref_pose_token)
-        ref_pose_mat_inv = transform_matrix(ref_pose['translation'], Quaternion(ref_pose['rotation']),
-                                            inverse=True)  # from global to ref car
+        ref_pose_mat_inv = transform_matrix(ref_pose['translation'], Quaternion(ref_pose['rotation']), inverse=True)  # from global to ref car
 
         # calib pose
         calib_token = sample_data['calibrated_sensor_token']
         calib = self.nusc.get('calibrated_sensor', calib_token)
         calib_mat = transform_matrix(calib['translation'], Quaternion(calib['rotation']))  # from lidar to car
-        calib_mat_inv = transform_matrix(calib['translation'], Quaternion(calib['rotation']),
-                                         inverse=True)  # from car to lidar
+        calib_mat_inv = transform_matrix(calib['translation'], Quaternion(calib['rotation']), inverse=True)  # from car to lidar
 
         # sample data: concat 4d point clouds
         lidar_tokens = self.sample_lidar_tokens_dict[sample_token]
-        pts_with_rela_time = []  # 4D Point Cloud (relative timestamp)
-        num_curr_pts = 0
+        ref_timestamp = sample_data['timestamp']
+        pcds_4d_list = []  # 4D Point Cloud (relative timestamp)
         for ref_time_idx, lidar_token in enumerate(lidar_tokens):
-            if lidar_token is None:
-                lidar_data = self.nusc.get('sample_data', lidar_tokens[0])
-                lidar_file = os.path.join(self.data_dir, lidar_data['filename'])
-                points = LidarPointCloud.from_file(lidar_file).points.T  # [num_pts, 4]
-                points_curr = points[:, :3]
-                points_curr = np.zeros((points_curr.shape[0], points_curr.shape[1]))  # padded with zeros
-            else:
-                # from current scan to previous scans
-                lidar_data = self.nusc.get('sample_data', lidar_token)
-                lidar_file = os.path.join(self.data_dir, lidar_data['filename'])
-                points = LidarPointCloud.from_file(lidar_file).points.T  # [num_pts, 4]
-                points_curr = points[:, :3]
-                if ref_time_idx == 0:
-                    num_curr_pts = len(points_curr)
+            assert lidar_token is not None
+            # if lidar_token is None:
+            #     lidar_data = self.nusc.get('sample_data', lidar_tokens[0])
+            #     lidar_file = os.path.join(self.data_dir, lidar_data['filename'])
+            #     points = LidarPointCloud.from_file(lidar_file).points.T  # [num_pts, 4]
+            #     points_curr = points[:, :3]
+            #     points_curr = np.zeros((points_curr.shape[0], points_curr.shape[1]))  # padded with zeros
+            # else:
+
+            # from current scan to previous scans
+            lidar_data = self.nusc.get('sample_data', lidar_token)
+            lidar_file = os.path.join(self.data_dir, lidar_data['filename'])
+            points = LidarPointCloud.from_file(lidar_file).points.T  # [num_pts, 4]
+            points_curr = points[:, :3]
+
+            ######################################################
+            # test, flip x-axis for singapore dataset when testing
+            # sample = self.nusc.get('sample', lidar_data["sample_token"])
+            # scene = self.nusc.get('scene', sample['scene_token'])
+            # log = self.nusc.get("log", scene["log_token"])
+            # if log["location"].startswith("singapore"):
+            #     points_curr[:, 0] = points_curr[:, 0] * -1
+            ######################################################
+
             if self.transform:
                 # transform point cloud from curr pose to ref pose
                 curr_pose_token = lidar_data['ego_pose_token']
                 curr_pose = self.nusc.get('ego_pose', curr_pose_token)
-                curr_pose_mat = transform_matrix(curr_pose['translation'],
-                                                 Quaternion(curr_pose['rotation']))  # from curr car to global
+                curr_pose_mat = transform_matrix(curr_pose['translation'], Quaternion(curr_pose['rotation']))  # from curr car to global
 
                 # transformation: curr_lidar -> curr_car -> global -> ref_car -> ref_lidar
                 trans_mat = calib_mat @ curr_pose_mat @ ref_pose_mat_inv @ calib_mat_inv
@@ -180,11 +189,13 @@ class NuscSequentialDataset(Dataset):
                 points_ref = torch.from_numpy((trans_mat @ points_curr_homo).T[:, :3])
 
                 # 0 - 9, delta_t = 0.05s
-                rela_timestamp = -round(ref_time_idx * self.dt_pred, 3)
-                point_cloud_with_time = self.timestamp_tensor(points_ref, rela_timestamp)
-                pts_with_rela_time.append(point_cloud_with_time)
-        point_cloud = torch.cat(pts_with_rela_time, dim=0)  # 4D point cloud: [x y z rela_time]
-        point_cloud = point_cloud.float()  # point cloud has to be float32, otherwise MikEngine will get RunTimeError: in_feat.scalar_type() == kernel.scalar_type()
+                timestamp = (lidar_data['timestamp'] - ref_timestamp) / 1000000
+                pcd_ref_time = self.timestamp_tensor(points_ref, timestamp)
+                pcds_4d_list.append(pcd_ref_time)
+        assert len(pcds_4d_list) == self.n_input
+        assert self.n_output == 1
+        pcds_4d = torch.cat(pcds_4d_list, dim=0)  # 4D point cloud: [x y z ref_time]
+        pcds_4d = pcds_4d.float()  # point cloud has to be float32, otherwise MikEngine will get RunTimeError: in_feat.scalar_type() == kernel.scalar_type()
 
         # load labels
         mos_labels_dir = os.path.join(self.data_dir, "mos_labels", self.version)
@@ -194,13 +205,13 @@ class NuscSequentialDataset(Dataset):
         # mask ego vehicle point
         if self.cfg["mode"] == "train" or self.cfg["mode"] == "finetune":
             if self.cfg["data"]["augmentation"]:  # will not change the mapping from point to label
-                point_cloud = self.augment_data(point_cloud)
+                pcds_4d = self.augment_data(pcds_4d)
             if self.cfg["data"]["ego_mask"]:
-                ego_mask = self.get_ego_mask(point_cloud)
-                time_mask = point_cloud[:, -1] == 0.0
-                point_cloud = point_cloud[~ego_mask]
+                ego_mask = self.get_ego_mask(pcds_4d)
+                time_mask = pcds_4d[:, -1] == 0.0
+                pcds_4d = pcds_4d[~ego_mask]
                 mos_label = mos_label[~ego_mask[time_mask]]
-        return [sample_data_token, point_cloud, mos_label]  # sample_data_token, past 4d point cloud, sample mos label
+        return [sample_data_token, pcds_4d, mos_label]  # sample_data_token, past 4d point cloud, sample mos label
 
     @staticmethod
     def get_ego_mask(points):  # mask the points of ego vehicle: x [-0.8, 0.8], y [-1.5, 2.5]
@@ -265,25 +276,38 @@ class NuscSequentialDataset(Dataset):
             sample_data_token = sample["data"]["LIDAR_TOP"]
             sample_data = self.nusc.get("sample_data", sample_data_token)
 
-            lidar_tokens = []
-            lidar_tokens.append(sample_data_token)  # lidar token of current scan
-            lidar_prev_idx = 0
-            sample_data_prev = sample_data
-            while lidar_prev_idx < self.n_input - 1:
-                lidar_prev_idx += 1
-                sample_data_curr = sample_data_prev
-                if sample_data_curr["prev"] != "":
-                    sample_data_prev_token = sample_data_curr["prev"]
+            sd_tokens = [sample_data_token]  # lidar token of current scan
+            sd_timestamps = [sample_data['timestamp']]
+            ##########################
+            skip_flag = 0  # already skip 0 lidar sample data
+            lidar_sample_idx = 1  # already sample 1 lidar sample data
+            ##########################
+            while lidar_sample_idx < self.n_input:
+                if sample_data["prev"] != "":
+                    # continue to prev sample data
+                    sample_data_prev_token = sample_data["prev"]
                     sample_data_prev = self.nusc.get("sample_data", sample_data_prev_token)
-                    lidar_tokens.append(sample_data_prev_token)
+                    # whether to skip
+                    if skip_flag < self.n_skip:
+                        skip_flag += 1
+                        sample_data = sample_data_prev
+                        continue
+                    # if not skip, sample
+                    sd_tokens.append(sample_data_prev_token)
+                    sd_timestamps.append(sample_data_prev['timestamp'])
+                    # change flag after append
+                    skip_flag = 0
+                    lidar_sample_idx += 1
+                    # assign sample data prev to sample data for next loop
+                    sample_data = sample_data_prev
                 else:
-                    lidar_tokens.append(None)  # padded with zero point clouds
-                    sample_data_prev = sample_data_curr
-                    # break
+                    # sd_tokens.append(None)  # padded with zero point clouds
+                    lidar_sample_idx += 1
+                    continue
 
-            if len(lidar_tokens) == self.n_input:
-                sample_lidar_dict[sample_token] = lidar_tokens
-                valid_sample_data_tokens.append(lidar_tokens[0])
+            if len(sd_tokens) == self.n_input:
+                sample_lidar_dict[sample_token] = sd_tokens
+                valid_sample_data_tokens.append(sd_tokens[0])
         return sample_lidar_dict, valid_sample_data_tokens
 
     def _get_sample_pose_tokens_dict(self, sample_tokens: List[str]):
