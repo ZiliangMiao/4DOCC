@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.model_mink import MinkOccupancyForecastingNetwork
+from models.occ4d.models import MinkOccupancyForecastingNetwork
 
 # JIT
 from torch.utils.cpp_extension import load
@@ -36,7 +36,7 @@ def make_mink_dataloaders(cfg):
 
     dataset_name = cfg["dataset"]["name"]
     if dataset_name.lower() == "nuscenes":
-        from datasets.occ4d.nusc_mink import nuScenesDataset
+        from datasets.occ4d.nusc import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
 
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])

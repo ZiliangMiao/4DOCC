@@ -6,7 +6,7 @@ from pytorch_lightning import LightningDataModule
 from torch.utils.data import Dataset, DataLoader, sampler
 
 from nuscenes.nuscenes import NuScenes
-from nuscenes.utils.splits import create_splits_logs
+from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
 from nuscenes.utils.data_classes import LidarPointCloud
 from pyquaternion import Quaternion
 from nuscenes.utils.geometry_utils import transform_matrix
@@ -39,19 +39,31 @@ class NuscSequentialModule(LightningDataModule):
             train_set = NuscSequentialDataset(self.cfg, self.nusc, split="train")
             val_set = NuscSequentialDataset(self.cfg, self.nusc, split="val")
             ########## Generate dataloaders and iterables
-            train_data_pct = self.cfg["data"]["dataset_pct"] / 100
-            self.train_loader = DataLoader(
-                dataset=train_set,
-                batch_size=self.cfg["model"]["batch_size"],
-                collate_fn=self.collate_fn,
-                num_workers=self.cfg["model"]["num_workers"],  # num of multi-processing
-                # shuffle=self.cfg["data"]["shuffle"],
-                pin_memory=True,
-                drop_last=False,  # drop the samples left from full batch
-                timeout=0,
-                sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-                                                      num_samples=int(train_data_pct * len(train_set))),
-            )
+            if self.cfg["data"]["sample_levevl"] == "sequence":
+                self.train_loader = DataLoader(
+                    dataset=train_set,
+                    batch_size=self.cfg["model"]["batch_size"],
+                    collate_fn=self.collate_fn,
+                    num_workers=self.cfg["model"]["num_workers"],  # num of multi-processing
+                    # shuffle=self.cfg["data"]["shuffle"],
+                    pin_memory=True,
+                    drop_last=False,  # drop the samples left from full batch
+                    timeout=0,
+                )
+            else:
+                train_data_pct = self.cfg["data"]["dataset_pct"] / 100
+                self.train_loader = DataLoader(
+                    dataset=train_set,
+                    batch_size=self.cfg["model"]["batch_size"],
+                    collate_fn=self.collate_fn,
+                    num_workers=self.cfg["model"]["num_workers"],  # num of multi-processing
+                    # shuffle=self.cfg["data"]["shuffle"],
+                    pin_memory=True,
+                    drop_last=False,  # drop the samples left from full batch
+                    timeout=0,
+                    sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
+                                                          num_samples=int(train_data_pct * len(train_set))),
+                )
             self.train_iter = iter(self.train_loader)
             self.val_loader = DataLoader(
                 dataset=val_set,
@@ -107,17 +119,24 @@ class NuscSequentialDataset(Dataset):
         self.version = cfg["dataset"]["nuscenes"]["version"]
         self.data_dir = cfg["dataset"]["nuscenes"]["root"]
 
-        self.split = split  # "train" "val" "mini_train" "mini_val" "test"
-
         self.nusc = nusc
+        self.split = split  # "train" "val" "mini_train" "mini_val" "test"
 
         self.n_input = self.cfg["data"]["n_input"]  # use how many past scans, default = 10
         self.n_skip = self.cfg["data"]["n_skip"]  # number of skip between sample data
         self.n_output = self.cfg["data"]["n_output"]  # should be 1
         self.dt_pred = self.cfg["data"]["time_interval"]  # time resolution used for prediction
 
-        split_logs = create_splits_logs(split, self.nusc)
-        self.sample_tokens, self.sample_data_tokens = self._split_to_samples(split_logs)
+        if self.cfg["data"]["sample_level"] == "sequence":
+            split_scenes = create_splits_scenes(verbose=True)
+            split_scenes = split_scenes[self.split]
+            from random import sample
+            train_data_pct = self.cfg["data"]["dataset_pct"] / 100
+            split_scenes = sample(split_scenes, int(len(split_scenes) * train_data_pct))
+            self.sample_tokens, self.sample_data_tokens = self._split_scenes_to_samples(split_scenes)
+        else:
+            split_logs = create_splits_logs(split, self.nusc)
+            self.sample_tokens, self.sample_data_tokens = self._split_logs_to_samples(split_logs)
 
         # sample token: 10 past lidar tokens; ignore the samples that have less than 10 past lidar scans
         self.sample_lidar_tokens_dict, self.valid_sample_data_tokens = self._get_sample_lidar_tokens_dict(
@@ -240,7 +259,7 @@ class NuscSequentialDataset(Dataset):
         timestamped_tensor = torch.hstack([tensor, time])
         return timestamped_tensor
 
-    def _split_to_samples(self, split_logs: List[str]) -> List[str]:
+    def _split_logs_to_samples(self, split_logs: List[str]):
         sample_tokens = []  # store the sample tokens
         sample_data_tokens = []
         for sample in self.nusc.sample:
@@ -251,6 +270,26 @@ class NuscSequentialDataset(Dataset):
             if logfile in split_logs:
                 sample_data_tokens.append(sample_data_token)
                 sample_tokens.append(sample['token'])
+        return sample_tokens, sample_data_tokens
+
+    def _split_scenes_to_samples(self, split_scenes: List[str]):
+        sample_tokens = []  # store the sample tokens
+        sample_data_tokens = []
+        for scene in self.nusc.scene:
+            if scene['name'] in split_scenes:
+                sample_token = scene["first_sample_token"]
+                sample = self.nusc.get('sample', sample_token)
+                sample_data_token = sample['data']['LIDAR_TOP']
+                sample_tokens.append(sample_token)
+                sample_data_tokens.append(sample_data_token)
+                while sample['next'] != "":
+                    sample_token = sample['next']
+                    sample = self.nusc.get('sample', sample_token)
+                    sample_data_token = sample['data']['LIDAR_TOP']
+                    sample_tokens.append(sample_token)
+                    sample_data_tokens.append(sample_data_token)
+            else:
+                continue
         return sample_tokens, sample_data_tokens
 
     def _get_scene_tokens(self, split_logs: List[str]) -> List[str]:

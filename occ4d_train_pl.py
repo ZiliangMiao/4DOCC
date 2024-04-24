@@ -8,7 +8,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.model_mink_lightning_2d import MinkOccupancyForecastingNetwork
+from models.occ4d.models_pl_2d import MinkOccupancyForecastingNetwork
 from utils.deterministic import set_deterministic
 
 def make_mink_dataloaders(cfg):
@@ -29,7 +29,7 @@ def make_mink_dataloaders(cfg):
     dataset_name = cfg["data"]["dataset_name"].lower()
 
     if dataset_name == "nuscenes":
-        from datasets.occ4d.nusc_mink import nuScenesDataset
+        from datasets.occ4d.nusc import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
 
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
@@ -60,39 +60,39 @@ def make_mink_dataloaders(cfg):
         dataloaders = {"train": train_loader, "val": val_loader}
     elif dataset_name == "kitti":
         raise NotImplementedError("KITTI is not supported now, wait for data.kitti_mink.py.")
-        from datasets.kitti import KittiDataset
-        train_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-                                 "trainval", dataset_kwargs),
-        train_loader = DataLoader(  # 9 parameters
-            dataset=train_set,
-            batch_size=batch_size,
-            collate_fn=MinkCollateFn,
-            num_workers=num_workers,
-            shuffle=shuffle,
-            pin_memory=False,
-            drop_last=True,
-            timeout=0,
-            sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-                                                  num_samples=int(data_pct * len(train_set))),
-        )
-        val_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-                               "test", dataset_kwargs),
-        val_loader = DataLoader(  # 8 parameters, without sampler
-            dataset=val_set,
-            batch_size=batch_size,
-            collate_fn=MinkCollateFn,
-            num_workers=num_workers,
-            shuffle=shuffle,
-            pin_memory=False,
-            drop_last=True,
-            timeout=0,
-        )
-        dataloaders = {"train": train_loader, "val": val_loader}
+        # from datasets.kitti import KittiDataset
+        # train_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
+        #                          "trainval", dataset_kwargs),
+        # train_loader = DataLoader(  # 9 parameters
+        #     dataset=train_set,
+        #     batch_size=batch_size,
+        #     collate_fn=MinkCollateFn,
+        #     num_workers=num_workers,
+        #     shuffle=shuffle,
+        #     pin_memory=False,
+        #     drop_last=True,
+        #     timeout=0,
+        #     sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
+        #                                           num_samples=int(data_pct * len(train_set))),
+        # )
+        # val_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
+        #                        "test", dataset_kwargs),
+        # val_loader = DataLoader(  # 8 parameters, without sampler
+        #     dataset=val_set,
+        #     batch_size=batch_size,
+        #     collate_fn=MinkCollateFn,
+        #     num_workers=num_workers,
+        #     shuffle=shuffle,
+        #     pin_memory=False,
+        #     drop_last=True,
+        #     timeout=0,
+        # )
+        # dataloaders = {"train": train_loader, "val": val_loader}
     elif dataset_name == "argoverse2":
         raise NotImplementedError("Argoverse is not supported now, wait for data.av2_mink.py.")
-        from datasets.av2 import Argoverse2Dataset
-        train_set = Argoverse2Dataset(cfg["dataset"][dataset_name]["root"], "train", dataset_kwargs,
-                          subsample=cfg["dataset"][dataset_name]["subsample"])
+        # from datasets.av2 import Argoverse2Dataset
+        # train_set = Argoverse2Dataset(cfg["dataset"][dataset_name]["root"], "train", dataset_kwargs,
+        #                   subsample=cfg["dataset"][dataset_name]["subsample"])
     else:
         raise NotImplementedError("Dataset " + cfg["dataset"]["name"] + "is not supported.")
     return dataloaders

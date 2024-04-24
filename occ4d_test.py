@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.model_mink import MinkOccupancyForecastingNetwork
+from models.occ4d.models import MinkOccupancyForecastingNetwork
 from utils.vis.vis_occ import get_occupancy_as_pcd
 from utils.evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
 from utils.deterministic import set_deterministic
@@ -92,7 +92,7 @@ def make_mink_dataloaders(cfg):
 
     dataset_name = cfg["data"]["dataset_name"].lower()
     if dataset_name == "nuscenes":
-        from datasets.occ4d.nusc_mink import nuScenesDataset
+        from datasets.occ4d.nusc import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
         data_loader = DataLoader(

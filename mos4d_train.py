@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from nuscenes.nuscenes import NuScenes
 # lib
 from models.mos4d import models
-from datasets.mos4d import nusc_seq as nusc_dataset
+from datasets.mos4d import nusc as nusc_dataset
 from datasets.mos4d import kitti as kitti_dataset
 from utils.deterministic import set_deterministic
 
