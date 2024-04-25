@@ -15,7 +15,7 @@ def make_mink_dataloaders(cfg):
     batch_size = cfg["model"]["batch_size"]
     num_workers = cfg["model"]["num_workers"]
     shuffle = cfg["data"]["shuffle"]
-    data_pct = cfg["data"]["dataset_pct"]
+    # data_pct = cfg["data"]["dataset_pct"] / 100
     dataset_name = cfg["data"]["dataset_name"].lower()
 
     if dataset_name == "nuscenes":
@@ -33,8 +33,8 @@ def make_mink_dataloaders(cfg):
                 pin_memory=False,
                 drop_last=True,
                 timeout=0,
-                sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-                                                      num_samples=int(data_pct * len(train_set))),
+                # sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
+                #                                       num_samples=int(data_pct * len(train_set))),
             )
         val_set = nuScenesDataset(nusc, "val", cfg)
         val_loader = DataLoader(  # 8 parameters, without sampler

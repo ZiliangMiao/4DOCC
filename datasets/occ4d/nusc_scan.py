@@ -203,6 +203,19 @@ class nuScenesDataset(Dataset):
             np.logical_and(-1.5 <= points[:, 1], points[:, 1] <= 2.5),
         )
         return ego_mask
+    @staticmethod
+    def random_flip_point_cloud(point_cloud):
+        """Randomly flip the point cloud. Flip is per point cloud.
+        Input:
+          Nx4 array, original point cloud
+        Return:
+          Nx4 array, flipped point cloud
+        """
+        if np.random.random() > 0.5:
+            point_cloud[:, 0] *= -1
+        if np.random.random() > 0.5:
+            point_cloud[:, 1] *= -1
+        return point_cloud
 
     def __len__(self):
         return self.n_samples
@@ -231,10 +244,12 @@ class nuScenesDataset(Dataset):
             ref_from_curr = ref_from_global.dot(global_from_curr)
             lidar_pcd.transform(ref_from_curr)
 
+            ##############################################
             # check if in Singapore (if so flip x)
-            if flip_flag:
-                ref_from_curr[0, 3] *= -1
-                lidar_pcd.points[0] *= -1
+            # if flip_flag:
+            #     ref_from_curr[0, 3] *= -1
+            #     lidar_pcd.points[0] *= -1
+            ##############################################
 
             # tf means transformed?
             origin_tf = np.array(ref_from_curr[:3, 3], dtype=np.float32)  # location of lidar at curr lidar coord
@@ -254,6 +269,11 @@ class nuScenesDataset(Dataset):
             input_points_list.append(points_4d)
 
         input_points_4d_tensor = torch.from_numpy(np.concatenate(input_points_list, axis=0))
+        ##############################################
+        # random flip x and y axis
+        if self.cfg["data"]["flip"]:
+            input_points_4d_tensor = self.random_flip_point_cloud(input_points_4d_tensor)
+        ##############################################
         displacement = torch.from_numpy(input_origin_list[0] - input_origin_list[1])  # ego vehicle displacement (x y z)
 
         ########################################## OUTPUT ##########################################

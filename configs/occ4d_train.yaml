@@ -3,7 +3,7 @@ mode: "train"
 ##Data
 data:
   dataset_name: "nuscenes"  # "kitti", "argo"
-  dataset_pct: 100  # percentage of data used for training
+  dataset_pct: 100  # not used now; percentage of data used for training
   voxel_size: 0.2  # voxel size
   pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
   time_interval: 0.05
@@ -27,7 +27,7 @@ model:
   lr_decay: 0.9     # 4dmos: 0.99    4docc_org: 0.1
   weight_decay:  # not used
   num_epoch: 60
-  batch_size: 1
+  batch_size: 2
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_workers: 8
   num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]

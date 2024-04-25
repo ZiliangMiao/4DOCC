@@ -172,7 +172,7 @@ class SparseEncoder4D(nn.Module):
         # dense min coordinates
         out_coords = s_output.coordinates
         out_feats = s_output.features
-        t_index_org = torch.unique(out_coords[:, 4])
+        t_index_org = torch.unique(out_coords[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
         t_index_new = torch.tensor(range(T))
 
         # modify time index
