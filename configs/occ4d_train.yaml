@@ -36,7 +36,7 @@ model:
 # Dataset Config
 dataset:
   nuscenes:
-    root: "/home/user/Datasets/nuScenes" # "/root/autodl-tmp/Datasets/nuScenes" "/home/user/Datasets/nuScenes"
+    root: "/home/user/Datasets/nuScenes" # "/root/autodl-tmp/datasets/nuscenes" "/home/user/Datasets/nuScenes"
     version: "v1.0-trainval"
   kitti:
     root: "/home/user/Datasets/KITTI"
