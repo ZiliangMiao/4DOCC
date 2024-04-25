@@ -7,9 +7,9 @@ data:
   voxel_size: 0.2  # voxel size
   pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
   time_interval: 0.05
-  n_input: 12  # number of input point cloud scan 6, 9, 6
+  n_input: 6  # number of input point cloud scan 6, 9, 6
   n_skip: 4
-  n_output: 12  # number of output point cloud scan (for pretraining only)
+  n_output: 6  # number of output point cloud scan (for pretraining only)
   input_within_pc_range: True
 #  transform: True # If true, the points are pose-aligned before feeding to the model
   ego_mask: True # mask the points of ego-vehicle, 4docc pretraining default=True
@@ -27,7 +27,7 @@ model:
   lr_decay: 0.9     # 4dmos: 0.99    4docc_org: 0.1
   weight_decay:  # not used
   num_epoch: 60
-  batch_size: 2
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_workers: 8
   num_devices: 1 # could be integer of how many cuda devices to use, or a list that specify which devices to use [0, 1, 2, 3]

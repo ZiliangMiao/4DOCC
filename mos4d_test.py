@@ -192,6 +192,6 @@ if __name__ == "__main__":
     with open("configs/mos4d_test.yaml", "r") as f:
         cfg = yaml.safe_load(f)
 
-    test_epoch_list = [119, 109, 99, 89, 79, 69, 59, 49, 39, 29, 19, 9]
+    test_epoch_list = [59, 49, 39, 29, 19, 9]
     for test_epoch in test_epoch_list:
         main(cfg, test_epoch)

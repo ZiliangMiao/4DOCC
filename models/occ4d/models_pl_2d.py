@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import sys
+import time
 from typing import Any
 
 import numpy as np
@@ -150,44 +151,65 @@ class SparseEncoder4D(nn.Module):
         #                                       min_coordinate=torch.IntTensor([0, 0, 0, 0]), contract_stride=True)
         ###########################################################################
 
-        ################################## Minkowski Dense ##################################
-        # dense grid shape
+        ################################## Dense ##################################
+        # start = time.perf_counter()
         # [T, Z, Y, X] = self.output_grid
-        # F = 1
-        # dense_grid_shape = torch.Size([batch_size, F, X, Y, Z, T])
+        #
+        # # dense min coordinates
+        # out_coords = s_output.coordinates
+        # out_feats = s_output.features
+        # t_index_org = torch.unique(out_coords[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
+        # t_index_new = torch.tensor(range(T))
+        #
+        # # modify time index
+        # t_mask = []
+        # for t_old in t_index_org:
+        #     t_mask.append(out_coords[:, 4] == t_old)
+        # assert len(t_mask) == len(t_index_new)
+        # for i, t_new in enumerate(t_index_new):
+        #     out_coords[t_mask[i], 4] = t_new
+        #
+        # # to dense
+        # d_output = torch.zeros([batch_size, T, Z, Y, X], dtype=out_feats.dtype, device=out_coords.device)
+        # for i in range(len(out_feats)):
+        #     coord = out_coords[i].long()
+        #     d_output[coord[0], coord[4], coord[3], coord[2], coord[1]] = out_feats[i]
+        # end = time.perf_counter()
+        # to_dense_time = end - start
+        #####################################################################################
+
+        ################################## Minkowski Dense ##################################
+        [T, Z, Y, X] = self.output_grid
+        # modify time index
+        t_index_new = torch.tensor(range(T))
+        t_index_org = torch.unique(s_output.coordinates[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
+        t_min, t_max = torch.min(t_index_org), torch.max(t_index_org)
+        t_interval = (t_max - t_min) / T
+
+        # modify time index
+        t_mask = []
+        for i in range(T):
+            t_org_list = []
+            for t in t_index_org:
+                if (t_min + t_interval * i) <= t <= (t_min + t_interval * (i+1)):
+                    t_org_list.append(t)
+            t_mask.append(torch.isin(s_output.coordinates[:, 4], torch.tensor(t_org_list, device=s_output.device)))
+        assert len(t_mask) == len(t_index_new)
+        for i, t_new in enumerate(t_index_new):
+            s_output.coordinates[t_mask[i], 4] = t_new
+
+        # dense grid shape
+        dense_grid_shape = torch.Size([batch_size, 1, X, Y, Z, T])
         # min coordinates
         # t_min, t_max = torch.min(out_coords[:, 4]), torch.max(out_coords[:, 4])
         # z_min, z_max = torch.min(out_coords[:, 3]), torch.max(out_coords[:, 3])
         # y_min, y_max = torch.min(out_coords[:, 2]), torch.max(out_coords[:, 2])
         # x_min, x_max = torch.min(out_coords[:, 1]), torch.max(out_coords[:, 1])
-        # d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, t_min]))
+        d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
 
         # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc [Batch Dim, Feature Dim, Spatial Dim..., Spatial Dim]
-        # output = torch.squeeze(d_output.permute(0, 5, 4, 3, 2, 1).contiguous())
+        d_output = torch.squeeze(d_output.permute(0, 5, 4, 3, 2, 1).contiguous())
         #####################################################################################
-
-        ################################## Dense ##################################
-        [T, Z, Y, X] = self.output_grid
-
-        # dense min coordinates
-        out_coords = s_output.coordinates
-        out_feats = s_output.features
-        t_index_org = torch.unique(out_coords[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
-        t_index_new = torch.tensor(range(T))
-
-        # modify time index
-        t_mask = []
-        for t_old in t_index_org:
-            t_mask.append(out_coords[:, 4] == t_old)
-        assert len(t_mask) == len(t_index_new)
-        for i, t_new in enumerate(t_index_new):
-            out_coords[t_mask[i], 4] = t_new
-
-        # to dense
-        d_output = torch.zeros([batch_size, T, Z, Y, X], dtype=out_feats.dtype, device=out_coords.device)
-        for i in range(len(out_feats)):
-            coord = out_coords[i].long()
-            d_output[coord[0], coord[4], coord[3], coord[2], coord[1]] = out_feats[i]
         return d_output
 
 

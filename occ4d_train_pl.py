@@ -158,7 +158,7 @@ def pretrain(cfg):
     )
 
     # logger
-    logs_dir = f"./logs/occ4d/{dataset_pct}%{dataset_name}/{model_name}"
+    logs_dir = f"./logs/occ4d/{dataset_pct}%{dataset_name}"
     os.makedirs(name=logs_dir, exist_ok=True)
     tb_logger = pl_loggers.TensorBoardLogger(logs_dir, name=model_name, default_hp_metric=False)
 

@@ -40,7 +40,7 @@ class nuScenesDataset(Dataset):
         self.ego_mask = cfg["data"]["ego_mask"]
 
         # get splits
-        split_scenes = create_splits_scenes(verbose=True)
+        split_scenes = create_splits_scenes(verbose=False)
         split_scenes = split_scenes[self.nusc_split]
 
         # list all valid sample data
