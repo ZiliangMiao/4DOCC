@@ -172,13 +172,13 @@ def pretrain(cfg):
         max_epochs=num_epoch,
         accumulate_grad_batches=cfg["model"]["acc_batches"],  # accumulate batches, default=1
         callbacks=[lr_monitor, checkpoint_saver],
-        check_val_every_n_epoch=5,
+        # check_val_every_n_epoch=5,
         # val_check_interval=100,
     )
 
     # training
     resume_ckpt_path = cfg["model"]["resume_ckpt"]
-    trainer.fit(model, train_dataloaders=data_loaders["train"], val_dataloaders=data_loaders["val"], ckpt_path=resume_ckpt_path)
+    trainer.fit(model, train_dataloaders=data_loaders["train"], ckpt_path=resume_ckpt_path)
 
 if __name__ == "__main__":
     # deterministic
