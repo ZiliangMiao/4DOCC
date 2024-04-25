@@ -12,16 +12,6 @@ from models.occ4d.models_pl_2d import MinkOccupancyForecastingNetwork
 from utils.deterministic import set_deterministic
 
 def make_mink_dataloaders(cfg):
-    dataset_kwargs = {
-        "pc_range": cfg["data"]["pc_range"],
-        "input_within_pc_range": cfg["data"]["input_within_pc_range"],
-        "voxel_size": cfg["data"]["voxel_size"],
-        "n_input": cfg["data"]["n_input"],
-        "n_output": cfg["data"]["n_output"],
-        "ego_mask": cfg["data"]["ego_mask"],
-        "flip": cfg["data"]["flip"],
-        "fgbg_label": cfg["data"]["fgbg_label"],
-    }
     batch_size = cfg["model"]["batch_size"]
     num_workers = cfg["model"]["num_workers"]
     shuffle = cfg["data"]["shuffle"]
@@ -29,11 +19,11 @@ def make_mink_dataloaders(cfg):
     dataset_name = cfg["data"]["dataset_name"].lower()
 
     if dataset_name == "nuscenes":
-        from datasets.occ4d.nusc import nuScenesDataset
+        from datasets.occ4d.nusc_scan import nuScenesDataset
         from nuscenes.nuscenes import NuScenes
 
         nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
-        train_set = nuScenesDataset(nusc, "train", dataset_kwargs)
+        train_set = nuScenesDataset(nusc, "train", cfg)
         train_loader = DataLoader(  # 9 parameters
                 dataset=train_set,
                 batch_size=batch_size,
@@ -46,7 +36,7 @@ def make_mink_dataloaders(cfg):
                 sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
                                                       num_samples=int(data_pct * len(train_set))),
             )
-        val_set = nuScenesDataset(nusc, "val", dataset_kwargs)
+        val_set = nuScenesDataset(nusc, "val", cfg)
         val_loader = DataLoader(  # 8 parameters, without sampler
                 dataset=val_set,
                 batch_size=batch_size,
@@ -62,7 +52,7 @@ def make_mink_dataloaders(cfg):
         raise NotImplementedError("KITTI is not supported now, wait for data.kitti_mink.py.")
         # from datasets.kitti import KittiDataset
         # train_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-        #                          "trainval", dataset_kwargs),
+        #                          "trainval", cfg),
         # train_loader = DataLoader(  # 9 parameters
         #     dataset=train_set,
         #     batch_size=batch_size,
@@ -76,7 +66,7 @@ def make_mink_dataloaders(cfg):
         #                                           num_samples=int(data_pct * len(train_set))),
         # )
         # val_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-        #                        "test", dataset_kwargs),
+        #                        "test", cfg),
         # val_loader = DataLoader(  # 8 parameters, without sampler
         #     dataset=val_set,
         #     batch_size=batch_size,
@@ -138,7 +128,8 @@ def pretrain(cfg):
     voxel_size = cfg["data"]["voxel_size"]
     time_interval = cfg["data"]["time_interval"]
     n_input = cfg["data"]["n_input"]
-    time = time_interval * n_input
+    n_skip = cfg["data"]["n_skip"]
+    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
     dataset_name = cfg["data"]["dataset_name"].lower()
     dataset_pct = cfg["data"]["dataset_pct"]
     # model params

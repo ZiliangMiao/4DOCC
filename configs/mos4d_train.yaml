@@ -19,7 +19,7 @@ data:
 
 ##Training
 model:
-  resume_ckpt:
+  resume_ckpt: "/home/user/Projects/4DOCC/logs/mos4d/10%nuscenes/seq_vs-0.2_t-2.8_bs-4/version_1/checkpoints/vs-0.2_t-2.8_bs-4_epoch=87.ckpt"
   pretrain_method: "occ4d"
   pretrain_dataset: "100%nuscenes"
   pretrain_model_name: "vs-0.2_t-3.0_bs-1"

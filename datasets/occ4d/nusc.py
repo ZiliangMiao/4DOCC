@@ -145,9 +145,7 @@ class nuScenesDataset(Dataset):
 
     def __getitem__(self, idx):
         ref_index = self.valid_index[idx]  # ref index = current index?
-
         ref_sample_token = self.sample_tokens[ref_index]
-        ref_sample = self.nusc.get("sample", ref_sample_token)
         ref_scene_token = self.scene_tokens[ref_index]
         ref_timestamp = self.timestamps[ref_index]
         ref_sd_token = self.sample_data_tokens[ref_index]
@@ -164,7 +162,6 @@ class nuScenesDataset(Dataset):
             # if this exists a valid target
             if self.scene_tokens[index] == ref_scene_token:
                 curr_sd_token = self.sample_data_tokens[index]  # sample data token
-
                 curr_sd = self.nusc.get("sample_data", curr_sd_token)  # sample data
 
                 # load the current lidar sweep

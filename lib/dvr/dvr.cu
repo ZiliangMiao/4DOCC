@@ -64,6 +64,49 @@ __global__ void init_cuda_kernel(
     }
 }
 
+/*
+ * input shape
+ *   origin   : N x T x 3
+ *   points   : N x M x 3
+ *   tindex   : N x M
+ * output shape
+ *   occupancy: N x T x H x L x W
+ */
+torch::Tensor init_cuda(
+    torch::Tensor points,
+    torch::Tensor tindex,
+    const std::vector<int> grid) {
+
+    const auto N = points.size(0); // batch size
+    const auto M = points.size(1); // num of rays
+
+    const auto T = grid[0];
+    const auto H = grid[1];
+    const auto L = grid[2];
+    const auto W = grid[3];
+
+    const auto dtype = points.dtype();
+    const auto device = points.device();
+    const auto options = torch::TensorOptions().dtype(dtype).device(device).requires_grad(false);
+    auto occupancy = torch::zeros({N, T, H, L, W}, options);
+
+    const int threads = 1024;
+    const dim3 blocks((M + threads - 1) / threads, N);
+
+    // initialize occupancy such that every voxel with one or more points is occupied
+    AT_DISPATCH_FLOATING_TYPES(points.type(), "init_cuda", ([&] {
+                init_cuda_kernel<scalar_t><<<blocks, threads>>>(
+                    points.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
+                    tindex.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
+                    occupancy.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>());
+            }));
+
+    // synchronize
+    cudaDeviceSynchronize();
+
+    return occupancy;
+}
+
 template <typename scalar_t>
 __global__ void render_forward_cuda_kernel(
     const torch::PackedTensorAccessor32<scalar_t,5,torch::RestrictPtrTraits> sigma,
@@ -659,48 +702,4 @@ std::vector<torch::Tensor> render_cuda(
     // grad_sigma /= grad_sigma_count;
 
     return {pred_dist, gt_dist, grad_sigma};
-}
-
-
-/*
- * input shape
- *   origin   : N x T x 3
- *   points   : N x M x 3
- *   tindex   : N x M
- * output shape
- *   occupancy: N x T x H x L x W
- */
-torch::Tensor init_cuda(
-    torch::Tensor points,
-    torch::Tensor tindex,
-    const std::vector<int> grid) {
-
-    const auto N = points.size(0); // batch size
-    const auto M = points.size(1); // num of rays
-
-    const auto T = grid[0];
-    const auto H = grid[1];
-    const auto L = grid[2];
-    const auto W = grid[3];
-
-    const auto dtype = points.dtype();
-    const auto device = points.device();
-    const auto options = torch::TensorOptions().dtype(dtype).device(device).requires_grad(false);
-    auto occupancy = torch::zeros({N, T, H, L, W}, options);
-
-    const int threads = 1024;
-    const dim3 blocks((M + threads - 1) / threads, N);
-
-    // initialize occupancy such that every voxel with one or more points is occupied
-    AT_DISPATCH_FLOATING_TYPES(points.type(), "init_cuda", ([&] {
-                init_cuda_kernel<scalar_t><<<blocks, threads>>>(
-                    points.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
-                    tindex.packed_accessor32<scalar_t,2,torch::RestrictPtrTraits>(),
-                    occupancy.packed_accessor32<scalar_t,5,torch::RestrictPtrTraits>());
-            }));
-
-    // synchronize
-    cudaDeviceSynchronize();
-
-    return occupancy;
 }

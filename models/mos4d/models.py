@@ -27,9 +27,9 @@ class MinkUNet14(MinkUNetBase):
 class MOSModel(nn.Module):
     def __init__(self, cfg: dict, n_classes: int):
         super().__init__()
-        self.dt_prediction = cfg["data"]["time_interval"]
+        self.dt = cfg["data"]["time_interval"]
         ds = cfg["data"]["voxel_size"]
-        self.quantization = torch.Tensor([ds, ds, ds, self.dt_prediction])
+        self.quantization = torch.Tensor([ds, ds, ds, self.dt])
         self.MinkUNet = MinkUNet14(in_channels=1, out_channels=n_classes, D=4)
 
     def forward(self, past_point_clouds):

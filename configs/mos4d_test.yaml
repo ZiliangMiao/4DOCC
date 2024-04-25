@@ -6,7 +6,9 @@ data:
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   voxel_size: 0.2 # Used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.05 # Temporal resolution of scans, nusc: 0.05, kitti: 0.1
-  n_input: 10
+  n_input: 12
+  n_skip: 4
+  n_output: 1  # only predict the moving status of current scan
   transform: True
   ego_mask: True
 
@@ -22,10 +24,9 @@ model:
 
   # 0.  mask_train-100%sekitti_epo-60_finetune-10%nusc_epo-60_bs-4_vs-0.1_ss-10
   # 1.  train-100%sekitti_epo-60_finetune-10%nusc_epo-60_bs-16_vs-0.1_ss-10
-  model_dataset: "100%nuscenes"
-  model_name: "vs-0.2_t-0.5_bs-8"
-  model_version: "version_1"
-  test_epoch: 34
+  model_dataset: "10%nuscenes"
+  model_name: "vs-0.2_t-2.8_bs-4"
+  model_version: "version_0"
   num_devices: 1
   batch_size: 4
   num_workers: 1

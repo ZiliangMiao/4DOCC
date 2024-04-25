@@ -99,58 +99,96 @@ class MinkUNet14(MinkUNetBase):
 
 
 class SparseEncoder4D(nn.Module):
-    def __init__(self, in_channels, out_channels, voxel_size, output_grid):
+    def __init__(self, in_channels, out_channels, quantization, output_grid):
         super(SparseEncoder4D, self).__init__()
-        self.voxel_size = voxel_size
+
+        self.quantization = quantization
         self.output_grid = output_grid
         self.MinkUNet = MinkUNet14(in_channels=in_channels, out_channels=out_channels, D=4)
-        self.quantization = torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1.0]).to(device='cuda')
 
-    def forward(self, input_points_4d):
-        batch_size = len(input_points_4d)
-        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in input_points_4d]
+    def forward(self, x):
+        # generate dense occ input for skip connection layer
+        batch_size = len(x)
+        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in x]
         features = [
-            torch.ones(len(point_cloud), 1).type_as(point_cloud)
+            0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)
             for point_cloud in past_point_clouds
         ]
         coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
-
         tensor_field = ME.TensorField(features=feats, coordinates=coords.type_as(feats),
                                       quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
         s_input = tensor_field.sparse()
         # s_input = ME.SparseTensor(coordinates=coords, features=feats,
         #                           quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
 
-        s_prediction = self.MinkUNet(s_input)  # B, X, Y, Z, T; F
-        s_out_coords = s_prediction.slice(tensor_field).coordinates
-        s_out_feats = s_prediction.slice(tensor_field).features
-        [T, Z, Y, X] = self.output_grid
+        s_output = self.MinkUNet(s_input)  # B, X, Y, Z, T; F
 
-        dense_F = torch.zeros(torch.Size([batch_size, 1, X, Y, Z, T]), dtype=torch.float32, device='cuda:0')
-        coords = s_out_coords[:, 1:]
-        tcoords = coords.t().long()
-        batch_indices = s_out_coords[:, 0].long()
-        exec(
-            "dense_F[batch_indices, :, "
-            + ", ".join([f"tcoords[{i}]" for i in range(len(tcoords))])
-            + "] = s_out_feats"
-        )
+        ################################## SLICE & EXEC Dense ##################################
+        # slice (voxels to original point cloud domain, i.e., tensor field?)
+        # s_out_coords = s_output.slice(tensor_field).coordinates
+        # s_out_feats = s_output.slice(tensor_field).features
+        # [T, Z, Y, X] = self.output_grid
+        # dense_F = torch.zeros(torch.Size([batch_size, 1, X, Y, Z, T]), dtype=torch.float32, device='cuda:0')
+        # coords = s_out_coords[:, 1:]
+        # tcoords = coords.t().long()
+        # batch_indices = s_out_coords[:, 0].long()
+        # exec(
+        #     "dense_F[batch_indices, :, "
+        #     + ", ".join([f"tcoords[{i}]" for i in range(len(tcoords))])
+        #     + "] = s_out_feats"
+        # )
 
         # output check
         # out_coord = s_out.coordinates.cpu().numpy()
-        # pred_coord = s_prediction.coordinates.cpu().numpy()
-        # pred_feats = s_prediction.features.cpu().detach().numpy()
+        # pred_coord = s_output.coordinates.cpu().numpy()
+        # pred_feats = s_output.features.cpu().detach().numpy()
         # x_min = torch.max(pred_coord[:, 1])
         # y_min = torch.max(pred_coord[:, 2])
         # z_min = torch.max(pred_coord[:, 3])
         # t_min = torch.max(pred_coord[:, 4])
-
-        # occ_feats, min_coord, tensor_stride = s_prediction.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
+        # occ_feats, min_coord, tensor_stride = s_output.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
         #                                       min_coordinate=torch.IntTensor([0, 0, 0, 0]), contract_stride=True)
+        ###########################################################################
 
-        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
-        output = torch.squeeze(dense_F.permute(0, 5, 4, 3, 2, 1).contiguous())
-        return output
+        ################################## Minkowski Dense ##################################
+        # dense grid shape
+        # [T, Z, Y, X] = self.output_grid
+        # F = 1
+        # dense_grid_shape = torch.Size([batch_size, F, X, Y, Z, T])
+        # min coordinates
+        # t_min, t_max = torch.min(out_coords[:, 4]), torch.max(out_coords[:, 4])
+        # z_min, z_max = torch.min(out_coords[:, 3]), torch.max(out_coords[:, 3])
+        # y_min, y_max = torch.min(out_coords[:, 2]), torch.max(out_coords[:, 2])
+        # x_min, x_max = torch.min(out_coords[:, 1]), torch.max(out_coords[:, 1])
+        # d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, t_min]))
+
+        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc [Batch Dim, Feature Dim, Spatial Dim..., Spatial Dim]
+        # output = torch.squeeze(d_output.permute(0, 5, 4, 3, 2, 1).contiguous())
+        #####################################################################################
+
+        ################################## Dense ##################################
+        [T, Z, Y, X] = self.output_grid
+
+        # dense min coordinates
+        out_coords = s_output.coordinates
+        out_feats = s_output.features
+        t_index_org = torch.unique(out_coords[:, 4])
+        t_index_new = torch.tensor(range(T))
+
+        # modify time index
+        t_mask = []
+        for t_old in t_index_org:
+            t_mask.append(out_coords[:, 4] == t_old)
+        assert len(t_mask) == len(t_index_new)
+        for i, t_new in enumerate(t_index_new):
+            out_coords[t_mask[i], 4] = t_new
+
+        # to dense
+        d_output = torch.zeros([batch_size, T, Z, Y, X], dtype=out_feats.dtype, device=out_coords.device)
+        for i in range(len(out_feats)):
+            coord = out_coords[i].long()
+            d_output[coord[0], coord[4], coord[3], coord[2], coord[1]] = out_feats[i]
+        return d_output
 
 
 class DenseDecoder2D(nn.Module):
@@ -160,12 +198,14 @@ class DenseDecoder2D(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.planes = [128, 64]  # original 4docc default
-        if self.in_channels == 90 or 180:  # voxel_size=0.2, t=2, z=45 -> c=90; voxel_size=0.1, t=2. z=90 -> c=180
+        if self.in_channels <= 200:   # voxel_size=0.2, t=2, z=45 -> c=90; voxel_size=0.1, t=2. z=90 -> c=180
             self.planes = [128, 128]
-        elif self.in_channels == 270:  # voxel_size=0.2, t=6, z=45 -> c=270
+        elif self.in_channels <= 300:  # voxel_size=0.2, t=6, z=45 -> c=270
             self.planes = [256, 256]
-        elif self.in_channels == 540: # voxel_size=0.1, t=6, z=90 -> c=540
+        elif self.in_channels <= 600:  # voxel_size=0.1, t=6, z=90 -> c=540
             self.planes = [512, 512]
+        else:
+            self.planes = [1024, 1024]
 
         self.block = nn.Sequential(
             # plane-0
@@ -191,6 +231,38 @@ class DenseDecoder2D(nn.Module):
     def forward(self, x):
         return self.block(x)
 
+class SkipConnectLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, quantization, output_grid):
+        super(SkipConnectLayer, self).__init__()
+
+        self.quantization = quantization
+        self.output_grid = output_grid
+        self.linear = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
+                                      kernel_size=3, stride=1, padding=1, bias=True)
+    def forward(self, x):
+        # generate dense occ input for skip connection layer
+        batch_size = len(x)
+        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in x]
+        features = [
+            0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)
+            for point_cloud in past_point_clouds
+        ]
+        coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
+        s_input = ME.SparseTensor(coordinates=coords, features=feats,
+                                  quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
+        [T, Z, Y, X] = self.output_grid
+        d_input, _, _ = s_input.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
+                                      min_coordinate=torch.IntTensor([0, 0, 0, -50]))
+
+        a = d_input.is_contiguous()
+
+        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
+        d_input = d_input.permute(0, 5, 4, 3, 2, 1)
+        d_input = d_input.contiguous()
+        d_input = d_input.reshape(batch_size, -1, Y, X)
+        return self.linear(d_input)
+
+
 #######################################
 # Lightning Modules
 #######################################
@@ -208,6 +280,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         self.n_output = cfg["data"]["n_output"]
         self.pc_range = cfg["data"]["pc_range"]
         self.voxel_size = cfg["data"]["voxel_size"]
+        self.dt = cfg["data"]["time_interval"]
 
         self.n_height = int((self.pc_range[5] - self.pc_range[2]) / self.voxel_size)
         self.n_length = int((self.pc_range[4] - self.pc_range[1]) / self.voxel_size)
@@ -227,16 +300,12 @@ class MinkOccupancyForecastingNetwork(LightningModule):
             torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
         )
         self.quantization = torch.nn.parameter.Parameter(
-            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1.0]), requires_grad=False)
+            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, self.dt]), requires_grad=False)
 
         # with 4d sparse encoder, feature dimension = 1
-        self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, voxel_size=self.voxel_size,
-                                       output_grid=self.output_grid)
+        self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, quantization=self.quantization, output_grid=self.output_grid)
         self.decoder = DenseDecoder2D(in_channels=self.n_input*self.n_height, out_channels=self.n_output*self.n_height)
-
-        # NOTE: initialize the linear predictor (no bias) over history
-        self.linear = torch.nn.Conv2d(in_channels=self.n_input*self.n_height, out_channels=self.n_output*self.n_height,
-                                      kernel_size=3, stride=1, padding=1, bias=True)
+        # self.skip = SkipConnectLayer(in_channels=self.n_input*self.n_height, out_channels=self.n_output*self.n_height, quantization=self.quantization, output_grid=self.output_grid)
 
         # pytorch-lightning settings
         if self.cfg["mode"] == "train":
@@ -302,28 +371,13 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         return sigma, pred_dist, gt_dist
 
     def forward(self, _input):
-        # generate dense occ input for skip connection layer
         batch_size = len(_input)
-        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in _input]
-        features = [
-            torch.ones(len(point_cloud), 1).type_as(point_cloud)
-            for point_cloud in past_point_clouds
-        ]
-        coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
-        s_input = ME.SparseTensor(coordinates=coords, features=feats,
-                                  quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
-        [T, Z, Y, X] = self.output_grid
-        d_input, _, _ = s_input.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
-                                      min_coordinate=torch.IntTensor([0, 0, 0, 0]))
-        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
-        d_input = d_input.permute(0, 5, 4, 3, 2, 1).contiguous().reshape(batch_size, -1, Y, X)
-
-        _li_output = self.linear(d_input)
+        # _li_output = self.skip(_input)
         _en_output = self.encoder(_input)
+        [T, Z, Y, X] = self.output_grid
         _de_output = self.decoder(_en_output.reshape(batch_size, -1, Y, X))
         # w/ skip connection
-        _output = (_li_output + _de_output).reshape(batch_size, self.n_output, self.n_height, self.n_length,
-                                                    self.n_width)
+        _output = _de_output.reshape(batch_size, self.n_output, self.n_height, self.n_length, self.n_width)
         return _output
 
     def configure_optimizers(self):

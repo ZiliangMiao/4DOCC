@@ -23,12 +23,12 @@ from datasets.mos4d.kitti import KittiSequentialDataset
 from datasets.mos4d.nusc import NuscSequentialDataset
 from utils.deterministic import set_deterministic
 
-def main(cfg):
+def main(cfg, test_epoch):
+    cfg["model"]["test_epoch"] = test_epoch
     num_device = cfg["model"]["num_devices"]
     model_dataset = cfg["model"]["model_dataset"]
     model_name = cfg["model"]["model_name"]
     model_version = cfg["model"]["model_version"]
-    test_epoch = cfg["model"]["test_epoch"]
     model_dir = os.path.join("./logs", "mos4d", model_dataset, model_name, model_version)
     ckpt_path = os.path.join(model_dir, "checkpoints", f"{model_name}_epoch={test_epoch}.ckpt")
 
@@ -191,4 +191,7 @@ if __name__ == "__main__":
     # load test config
     with open("configs/mos4d_test.yaml", "r") as f:
         cfg = yaml.safe_load(f)
-    main(cfg)
+
+    test_epoch_list = [119, 109, 99, 89, 79, 69, 59, 49, 39, 29, 19, 9]
+    for test_epoch in test_epoch_list:
+        main(cfg, test_epoch)

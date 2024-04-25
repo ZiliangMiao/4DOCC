@@ -39,7 +39,7 @@ class NuscSequentialModule(LightningDataModule):
             train_set = NuscSequentialDataset(self.cfg, self.nusc, split="train")
             val_set = NuscSequentialDataset(self.cfg, self.nusc, split="val")
             ########## Generate dataloaders and iterables
-            if self.cfg["data"]["sample_levevl"] == "sequence":
+            if self.cfg["data"]["sample_level"] == "sequence":
                 self.train_loader = DataLoader(
                     dataset=train_set,
                     batch_size=self.cfg["model"]["batch_size"],
@@ -127,7 +127,7 @@ class NuscSequentialDataset(Dataset):
         self.n_output = self.cfg["data"]["n_output"]  # should be 1
         self.dt_pred = self.cfg["data"]["time_interval"]  # time resolution used for prediction
 
-        if self.cfg["data"]["sample_level"] == "sequence":
+        if self.cfg["mode"] == "train" and self.cfg["data"]["sample_level"] == "sequence":
             split_scenes = create_splits_scenes(verbose=True)
             split_scenes = split_scenes[self.split]
             from random import sample
@@ -276,20 +276,19 @@ class NuscSequentialDataset(Dataset):
         sample_tokens = []  # store the sample tokens
         sample_data_tokens = []
         for scene in self.nusc.scene:
-            if scene['name'] in split_scenes:
-                sample_token = scene["first_sample_token"]
+            if scene['name'] not in split_scenes:
+                continue
+            sample_token = scene["first_sample_token"]
+            sample = self.nusc.get('sample', sample_token)
+            sample_data_token = sample['data']['LIDAR_TOP']
+            sample_tokens.append(sample_token)
+            sample_data_tokens.append(sample_data_token)
+            while sample['next'] != "":
+                sample_token = sample['next']
                 sample = self.nusc.get('sample', sample_token)
                 sample_data_token = sample['data']['LIDAR_TOP']
                 sample_tokens.append(sample_token)
                 sample_data_tokens.append(sample_data_token)
-                while sample['next'] != "":
-                    sample_token = sample['next']
-                    sample = self.nusc.get('sample', sample_token)
-                    sample_data_token = sample['data']['LIDAR_TOP']
-                    sample_tokens.append(sample_token)
-                    sample_data_tokens.append(sample_data_token)
-            else:
-                continue
         return sample_tokens, sample_data_tokens
 
     def _get_scene_tokens(self, split_logs: List[str]) -> List[str]:

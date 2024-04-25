@@ -6,9 +6,10 @@ data:
   dataset_pct: 100  # percentage of data used for training
   voxel_size: 0.2  # voxel size
   pc_range: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
-  time_interval: 0.5
-  n_input: 6  # number of input point cloud scan
-  n_output: 6  # number of output point cloud scan (for pretraining only)
+  time_interval: 0.05
+  n_input: 12  # number of input point cloud scan 6, 9, 6
+  n_skip: 4
+  n_output: 12  # number of output point cloud scan (for pretraining only)
   input_within_pc_range: True
 #  transform: True # If true, the points are pose-aligned before feeding to the model
   ego_mask: True # mask the points of ego-vehicle, 4docc pretraining default=True
