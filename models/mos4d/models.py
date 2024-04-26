@@ -29,7 +29,7 @@ class MOSModel(nn.Module):
         super().__init__()
         self.dt = cfg["data"]["time_interval"]
         ds = cfg["data"]["voxel_size"]
-        self.quantization = torch.Tensor([ds, ds, ds, self.dt])
+        self.quantization = torch.Tensor([ds, ds, ds, 1])
         self.MinkUNet = MinkUNet14(in_channels=1, out_channels=n_classes, D=4)
 
     def forward(self, past_point_clouds):
@@ -143,7 +143,7 @@ class MOSNet(LightningModule):
         curr_coords_list = []
         curr_feats_list = []
         for feats, coords in zip(out.decomposed_features, out.decomposed_coordinates):
-            curr_time_mask = coords[:, -1] == 0.0
+            curr_time_mask = coords[:, -1] == (self.n_input - 1)
             curr_feats = feats[curr_time_mask]
             curr_coords = coords[curr_time_mask]
             curr_coords_list.append(curr_coords)
@@ -252,7 +252,7 @@ class MOSNet(LightningModule):
         acc_conf_mat = torch.zeros(self.n_classes, self.n_classes)
         for i, (curr_feats, mos_label) in enumerate(zip(curr_feats_list, mos_labels)):
             # get ego mask
-            curr_time_mask = point_clouds[i][:, -1] == 0.0
+            curr_time_mask = point_clouds[i][:, -1] == (self.n_input - 1)
             ego_mask = NuscSequentialDataset.get_ego_mask(point_clouds[i][curr_time_mask])
             # save mos pred (with ego vehicle points)
             mos_pred_file = os.path.join(self.mos_pred_dir, f"{sample_data_tokens[i]}_mos_pred.label")

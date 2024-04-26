@@ -94,7 +94,10 @@ class nuScenesDataset(Dataset):
 
             ############################### INPUT ###############################
             input_sd_tokens = [ref_sample_data_token]  # lidar token of current scan
-            input_sd_timestamps = [(ref_sample_data['timestamp'] - ref_timestamp) / 1000000]
+            # input_sd_timestamps = [(ref_sample_data['timestamp'] - ref_timestamp) / 1000000]
+            time_idx_in = 0
+            input_sd_timestamps = [time_idx_in]
+
             # count
             skip_flag = 0  # already skip 0 lidar sample data
             lidar_sample_idx = 1  # already sample 1 lidar sample data
@@ -111,7 +114,10 @@ class nuScenesDataset(Dataset):
                         continue
                     # if not skip, sample
                     input_sd_tokens.append(sample_data_prev_token)
-                    input_sd_timestamps.append((sample_data_prev['timestamp'] - ref_timestamp) / 1000000)
+                    time_idx_in -= 1
+                    input_sd_timestamps.append(time_idx_in)
+                    # input_sd_timestamps.append((sample_data_prev['timestamp'] - ref_timestamp) / 1000000)
+
                     # change flag after append
                     skip_flag = 0
                     lidar_sample_idx += 1
@@ -124,6 +130,7 @@ class nuScenesDataset(Dataset):
 
             ############################### OUTPUT ###############################
             output_sd_tokens = []  # lidar token of current scan
+            time_idx_out = 0
             output_sd_timestamps = []
             # count
             skip_flag = 0  # already skip 0 lidar sample data
@@ -141,7 +148,10 @@ class nuScenesDataset(Dataset):
                         continue
                     # if not skip, sample
                     output_sd_tokens.append(sample_data_next_token)
-                    output_sd_timestamps.append((sample_data_next['timestamp'] - ref_timestamp) / 1000000)
+                    time_idx_out += 1
+                    output_sd_timestamps.append(time_idx_out)
+                    # output_sd_timestamps.append((sample_data_next['timestamp'] - ref_timestamp) / 1000000)
+
                     # change flag after append
                     skip_flag = 0
                     lidar_sample_idx += 1
@@ -155,9 +165,9 @@ class nuScenesDataset(Dataset):
             if len(input_sd_tokens) == self.n_input & len(output_sd_tokens) == self.n_output:
                 valid_sample_tokens.append(ref_sample_token)
                 sample_input_lidar_dict[ref_sample_token] = input_sd_tokens
-                sample_input_reftime_dict[ref_sample_token] = input_sd_timestamps
+                sample_input_reftime_dict[ref_sample_token] = [time_in + self.n_input - 1 for time_in in input_sd_timestamps]
                 sample_output_lidar_dict[ref_sample_token] = output_sd_tokens
-                sample_output_reftime_dict[ref_sample_token] = output_sd_timestamps
+                sample_output_reftime_dict[ref_sample_token] = [time_out - 1 for time_out in output_sd_timestamps]
                 sample_xflip_dict[ref_sample_token] = xflip_flag
         return (sample_input_lidar_dict, sample_input_reftime_dict, sample_output_lidar_dict,
                 sample_output_reftime_dict, sample_xflip_dict, valid_sample_tokens)
@@ -187,7 +197,7 @@ class nuScenesDataset(Dataset):
 
     def get_grid_mask(self, points):
         # input points are numpy array
-        eps = 0.00001
+        eps = self.voxel_size / 2
         mask1 = np.logical_and(self.pc_range[0] <= points[:, 0], points[:, 0] < (self.pc_range[3] - eps))
         mask2 = np.logical_and(self.pc_range[1] <= points[:, 1], points[:, 1] < (self.pc_range[4] - eps))
         mask3 = np.logical_and(self.pc_range[2] <= points[:, 2], points[:, 2] < (self.pc_range[5] - eps))
@@ -294,10 +304,12 @@ class nuScenesDataset(Dataset):
             ref_from_curr = ref_from_global.dot(global_from_curr)
             lidar_pcd.transform(ref_from_curr)
 
+            ##############################################
             # check if in Singapore (if so flip x)
-            if flip_flag:
-                ref_from_curr[0, 3] *= -1
-                lidar_pcd.points[0] *= -1
+            # if flip_flag:
+            #     ref_from_curr[0, 3] *= -1
+            #     lidar_pcd.points[0] *= -1
+            ##############################################
 
             # tf means transformed?
             origin_tf = np.array(ref_from_curr[:3, 3], dtype=np.float32)  # location of lidar at curr lidar coord

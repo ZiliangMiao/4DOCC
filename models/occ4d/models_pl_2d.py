@@ -107,15 +107,33 @@ class SparseEncoder4D(nn.Module):
         self.output_grid = output_grid
         self.MinkUNet = MinkUNet14(in_channels=in_channels, out_channels=out_channels, D=4)
 
+    def get_grid_mask(self, points):
+        # input points [B, X, Y, Z, T] quantized coord int index
+        # self.output_grid [T, Z, Y, X]
+        eps = 0.1
+        mask_x = torch.logical_and(0 <= points[:, 1], points[:, 1] < (self.output_grid[3] - eps))
+        mask_y = torch.logical_and(0 <= points[:, 2], points[:, 2] < (self.output_grid[2] - eps))
+        mask_z = torch.logical_and(0 <= points[:, 3], points[:, 3] < (self.output_grid[1] - eps))
+        mask = mask_x & mask_y & mask_z
+        return mask
+
     def forward(self, x):
         # generate dense occ input for skip connection layer
         batch_size = len(x)
+        [T, Z, Y, X] = self.output_grid
         past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in x]
         features = [
             0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)
             for point_cloud in past_point_clouds
         ]
+
         coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
+
+        # grid mask
+        grid_mask = self.get_grid_mask(coords)
+        coords = coords[grid_mask]
+        feats = feats[grid_mask]
+
         tensor_field = ME.TensorField(features=feats, coordinates=coords.type_as(feats),
                                       quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
         s_input = tensor_field.sparse()
@@ -152,7 +170,6 @@ class SparseEncoder4D(nn.Module):
         ###########################################################################
 
         ################################## Dense ##################################
-        # start = time.perf_counter()
         # [T, Z, Y, X] = self.output_grid
         #
         # # dense min coordinates
@@ -174,42 +191,42 @@ class SparseEncoder4D(nn.Module):
         # for i in range(len(out_feats)):
         #     coord = out_coords[i].long()
         #     d_output[coord[0], coord[4], coord[3], coord[2], coord[1]] = out_feats[i]
-        # end = time.perf_counter()
-        # to_dense_time = end - start
         #####################################################################################
 
-        ################################## Minkowski Dense ##################################
-        [T, Z, Y, X] = self.output_grid
-        # modify time index
-        t_index_new = torch.tensor(range(T))
-        t_index_org = torch.unique(s_output.coordinates[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
-        t_min, t_max = torch.min(t_index_org), torch.max(t_index_org)
-        t_interval = (t_max - t_min) / T
-
-        # modify time index
-        t_mask = []
-        for i in range(T):
-            t_org_list = []
-            for t in t_index_org:
-                if (t_min + t_interval * i) <= t <= (t_min + t_interval * (i+1)):
-                    t_org_list.append(t)
-            t_mask.append(torch.isin(s_output.coordinates[:, 4], torch.tensor(t_org_list, device=s_output.device)))
-        assert len(t_mask) == len(t_index_new)
-        for i, t_new in enumerate(t_index_new):
-            s_output.coordinates[t_mask[i], 4] = t_new
+        ################################## Modify Time Index ##################################
+        # # modify time index
+        # t_index_new = torch.tensor(range(T))
+        # t_index_org = torch.unique(s_output.coordinates[:, 4])  # 当batch size不为1时，有可能出现t_index_org长度不等于T的情况 -25 -26同时出现
+        # t_min, t_max = torch.min(s_output.coordinates[:, 4]), torch.max(s_output.coordinates[:, 4])
+        # t_interval = (t_max - t_min) / T
+        #
+        # # modify time index
+        # t_mask = []
+        # for i in range(T):
+        #     t_org_list = []
+        #     for t in t_index_org:
+        #         if (t_min + t_interval * i) <= t <= (t_min + t_interval * (i+1)):
+        #             t_org_list.append(t)
+        #     t_mask.append(torch.isin(s_output.coordinates[:, 4], torch.tensor(t_org_list, device=s_output.device)))
+        #
+        # assert len(t_mask) == len(t_index_new)
+        #
+        # for i, t_new in enumerate(t_index_new):
+        #     s_output.coordinates[t_mask[i], 4] = t_new
+        ######################################################################################
 
         # dense grid shape
         dense_grid_shape = torch.Size([batch_size, 1, X, Y, Z, T])
         # min coordinates
+        # out_coords = s_output.coordinates
         # t_min, t_max = torch.min(out_coords[:, 4]), torch.max(out_coords[:, 4])
         # z_min, z_max = torch.min(out_coords[:, 3]), torch.max(out_coords[:, 3])
         # y_min, y_max = torch.min(out_coords[:, 2]), torch.max(out_coords[:, 2])
         # x_min, x_max = torch.min(out_coords[:, 1]), torch.max(out_coords[:, 1])
-        d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
 
+        d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
         # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc [Batch Dim, Feature Dim, Spatial Dim..., Spatial Dim]
         d_output = torch.squeeze(d_output.permute(0, 5, 4, 3, 2, 1).contiguous())
-        #####################################################################################
         return d_output
 
 
@@ -322,7 +339,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
             torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
         )
         self.quantization = torch.nn.parameter.Parameter(
-            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, self.dt]), requires_grad=False)
+            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1]), requires_grad=False)
 
         # with 4d sparse encoder, feature dimension = 1
         self.encoder = SparseEncoder4D(in_channels=1, out_channels=1, quantization=self.quantization, output_grid=self.output_grid)

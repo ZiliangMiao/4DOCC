@@ -171,7 +171,8 @@ class NuscSequentialDataset(Dataset):
         lidar_tokens = self.sample_lidar_tokens_dict[sample_token]
         ref_timestamp = sample_data['timestamp']
         pcds_4d_list = []  # 4D Point Cloud (relative timestamp)
-        for ref_time_idx, lidar_token in enumerate(lidar_tokens):
+        time_idx = 1
+        for lidar_token in lidar_tokens:
             assert lidar_token is not None
             # if lidar_token is None:
             #     lidar_data = self.nusc.get('sample_data', lidar_tokens[0])
@@ -207,9 +208,10 @@ class NuscSequentialDataset(Dataset):
                 points_curr_homo = np.hstack([points_curr, np.ones((points_curr.shape[0], 1))]).T
                 points_ref = torch.from_numpy((trans_mat @ points_curr_homo).T[:, :3])
 
-                # 0 - 9, delta_t = 0.05s
-                timestamp = (lidar_data['timestamp'] - ref_timestamp) / 1000000
-                pcd_ref_time = self.timestamp_tensor(points_ref, timestamp)
+                # 0, -1, -2, ..., -9
+                # timestamp = (lidar_data['timestamp'] - ref_timestamp) / 1000000
+                time_idx -= 1
+                pcd_ref_time = self.timestamp_tensor(points_ref, (time_idx + self.n_input - 1))
                 pcds_4d_list.append(pcd_ref_time)
         assert len(pcds_4d_list) == self.n_input
         assert self.n_output == 1
@@ -227,7 +229,7 @@ class NuscSequentialDataset(Dataset):
                 pcds_4d = self.augment_data(pcds_4d)
             if self.cfg["data"]["ego_mask"]:
                 ego_mask = self.get_ego_mask(pcds_4d)
-                time_mask = pcds_4d[:, -1] == 0.0
+                time_mask = pcds_4d[:, -1] == (self.n_input - 1)
                 pcds_4d = pcds_4d[~ego_mask]
                 mos_label = mos_label[~ego_mask[time_mask]]
         return [sample_data_token, pcds_4d, mos_label]  # sample_data_token, past 4d point cloud, sample mos label
