@@ -19,7 +19,7 @@ data:
 
 ##Training
 model:
-  resume_ckpt: # "/root/4DOCC/logs/pretrain/nuscenes/pretrain_vs-0.2_t-3.0_bs-2_epo-60/version_1/checkpoints/pretrain_vs-0.2_t-3.0_bs-2_epo-60_epoch=9.ckpt"
+  resume_ckpt: "/home/user/Projects/4DOCC/logs/occ4d/100%nuscenes/vs-0.2_t-1.3_bs-1/version_3/checkpoints/vs-0.2_t-1.3_bs-1_epoch=10.ckpt"
   loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
   optimizer: "adam"
   lr_start: 0.0001  # 4dmos: 0.0001, 4docc_org: 0.0005

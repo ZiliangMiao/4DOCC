@@ -127,7 +127,7 @@ class NuscSequentialDataset(Dataset):
         self.n_output = self.cfg["data"]["n_output"]  # should be 1
         self.dt_pred = self.cfg["data"]["time_interval"]  # time resolution used for prediction
 
-        if self.cfg["mode"] == "train" and self.cfg["data"]["sample_level"] == "sequence":
+        if self.cfg["mode"] != "test" and self.cfg["data"]["sample_level"] == "sequence":
             split_scenes = create_splits_scenes(verbose=True)
             split_scenes = split_scenes[self.split]
             from random import sample
@@ -208,7 +208,7 @@ class NuscSequentialDataset(Dataset):
                 points_curr_homo = np.hstack([points_curr, np.ones((points_curr.shape[0], 1))]).T
                 points_ref = torch.from_numpy((trans_mat @ points_curr_homo).T[:, :3])
 
-                # 0, -1, -2, ..., -9
+                # 0, -1, -2, ..., -9 -> 9, 8, 7, 6, 5, 4, 3, 2, 1
                 # timestamp = (lidar_data['timestamp'] - ref_timestamp) / 1000000
                 time_idx -= 1
                 pcd_ref_time = self.timestamp_tensor(points_ref, (time_idx + self.n_input - 1))
