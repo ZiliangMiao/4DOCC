@@ -135,70 +135,22 @@ def CollateFn(batch):  # no map prior
         )
 
 def MinkCollateFn(batch):  # no map prior
-    filenames = [item[0] for item in batch]
+    meta_info = [item[0] for item in batch]  # filenames
 
-    # input points: N x max_{i} (sum_{t} n_{t, i}) x 3
-    max_n_input_points = max([len(item[1]) for item in batch])
-    input_points_4d = [item[1] for item in batch]
+    # input 4d points: B * sum(N_i) x 4 (x, y, z, t)
+    input_points_4d = torch.stack([item[1] for item in batch])
 
-    # output origin: N x T x 3
+    # output origin: B x T_output x 3
+    # T_input: {t_i}, T_output: {t_j}
     output_origin = torch.stack([item[2] for item in batch])
 
-    # output points: N x max_{i} (sum_{t} n_{t, i}) x 3
-    max_n_output_points = max([len(item[3]) for item in batch])
-    output_points = torch.stack(
-        [
-            torch.nn.functional.pad(
-                item[3],
-                (0, 0, 0, max_n_output_points - len(item[3])),
-                mode="constant",
-                value=float("nan"),
-            )
-            for item in batch
-        ]
-    )
+    # output points: B x sum(N_j) x 4
+    output_points = torch.stack([item[3] for item in batch])
 
-    # output tindex: N x max_{i} (sum_{t} n_{t, i})
-    output_tindex = torch.stack(
-        [
-            torch.nn.functional.pad(
-                item[4],
-                (0, max_n_output_points - len(item[4])),
-                mode="constant",
-                value=-1,
-            )
-            for item in batch
-        ]
-    )
-
-    if len(batch[0]) > 5:
-        output_labels = torch.stack(
-            [
-                torch.nn.functional.pad(
-                    item[5],
-                    (0, max_n_output_points - len(item[5])),
-                    mode="constant",
-                    value=-1,
-                )
-                for item in batch
-            ]
-        )
-        return (
-            filenames,
+    return (meta_info,
             input_points_4d,
             output_origin,
-            output_points,
-            output_tindex,
-            output_labels
-        )
-
-    return (
-            filenames,
-            input_points_4d,
-            output_origin,
-            output_points,
-            output_tindex,
-        )
+            output_points)
 
 def get_argoverse2_split():
     from av2.datasets.lidar.splits import TRAIN, TEST, VAL

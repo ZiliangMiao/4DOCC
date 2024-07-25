@@ -8,7 +8,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.models_pl_2d import MinkOccupancyForecastingNetwork
+from models.ours_rendering.models_pl_3d import MinkOccForecastNet
 from utils.deterministic import set_deterministic
 
 def make_mink_dataloaders(cfg):
@@ -127,9 +127,9 @@ def pretrain(cfg):
     # data params
     voxel_size = cfg["data"]["voxel_size"]
     time_interval = cfg["data"]["time_interval"]
-    n_input = cfg["data"]["n_input"]
+    t_scans = cfg["data"]["t_scans"]
     n_skip = cfg["data"]["n_skip"]
-    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
+    time = round(t_scans * time_interval + (t_scans - 1) * n_skip * time_interval, 2)
     dataset_name = cfg["data"]["dataset_name"].lower()
     dataset_pct = cfg["data"]["dataset_pct"]
     # model params
@@ -141,7 +141,7 @@ def pretrain(cfg):
     data_loaders = make_mink_dataloaders(cfg)
 
     # model
-    model = MinkOccupancyForecastingNetwork(cfg)
+    model = MinkOccForecastNet(cfg)
 
     # lr monitoring
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -165,7 +165,7 @@ def pretrain(cfg):
     # trainer
     trainer = Trainer(
         accelerator="gpu",
-        strategy="ddp",
+        strategy='ddp_find_unused_parameters_true', # "ddp"
         devices=cfg["model"]["num_devices"],
         logger=tb_logger,
         log_every_n_steps=1,
