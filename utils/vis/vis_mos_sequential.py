@@ -13,7 +13,7 @@ import pickle
 
 mos_colormap = {
         0: (255/255, 255/255, 255/255),  # unknown: white
-        1: (25/255, 80/255, 25/255),    # static: green
+        1: (25/255, 80/255, 25/255),    # static: greenregister_key_callback
         2: (255/255, 20/255, 20/255)     # moving: red
     }
 vfunc = np.vectorize(mos_colormap.get)
