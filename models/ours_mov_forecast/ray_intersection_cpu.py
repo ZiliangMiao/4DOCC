@@ -584,7 +584,7 @@ class QueryRays(object):
                 return self.rays_to_ints_pts_dict
             else:
                 if len(query_ray_to_ints_pts_dict) == 0:
-                    return None, None
+                    return [], []
                 query_ray_samples = []
                 ints_pts_samples = []
                 for query_ray_idx, ints_pts in query_ray_to_ints_pts_dict.items():

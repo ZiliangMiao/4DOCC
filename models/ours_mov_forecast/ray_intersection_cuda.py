@@ -566,7 +566,7 @@ class QueryRays(object):
             bg_samples = torch.cat((bg_pts, bg_ts, bg_labels), dim=1)
 
             # statistics
-            num_unk = torch.sum(bg_labels == 0)
+            num_unk = torch.sum(ints_labels == 0)
             num_free = torch.sum(bg_labels == 1)
             num_occ = torch.sum(bg_labels == 2)
 
@@ -577,34 +577,34 @@ class QueryRays(object):
                 query_ray_to_bg_samples_dict[query_ray_idx].append(bg_sample)
                 query_ray_to_key_rays_dict[query_ray_idx].append(torch.tensor([key_sensor_idx, key_ray_idx]))
 
-            if for_vis:
-                for query_ray_idx, key_sensor_rays_idx, bg_samples_list in zip(query_ray_to_key_rays_dict.keys(), query_ray_to_key_rays_dict.values(), query_ray_to_bg_samples_dict.values()):
-                    key_sensor_rays_idx = torch.stack(key_sensor_rays_idx)
-                    bg_samples = torch.stack(bg_samples_list)
-                    self.rays_to_ints_pts_dict[query_ray_idx] = (key_sensor_rays_idx, bg_samples)
-                return self.rays_to_ints_pts_dict
-            else:
-                if len(query_ray_to_bg_samples_dict) == 0:
-                    return None, None
-                ray_samples_save = []
-                bg_samples_save = []
-                for query_ray_idx, bg_samples_list in query_ray_to_bg_samples_dict.items():
-                    bg_samples = torch.stack(bg_samples_list)
-                    # save query ray samples: [query ray index, number of background points]
-                    ray_samples_save.append([query_ray_idx, len(bg_samples)])
-                    # save background points samples: [x, y, z, ts, occ_label]
-                    bg_samples_save.append(bg_samples)
-                    # TODO: statistics, global param, for histogram
-                    num_bg_samples_per_ray.append(len(bg_samples))
-                    num_occ_ray = torch.sum(bg_samples[:, -1] == 2)
-                    num_free_ray = torch.sum(bg_samples[:, -1] == 1)
-                    # TODO: statistics, occ percentage per ray
-                    num_occ_percentage_per_ray.append((num_occ_ray / (num_occ_ray + num_free_ray)) * 100)
-                # TODO: statistics, num of unk, free, occ in a scan
-                num_unk_free_occ_per_scan.append(torch.tensor([num_unk, num_free, num_occ]))
-                ray_samples_save = np.vstack(ray_samples_save)
-                bg_samples_save = torch.vstack(bg_samples_save).numpy()
-                return ray_samples_save, bg_samples_save
+        if for_vis:
+            for query_ray_idx, key_sensor_rays_idx, bg_samples_list in zip(query_ray_to_key_rays_dict.keys(), query_ray_to_key_rays_dict.values(), query_ray_to_bg_samples_dict.values()):
+                key_sensor_rays_idx = torch.stack(key_sensor_rays_idx)
+                bg_samples = torch.stack(bg_samples_list)
+                self.rays_to_ints_pts_dict[query_ray_idx] = (key_sensor_rays_idx, bg_samples)
+            return self.rays_to_ints_pts_dict
+        else:
+            if len(query_ray_to_bg_samples_dict) == 0:
+                return np.empty((0, 2)), np.empty((0, 3))
+            ray_samples_save = []
+            bg_samples_save = []
+            for query_ray_idx, bg_samples_list in query_ray_to_bg_samples_dict.items():
+                bg_samples = torch.stack(bg_samples_list)
+                # save query ray samples: [query ray index, number of background points]
+                ray_samples_save.append([query_ray_idx, len(bg_samples)])
+                # save background points samples: [x, y, z, ts, occ_label]
+                bg_samples_save.append(bg_samples)
+                # TODO: statistics, global param, for histogram
+                num_bg_samples_per_ray.append(len(bg_samples))
+                num_occ_ray = torch.sum(bg_samples[:, -1] == 2)
+                num_free_ray = torch.sum(bg_samples[:, -1] == 1)
+                # TODO: statistics, occ percentage per ray
+                num_occ_percentage_per_ray.append((num_occ_ray / (num_occ_ray + num_free_ray)) * 100)
+            # TODO: statistics, num of unk, free, occ in a scan
+            num_unk_free_occ_per_scan.append(torch.tensor([num_unk, num_free, num_occ]))
+            ray_samples_save = np.vstack(ray_samples_save)
+            bg_samples_save = torch.vstack(bg_samples_save).numpy()
+            return ray_samples_save, bg_samples_save
 
 
 def load_rays(nusc, sd_tok_query, args, for_vis:bool):
