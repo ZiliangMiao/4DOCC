@@ -13,6 +13,7 @@ from nuscenes.utils.geometry_utils import transform_matrix
 import matplotlib.pyplot as plt
 import pickle
 from tqdm import tqdm
+import argparse
 
 
 my_cmap = plt.cm.get_cmap('tab10')
@@ -214,7 +215,7 @@ def draw(query_rays, key_rays_list, query_ray_to_ints_pts_tensor_dict, key_senso
 
 
 def draw_dynamic_rays(query_rays, key_rays_list, rays_to_ints_pts_dict, mos_labels_query, mos_labels_key_list):
-    vis_ray_idx = 0  # nonlocal variable
+    vis_ray_idx = 5374  # nonlocal variable
     num_vis_rays = len(rays_to_ints_pts_dict)
     vis = open3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name='ray intersection points', width=3840, height=2160, left=0, top=0)
@@ -248,62 +249,63 @@ def draw_dynamic_rays(query_rays, key_rays_list, rays_to_ints_pts_dict, mos_labe
         pcd_down = pcd.voxel_down_sample(voxel_size=0.10)  # TODO: point cloud downsample
         vis.add_geometry(pcd_down)
 
-        # current query ray for visualization
-        query_ray_idx = list(rays_to_ints_pts_dict.keys())[vis_ray_idx]
-        (key_sensor_rays_idx, ints_pts_with_label) = list(rays_to_ints_pts_dict.values())[vis_ray_idx]
+        if len(rays_to_ints_pts_dict) != 0:
+            # current query ray for visualization
+            query_ray_idx = list(rays_to_ints_pts_dict.keys())[vis_ray_idx]
+            (key_sensor_rays_idx, ints_pts_with_label) = list(rays_to_ints_pts_dict.values())[vis_ray_idx]
 
-        # query ray point
-        query_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=20)
-        query_ray_point = np.asarray(query_rays.get_ray_end()[query_ray_idx].cpu().numpy())
-        query_ray_point_sphere = query_ray_point_sphere.translate(query_ray_point, relative=False)
-        query_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_query[query_ray_idx]))
-        vis.add_geometry(query_ray_point_sphere)
+            # query ray point
+            query_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=20)
+            query_ray_point = np.asarray(query_rays.get_ray_end()[query_ray_idx].cpu().numpy())
+            query_ray_point_sphere = query_ray_point_sphere.translate(query_ray_point, relative=False)
+            query_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_query[query_ray_idx]))
+            vis.add_geometry(query_ray_point_sphere)
 
-        # key rays points
-        key_ints_rays_pts_list = []
-        for i in range(len(key_sensor_rays_idx)):
-            key_sensor_idx = key_sensor_rays_idx[i][0]
-            key_ray_idx = key_sensor_rays_idx[i][1]
-            key_ray_point = key_rays_points_list[key_sensor_idx][key_ray_idx].cpu().numpy()
-            key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=20)
-            key_ray_point_sphere = key_ray_point_sphere.translate(key_ray_point, relative=False)
-            key_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_key_list[key_sensor_idx][key_ray_idx]))
-            vis.add_geometry(key_ray_point_sphere)
-            key_ints_rays_pts_list.append(key_rays_points_list[key_sensor_idx][key_ray_idx].cpu())
+            # key rays points
+            key_ints_rays_pts_list = []
+            for i in range(len(key_sensor_rays_idx)):
+                key_sensor_idx = key_sensor_rays_idx[i][0]
+                key_ray_idx = key_sensor_rays_idx[i][1]
+                key_ray_point = key_rays_points_list[key_sensor_idx][key_ray_idx].cpu().numpy()
+                key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=20)
+                key_ray_point_sphere = key_ray_point_sphere.translate(key_ray_point, relative=False)
+                key_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_key_list[key_sensor_idx][key_ray_idx]))
+                vis.add_geometry(key_ray_point_sphere)
+                key_ints_rays_pts_list.append(key_rays_points_list[key_sensor_idx][key_ray_idx].cpu())
 
-        # intersection points
-        for i in range(len(ints_pts_with_label)):
-            ints_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.2, resolution=20)
-            ints_point_sphere = ints_point_sphere.translate(ints_pts_with_label[i, 0:3], relative=False)
-            ints_point_sphere.paint_uniform_color(occ_color_func(ints_pts_with_label[i, -1]))
-            vis.add_geometry(ints_point_sphere)
+            # intersection points
+            for i in range(len(ints_pts_with_label)):
+                ints_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=20)
+                ints_point_sphere = ints_point_sphere.translate(ints_pts_with_label[i, 0:3], relative=False)
+                ints_point_sphere.paint_uniform_color(occ_color_func(ints_pts_with_label[i, -1]))
+                vis.add_geometry(ints_point_sphere)
 
-        # query ray
-        lineset_query = open3d.geometry.LineSet()
-        vertex_query = torch.vstack((org_query, pts_query[query_ray_idx]))
-        lines_query = [[0, 1]]
-        color_query = np.tile((0, 0, 0), (1, 1))
-        lineset_query.points = open3d.utility.Vector3dVector(vertex_query)
-        lineset_query.lines = open3d.utility.Vector2iVector(lines_query)
-        lineset_query.colors = open3d.utility.Vector3dVector(color_query)
-        vis.add_geometry(lineset_query)
-        # TODO: LineMesh is a user defined class, cannot directly add into vis geometry, can only draw_geometries
-        # line_mesh = LineMesh(vertex_query.cpu(), lines_query, [0, 0, 0], radius=0.2)
-        # line_mesh_geoms = line_mesh.cylinder_segments
-        # open3d.visualization.draw_geometries([lineset_query, *line_mesh_geoms])
+            # query ray
+            lineset_query = open3d.geometry.LineSet()
+            vertex_query = torch.vstack((org_query, pts_query[query_ray_idx]))
+            lines_query = [[0, 1]]
+            color_query = np.tile((234/255, 51/255, 35/255), (1, 1))
+            lineset_query.points = open3d.utility.Vector3dVector(vertex_query)
+            lineset_query.lines = open3d.utility.Vector2iVector(lines_query)
+            lineset_query.colors = open3d.utility.Vector3dVector(color_query)
+            vis.add_geometry(lineset_query)
+            # TODO: LineMesh is a user defined class, cannot directly add into vis geometry, can only draw_geometries
+            # line_mesh = LineMesh(vertex_query.cpu(), lines_query, [0, 0, 0], radius=0.2)
+            # line_mesh_geoms = line_mesh.cylinder_segments
+            # open3d.visualization.draw_geometries([lineset_query, *line_mesh_geoms])
 
-        # key rays
-        lineset_key = open3d.geometry.LineSet()  # TODO: all key rays that intersect with current query ray (at all key lidars)
-        vertex_key = torch.vstack((torch.stack(key_orgs_list, dim=0), torch.stack(key_ints_rays_pts_list, dim=0)))  # (len(key_orgs) + len(key_rays_pts), 3)
-        lines_key = []
-        for i in range(len(key_sensor_rays_idx)):
-            key_sensor_idx = key_sensor_rays_idx[i][0]
-            lines_key.append([key_sensor_idx, i + len(key_orgs_list)])
-        color_key = np.tile((0, 0, 0), (len(lines_key), 1))
-        lineset_key.points = open3d.utility.Vector3dVector(vertex_key)
-        lineset_key.lines = open3d.utility.Vector2iVector(lines_key)
-        lineset_key.colors = open3d.utility.Vector3dVector(color_key)
-        vis.add_geometry(lineset_key)
+            # key rays
+            lineset_key = open3d.geometry.LineSet()  # TODO: all key rays that intersect with current query ray (at all key lidars)
+            vertex_key = torch.vstack((torch.stack(key_orgs_list, dim=0), torch.stack(key_ints_rays_pts_list, dim=0)))  # (len(key_orgs) + len(key_rays_pts), 3)
+            lines_key = []
+            for i in range(len(key_sensor_rays_idx)):
+                key_sensor_idx = key_sensor_rays_idx[i][0]
+                lines_key.append([key_sensor_idx, i + len(key_orgs_list)])
+            color_key = np.tile((0, 0, 0), (len(lines_key), 1))
+            lineset_key.points = open3d.utility.Vector3dVector(vertex_key)
+            lineset_key.lines = open3d.utility.Vector2iVector(lines_key)
+            lineset_key.colors = open3d.utility.Vector3dVector(color_key)
+            vis.add_geometry(lineset_key)
 
         # open3d view option
         vis.get_render_option().point_size = 5.0
@@ -337,21 +339,21 @@ def draw_dynamic_rays(query_rays, key_rays_list, rays_to_ints_pts_dict, mos_labe
     vis.run()
 
 
-def get_sample_tok_list(sample, direction, num_sample, every_k_sample):
+def get_sample_tok_list(sample, direction, num_samples, every_k_samples):
     sd_tok_key_list = []
     tok_cnt = 0
     skip_cnt = 0
-    while sample[direction] != '' and tok_cnt < num_sample:
+    while sample[direction] != '' and tok_cnt < num_samples:
         sample_tok = sample[direction]
         sample = nusc.get("sample", sample_tok)
-        if skip_cnt < every_k_sample - 1:
+        if skip_cnt < every_k_samples - 1:
             skip_cnt += 1
             continue
         else:
             sd_tok_key_list.append(sample['data']['LIDAR_TOP'])
             tok_cnt += 1
             skip_cnt = 0
-    return sd_tok_key_list, tok_cnt == num_sample
+    return sd_tok_key_list, tok_cnt == num_samples
 
 
 def get_global_pose(nusc, sd_token, inverse=False):
@@ -389,7 +391,7 @@ def filter_points(points, valid_range):
         torch.logical_and(-valid_range <= points[:, 1], points[:, 1] <= valid_range),
     )
     mask = torch.logical_and(~ego_mask, inside_scene_bbox_mask)
-    return points[mask], mask
+    return points[mask], mask.cpu().numpy()
 
 
 def get_transformed_pcd(nusc, sd_token_ref, sd_token, max_range):
@@ -414,11 +416,14 @@ def get_transformed_pcd(nusc, sd_token_ref, sd_token, max_range):
     lidar_pcd.transform(ref_from_curr)
     points_tf = torch.tensor(lidar_pcd.points[:3].T, dtype=torch.float32).cuda()  # curr point cloud, at {ref lidar} frame
     points_tf, filter_mask = filter_points(points_tf, max_range)
+    return origin_tf, points_tf, ts_rela, filter_mask
 
+
+def load_mos_labels(nusc, sd_tok, filter_mask):
     # mos labels
-    mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_token + "_mos.label")
-    mos_labels = np.fromfile(mos_labels_file, dtype=np.uint8)[filter_mask.cpu().numpy()]
-    return origin_tf, points_tf, ts_rela, mos_labels
+    mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
+    mos_labels = np.fromfile(mos_labels_file, dtype=np.uint8)[filter_mask]
+    return mos_labels
 
 
 class KeyRays(object):
@@ -426,9 +431,6 @@ class KeyRays(object):
         self.ray_start = org_key
         self.ray_end = pts_key
         self.ray_ts = ts_key  # TODO: could be a timestamp for each ray (time compensation)
-
-    def get_query_org_vec(self, org_query, query_ray_size):
-        return torch.broadcast_to(F.normalize(self.ray_start - org_query, p=2, dim=0), (query_ray_size, 3))  # unit vector
     def get_ray_start(self):
         return self.ray_start
     def get_ray_end(self):
@@ -439,19 +441,30 @@ class KeyRays(object):
         return self.ray_ts
     def get_ray_depth(self, ray_pts):
         return torch.linalg.norm(ray_pts - self.ray_start, dim=1, keepdim=False)
-    def find_ints(self, query_rays, deg_shrd:float):
+    def get_org_vec(self, org_query, ray_size):
+        # unit vec: from query org to key org
+        return torch.broadcast_to(F.normalize(self.ray_start - org_query, p=2, dim=0), (ray_size, 3))
+    def find_ints(self, query_rays, args):
         # calculate norm vector of reference plane (query_rays_dir; query_org -> key_org)
-        query_org_vec = self.get_query_org_vec(query_rays.get_ray_start(), query_rays.get_ray_size())  # key - query
+        query_key_org_vec = self.get_org_vec(query_rays.get_ray_start(), query_rays.get_ray_size())  # query org to key org
         query_ray_dir = query_rays.get_ray_dir()
         # TODO: cross product time cost (25219, 3) * (25219, 3) -> 2.539e-5
-        ref_plane_norm = torch.cross(query_ray_dir, query_org_vec)  # unit vector: (rays_size * key_rays_size, 3)
+        ref_plane_norm = torch.cross(query_ray_dir, query_key_org_vec)  # unit vector: (rays_size * key_rays_size, 3)
         # calculate cos value of key_rays to reference plane
         # TODO: matrix product time cost (25219, 3) * (3, 31744) -> 1.516e-3
         key_rays_to_ref_plane = torch.matmul(ref_plane_norm, self.get_ray_dir().T)  # (query_rays_size, key_rays_size)
-        ray_ints_idx = torch.where(torch.abs(key_rays_to_ref_plane) <= torch.cos(torch.deg2rad(torch.tensor(deg_shrd))))
-        del key_rays_to_ref_plane
-        torch.cuda.empty_cache()
-        return ray_ints_idx
+        deg_thrd = np.rad2deg(args.max_dis_error / args.max_range)
+        ray_ints_mask = torch.abs(key_rays_to_ref_plane) <= torch.cos(torch.deg2rad(torch.tensor(90 - deg_thrd)))
+        ray_ints_idx = torch.where(ray_ints_mask)
+
+        # TODO: small angle index
+        small_ang_mask = torch.matmul(query_rays.get_ray_dir(), self.get_ray_dir().T) >= torch.cos(torch.deg2rad(torch.tensor(deg_thrd)))
+        small_ang_mask = torch.logical_and(small_ang_mask, ray_ints_mask)
+        small_ang_idx = torch.where(small_ang_mask)
+
+        # del key_rays_to_ref_plane
+        # torch.cuda.empty_cache()
+        return ray_ints_idx, small_ang_idx
 
 
 class QueryRays(object):
@@ -473,126 +486,160 @@ class QueryRays(object):
         return self.ray_ts
     def get_ray_depth(self, ray_pts):
         return torch.linalg.norm(ray_pts - self.ray_start, dim=1, keepdim=False)
-    def cal_ints_points(self, key_rays_list:list, occ_thrd:float, ray_ints_idx_list:list):
-        save_dict_for_vis = False
-        query_ray_to_ints_pts_dict = defaultdict(list)
+    def get_org_vec(self, org_key, ray_size):
+        # unit vec: from key org to query org
+        return torch.broadcast_to(F.normalize(self.ray_start - org_key, p=2, dim=0), (ray_size, 3))
+    def cal_ints_points(self, key_rays_list:list, ray_ints_idx_list:list, ray_parallel_idx_list:list, args, for_vis:bool):
+        query_ray_to_bg_samples_dict = defaultdict(list)
         query_ray_to_key_rays_dict = defaultdict(list)
         for key_sensor_idx, key_rays in enumerate(key_rays_list):  # key_rays at different space and time
             # intersection rays index
-            rays_ints_idx = ray_ints_idx_list[key_sensor_idx]  # dim-0: key rays; dim-1: query rays
-            query_ints_idx = rays_ints_idx[0]
-            key_ints_idx = rays_ints_idx[1]
+            query_rays_ints_idx = ray_ints_idx_list[key_sensor_idx][0]
+            key_rays_ints_idx = ray_ints_idx_list[key_sensor_idx][1]
 
             # common perpendicular line
-            query_rays_dir = self.get_ray_dir()[query_ints_idx]  # query rays (have intersection points)
-            key_rays_dir = key_rays.get_ray_dir()[key_ints_idx]  # key rays (have intersection points)
+            query_rays_dir = self.get_ray_dir()[query_rays_ints_idx]  # query rays (have intersection points)
+            key_rays_dir = key_rays.get_ray_dir()[key_rays_ints_idx]  # key rays (have intersection points)
             com_norm = torch.cross(query_rays_dir, key_rays_dir)  # not unit vector
 
-            # # TODO: use ray end point as known point
-            # ray_end_pts_vec = key_rays.get_ray_end()[key_ints_idx] - self.ray_end[query_ints_idx]
-            # q = torch.sum(torch.cross(ray_end_pts_vec, key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1)
-            # k = torch.sum(torch.cross(ray_end_pts_vec, query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1)
-            # query_bg_mask = q >= 0
-            # key_same_dir_mask = k >= 0 - key_rays.get_ray_depth(key_rays.get_ray_end()[rays_ints_idx[1]])
-            # valid_ints_mask = torch.logical_and(query_bg_mask, key_same_dir_mask)
-            # # calculate intersection points
-            # query_ints_idx = query_ints_idx[valid_ints_mask].cpu().numpy()
-            # key_ints_idx = key_ints_idx[valid_ints_mask].cpu().numpy()
-            # q = q[valid_ints_mask]
-            # k = k[valid_ints_mask]
-            # ints_pts = self.ray_end[query_ints_idx] + q.reshape(-1, 1) * self.get_ray_dir()[query_ints_idx]
-            # ints_pts_k = key_rays.get_ray_end()[key_ints_idx] + k.reshape(-1, 1) * key_rays.get_ray_dir()[key_ints_idx]
-
-            # TODO: use ray org point as known point
-            rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_ints_idx), 3))
+            # calculate intersection points
+            rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_rays_ints_idx), 3))
             q = torch.sum(torch.cross(rays_org_vec, key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1)
             k = torch.sum(torch.cross(rays_org_vec, query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1)
-            query_bg_mask = q >= self.get_ray_depth(self.ray_end[query_ints_idx])  # should be depth - occ_shrd
-            key_same_dir_mask = k >= occ_thrd
+            query_bg_mask = q >= self.get_ray_depth(self.ray_end[query_rays_ints_idx])
+            key_same_dir_mask = k >= args.occ_thrd
             valid_ints_mask = torch.logical_and(query_bg_mask, key_same_dir_mask)
-            query_ints_idx = query_ints_idx[valid_ints_mask].cpu().numpy()
-            key_ints_idx = key_ints_idx[valid_ints_mask].cpu().numpy()
+            query_rays_ints_idx = query_rays_ints_idx[valid_ints_mask]
+            key_rays_ints_idx = key_rays_ints_idx[valid_ints_mask]
             q = q[valid_ints_mask]
-            k = k[valid_ints_mask]
-            ints_pts = self.ray_start + q.reshape(-1, 1) * self.get_ray_dir()[query_ints_idx]
-            # ints_pts_k = key_rays.get_ray_start() + k.reshape(-1, 1) * key_rays.get_ray_dir()[key_ints_idx]
+            ints_pts = self.ray_start + q.reshape(-1, 1) * self.get_ray_dir()[query_rays_ints_idx]
 
             # calculate occupancy label of the ints pts
-            key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_ints_idx])
+            ints_labels = torch.zeros(len(ints_pts))  # 0: unknown, 1: free, 2:occupied
+            key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_rays_ints_idx])
             key_ints_depth = key_rays.get_ray_depth(ints_pts)
-            free_idx = torch.where(key_ints_depth - key_ray_depth < 0)
-            occ_idx = torch.where(torch.logical_and(key_ints_depth - key_ray_depth >= 0, key_ints_depth - key_ray_depth <= occ_thrd))
-            ints_label = torch.zeros(len(ints_pts)).cuda()  # 0: unknown, 1: free, 2:occupied
-            ints_label[free_idx] = 1
-            ints_label[occ_idx] = 2
+            key_ints_depth_res = key_ints_depth - key_ray_depth
+            free_mask = key_ints_depth_res < 0
+            ints_labels[free_mask] = 1
+            occ_mask = torch.logical_and(key_ints_depth_res >= 0, key_ints_depth_res <= args.occ_thrd)
+            ints_labels[occ_mask] = 2
 
-            # TODO [code patch]: if ray end points of query ray and key ray are too close, let them intersect in advance.
-            rays_end_vec = key_rays.get_ray_end()[key_ints_idx] - self.ray_end[query_ints_idx]
-            rays_end_dis = torch.linalg.norm(rays_end_vec, dim=1, keepdim=False)
-            ints_adv_idx = torch.where(torch.logical_and(ints_label == 0, rays_end_dis <= occ_thrd))
-            q[ints_adv_idx] = rays_end_dis[ints_adv_idx]  # param of line is depth to known point (when dir is unit)
-            ints_pts[ints_adv_idx] = self.ray_start + q.reshape(-1, 1)[ints_adv_idx] * \
-                                     self.get_ray_dir()[query_ints_idx][ints_adv_idx]  # update ints pts that ints in advance
-            ints_label[ints_adv_idx] = 2  # ints pts that ints in advance should be occupied
+            # valid intersection points: used for save or vis
+            ints_valid_mask = torch.logical_or(free_mask, occ_mask)
+            query_rays_ints_valid_idx = query_rays_ints_idx[ints_valid_mask]
+            key_rays_ints_valid_idx = key_rays_ints_idx[ints_valid_mask]
+            ints_pts_valid = ints_pts[ints_valid_mask]
+            ints_labels_valid = ints_labels[ints_valid_mask].reshape(-1, 1)
+            num_ints_valid_rays = len(ints_pts_valid)
+
+            # TODO: parallel rays (intersection rays contain parallel rays)
+            query_rays_para_idx = ray_parallel_idx_list[key_sensor_idx][0]
+            key_rays_para_idx = ray_parallel_idx_list[key_sensor_idx][1]
+
+            proj_para_depth = torch.sum(key_rays.get_ray_end()[key_rays_para_idx] * query_rays.get_ray_dir()[query_rays_para_idx], dim=1)  # torch不能对二维tensor求点积, 对应位置元素相乘再相加
+            proj_para_pts = torch.mul(proj_para_depth.reshape(-1, 1), query_rays.get_ray_dir()[query_rays_para_idx])
+            proj_depth_residual = proj_para_depth - self.get_ray_depth(self.ray_end[query_rays_para_idx])
+
+            # TODO: logic 1, if depth residual almost 0
+            para_same_mask = torch.logical_and(proj_depth_residual >= -args.max_dis_error,
+                                                proj_depth_residual <= args.max_dis_error)
+            query_rays_para_same_idx = query_rays_para_idx[torch.where(para_same_mask)]
+            key_rays_para_same_idx = key_rays_para_idx[torch.where(para_same_mask)]
+            num_para_same_rays = len(query_rays_para_same_idx)
+            ints_pts_para_same = proj_para_pts[para_same_mask]
+            ints_labels_para_same = torch.full((num_para_same_rays, 1), 2)
+
+            # TODO: logic 2, if depth residual far more than 0
+            para_valid_mask = proj_depth_residual > args.max_dis_error
+            query_rays_para_valid_idx = query_rays_para_idx[torch.where(para_valid_mask)]
+            key_rays_para_valid_idx = key_rays_para_idx[torch.where(para_valid_mask)]
+            num_para_valid_rays = len(query_rays_para_valid_idx)
+            ints_pts_para_valid_occ = proj_para_pts[para_valid_mask]
+            ints_labels_para_valid_occ = torch.full((num_para_valid_rays, 1), 2)
+            ints_pts_para_valid_free = (proj_para_pts[para_valid_mask] + self.ray_end[query_rays_para_valid_idx]) / 2
+            ints_labels_para_valid_free = torch.full((num_para_valid_rays, 1), 1)
+            # TODO: logic 3, if depth residual far less than 0 -> unknown label, not used now
+
+            # concat to bg points with labels
+            bg_pts = torch.cat((ints_pts_valid, ints_pts_para_same, ints_pts_para_valid_occ, ints_pts_para_valid_free), dim=0).cpu()
+            bg_ts = torch.full((num_ints_valid_rays + num_para_same_rays + num_para_valid_rays * 2, 1), key_rays.get_ray_ts())
+            bg_labels = torch.cat((ints_labels_valid, ints_labels_para_same, ints_labels_para_valid_occ, ints_labels_para_valid_free), dim=0)
+            bg_samples = torch.cat((bg_pts, bg_ts, bg_labels), dim=1)
 
             # statistics
-            num_ints_all = len(ints_pts)
-            num_unk = torch.sum(ints_label == 0)
-            num_free = torch.sum(ints_label == 1)
-            num_occ = torch.sum(ints_label == 2)
+            num_unk = torch.sum(bg_labels == 0)
+            num_free = torch.sum(bg_labels == 1)
+            num_occ = torch.sum(bg_labels == 2)
 
-            # # TODO: save all labels (contain unknown) [query_ray_idx, key_sensor_idx, key_ray_idx, x, y, z, ts, occ_label]
-            # save_label_all = np.concatenate(
-            #     (query_ints_idx.reshape(-1, 1), np.broadcast_to(key_sensor_idx, (num_ints_all, 1)),
-            #      key_ints_idx.reshape(-1, 1), ints_pts.cpu().numpy(),
-            #      np.broadcast_to(key_rays.get_ray_ts(), (num_ints_all, 1)),
-            #      ints_label.cpu().numpy().reshape(-1, 1)), axis=1)
-            # # TODO: save valid labels (only free and occupied)
-            # valid_label_idx = torch.cat(occ_idx + free_idx + ints_adv_idx).cpu().numpy()
-            # num_ints_valid = len(valid_label_idx)
-            # save_label_valid = np.concatenate(
-            #     (query_ints_idx[valid_label_idx].reshape(-1, 1), np.broadcast_to(key_sensor_idx, (num_ints_valid, 1)),
-            #      key_ints_idx[valid_label_idx].reshape(-1, 1), ints_pts.cpu().numpy()[valid_label_idx],
-            #      np.broadcast_to(key_rays.get_ray_ts(), (num_ints_valid, 1)),
-            #      ints_label.cpu().numpy()[valid_label_idx].reshape(-1, 1)), axis=1)
-
-            valid_label_idx = torch.cat(occ_idx + free_idx + ints_adv_idx).cpu().numpy()
-            ints_pts_ts_label = torch.cat((ints_pts[valid_label_idx].cpu(),
-                                           torch.full((len(valid_label_idx), 1), key_rays.get_ray_ts()),
-                                           ints_label[valid_label_idx].cpu().reshape(-1, 1)), dim=1)
-            # maintain a dictionary, query ray index -> intersection points list
-            for query_ray_idx, key_ray_idx, ints_pt in zip(query_ints_idx[valid_label_idx], key_ints_idx[valid_label_idx], ints_pts_ts_label):
-                query_ray_to_ints_pts_dict[query_ray_idx].append(ints_pt)
+            # dictionary: query ray index -> intersection points list
+            query_rays_idx = torch.cat((query_rays_ints_valid_idx, query_rays_para_same_idx, query_rays_para_valid_idx, query_rays_para_valid_idx)).cpu().numpy()
+            key_rays_idx = torch.cat((key_rays_ints_valid_idx, key_rays_para_same_idx, key_rays_para_valid_idx, key_rays_para_valid_idx)).cpu().numpy()
+            for query_ray_idx, key_ray_idx, bg_sample in zip(query_rays_idx, key_rays_idx, bg_samples):
+                query_ray_to_bg_samples_dict[query_ray_idx].append(bg_sample)
                 query_ray_to_key_rays_dict[query_ray_idx].append(torch.tensor([key_sensor_idx, key_ray_idx]))
 
-            if save_dict_for_vis:
-                num_valid_ints_pts = []  # for histgram visualization
-                for query_ray_idx, key_rays_idx, ints_pts in zip(query_ray_to_key_rays_dict.keys(), query_ray_to_key_rays_dict.values(), query_ray_to_ints_pts_dict.values()):
-                    key_rays_idx = torch.stack(key_rays_idx)
-                    ints_pts = torch.stack(ints_pts)
-                    self.rays_to_ints_pts_dict[query_ray_idx] = (key_rays_idx, ints_pts)
-                    num_valid_ints_pts.append(len(ints_pts))
-                # # number statistics of valid intersection points
-                # plt.hist(np.array(num_valid_ints_pts), bins=50, color='skyblue', alpha=1, log=True)
-                # plt.title('Distribution of Intersection Points')
-                # plt.xlabel('Number of Intersection Points')
-                # plt.ylabel('Frequency')
-                # plt.show()
+            if for_vis:
+                for query_ray_idx, key_sensor_rays_idx, bg_samples_list in zip(query_ray_to_key_rays_dict.keys(), query_ray_to_key_rays_dict.values(), query_ray_to_bg_samples_dict.values()):
+                    key_sensor_rays_idx = torch.stack(key_sensor_rays_idx)
+                    bg_samples = torch.stack(bg_samples_list)
+                    self.rays_to_ints_pts_dict[query_ray_idx] = (key_sensor_rays_idx, bg_samples)
                 return self.rays_to_ints_pts_dict
             else:
-                if len(query_ray_to_ints_pts_dict) == 0:
+                if len(query_ray_to_bg_samples_dict) == 0:
                     return None, None
-                query_ray_samples = []
-                ints_pts_samples = []
-                for query_ray_idx, ints_pts in query_ray_to_ints_pts_dict.items():
-                    ints_pts = torch.stack(ints_pts)
-                    # save query ray samples: [query ray index, number of intersection points]
-                    query_ray_samples.append([query_ray_idx, len(ints_pts)])
-                    # save intersection points samples: [x, y, z, ts, occ_label]
-                    ints_pts_samples.append(ints_pts)
-                query_ray_samples = np.vstack(query_ray_samples)
-                ints_pts_samples = torch.vstack(ints_pts_samples).numpy()
-                return query_ray_samples, ints_pts_samples
+                ray_samples_save = []
+                bg_samples_save = []
+                for query_ray_idx, bg_samples_list in query_ray_to_bg_samples_dict.items():
+                    bg_samples = torch.stack(bg_samples_list)
+                    # save query ray samples: [query ray index, number of background points]
+                    ray_samples_save.append([query_ray_idx, len(bg_samples)])
+                    # save background points samples: [x, y, z, ts, occ_label]
+                    bg_samples_save.append(bg_samples)
+                    # TODO: statistics, global param, for histogram
+                    num_bg_samples_per_ray.append(len(bg_samples))
+                    num_occ_ray = torch.sum(bg_samples[:, -1] == 2)
+                    num_free_ray = torch.sum(bg_samples[:, -1] == 1)
+                    # TODO: statistics, occ percentage per ray
+                    num_occ_percentage_per_ray.append((num_occ_ray / (num_occ_ray + num_free_ray)) * 100)
+                # TODO: statistics, num of unk, free, occ in a scan
+                num_unk_free_occ_per_scan.append(torch.tensor([num_unk, num_free, num_occ]))
+                ray_samples_save = np.vstack(ray_samples_save)
+                bg_samples_save = torch.vstack(bg_samples_save).numpy()
+                return ray_samples_save, bg_samples_save
+
+
+def load_rays(nusc, sd_tok_query, args, for_vis:bool):
+    sample_data_query = nusc.get("sample_data", sd_tok_query)
+    sample_query = nusc.get("sample", sample_data_query['sample_token'])
+    # query lidar frame [t]; key lidar frame [t-1]
+    sd_tok_key_prev_list, fill_flag_prev = get_sample_tok_list(sample_query, 'prev', num_samples=args.num_key_samples / 2, every_k_samples=args.every_k_samples)
+    sd_tok_key_next_list, fill_flag_next = get_sample_tok_list(sample_query, 'next', num_samples=args.num_key_samples / 2, every_k_samples=args.every_k_samples)
+    sd_tok_key_list = sd_tok_key_prev_list[::-1] + sd_tok_key_next_list  # -0.5, ..., -0.1, 0.1, ..., 0.5
+
+    # get query rays
+    org_query, pts_query, ts_query, filter_mask_query = get_transformed_pcd(nusc, sd_tok_query, sd_tok_query, args.max_range)
+    query_rays = QueryRays(org_query, pts_query, ts_query)
+    # get key rays
+    key_rays_list = []
+    ray_ints_idx_list = []
+    ray_parallel_idx_list = []
+    mos_labels_key_list = []
+    for sd_tok_key in sd_tok_key_list:
+        org_key, pts_key, ts_key, filter_mask_key = get_transformed_pcd(nusc, sd_tok_query, sd_tok_key, args.max_range)
+        key_rays = KeyRays(org_key, pts_key, ts_key)
+        key_rays_list.append(key_rays)
+        ray_ints_idx, ray_parallel_idx = key_rays.find_ints(query_rays, args)
+        ray_ints_idx_list.append(ray_ints_idx)
+        ray_parallel_idx_list.append(ray_parallel_idx)
+        if for_vis:  # load mos labels
+            mos_labels_key = load_mos_labels(nusc, sd_tok_key, filter_mask_key)
+            mos_labels_key_list.append(mos_labels_key)
+
+    if for_vis:  # load mos labels
+        mos_labels_query = load_mos_labels(nusc, sd_tok_query, filter_mask_query)
+        return query_rays, key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, mos_labels_query, mos_labels_key_list
+    else:
+        return query_rays, key_rays_list, ray_ints_idx_list, ray_parallel_idx_list
 
 
 if __name__ == '__main__':
@@ -600,57 +647,78 @@ if __name__ == '__main__':
     nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
     # get query rays and key rays
     open3d_vis = False
-    max_range = 70
-    max_dis_error = 0.05  # 1cm at max measurement range
-    max_ang_error = np.rad2deg(max_dis_error / max_range)  # max_dis_error = max_range * max_ang_error
-    occ_thrd = 0.10  # both for occ label threshold and near intersection threshold
 
-    # TODO: loop, multi-processing
-    num_valid_samples = 0
-    for sample_idx, sample_query in tqdm(enumerate(nusc.sample)):
-        # query lidar frame [t]; key lidar frame [t-1]
-        sd_tok_query = sample_query['data']['LIDAR_TOP']
-        sd_tok_key_prev_list, fill_flag_prev = get_sample_tok_list(sample_query, 'prev', num_sample=5, every_k_sample=2)
-        sd_tok_key_next_list, fill_flag_next = get_sample_tok_list(sample_query, 'next', num_sample=5, every_k_sample=2)
-        sd_tok_key_list = sd_tok_key_prev_list[::-1] + sd_tok_key_next_list  # -0.5, ..., -0.1, 0.1, ..., 0.5
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max_range", type=float, default=70, help="max measurement range of lidar")
+    parser.add_argument("--max_dis_error", type=float, default=0.05, help="distance error at max measurement range")
+    parser.add_argument("--occ_thrd", type=float, default=0.10, help="consider space occupied beyond observed point")
+    parser.add_argument("--num_key_samples", type=int, default=10, help="number of key samples")
+    parser.add_argument("--every_k_samples", type=int, default=2, help="select a sample every k samples")
+    args = parser.parse_args()
 
-        # get original data
-        org_query, pts_query, ts_query, mos_labels_query = get_transformed_pcd(nusc, sd_tok_query, sd_tok_query, max_range=max_range)
-        query_rays = QueryRays(org_query, pts_query, ts_query)
-        key_rays_list = []
-        mos_labels_key_list = []
-        ray_ints_idx_list = []
-        for sd_tok_key in sd_tok_key_list:
-            org_key, pts_key, ts_key, mos_labels_key = get_transformed_pcd(nusc, sd_tok_query, sd_tok_key, max_range=max_range)
-            key_rays = KeyRays(org_key, pts_key, ts_key)
-            ray_ints_idx = key_rays.find_ints(query_rays, 90 - max_ang_error)
-            ray_ints_idx_list.append(ray_ints_idx)
-            key_rays_list.append(key_rays)
-            mos_labels_key_list.append(mos_labels_key)
+    # open3d visualization
+    if open3d_vis:
+        sd_tok_vis = 'b6e7ff91eb684ae8b24f42eb04069a18'
+        query_rays, key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, mos_labels_query, mos_labels_key_list = load_rays(nusc, sd_tok_vis, args, for_vis=True)
+        rays_to_ints_pts_dict = query_rays.cal_ints_points(key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, args, for_vis=True)
+        # visualization
+        draw_dynamic_rays(query_rays, key_rays_list, rays_to_ints_pts_dict, mos_labels_query, mos_labels_key_list)
+        # # TODO: save dict labels
+        # bg_label_dir = os.path.join(nusc.dataroot, 'bg_labels', nusc.version)
+        # os.makedirs(bg_label_dir, exist_ok=True)
+        # bg_label_path = os.path.join(bg_label_dir, sd_tok_query + "_bg.pickle")
+        # with open(bg_label_path, 'wb') as file:
+        #     pickle.dump(rays_to_ints_pts_dict, file)
+        # with open(bg_label_path, 'rb') as file:
+        #     load_label = pickle.load(file)
+    else:
+        num_valid_samples = 0
+        num_bg_samples_per_ray = []  # for histgram visualization
+        num_unk_free_occ_per_scan = []
+        num_occ_percentage_per_ray = []
+        for sample_idx, sample_query in tqdm(enumerate(nusc.sample)):
+            # get rays
+            sd_tok_query = sample_query['data']['LIDAR_TOP']
+            query_rays, key_rays_list, ray_ints_idx_list, ray_parallel_idx_list = load_rays(nusc, sd_tok_query, args, for_vis=False)
 
-        if open3d_vis:
-            rays_to_ints_pts_dict = query_rays.cal_ints_points(key_rays_list, occ_thrd)
-            draw_dynamic_rays(query_rays, key_rays_list, rays_to_ints_pts_dict, mos_labels_query, mos_labels_key_list)
-            # # TODO: save dict labels
-            # bg_label_dir = os.path.join(nusc.dataroot, 'bg_labels', nusc.version)
-            # os.makedirs(bg_label_dir, exist_ok=True)
-            # bg_label_path = os.path.join(bg_label_dir, sd_tok_query + "_bg.pickle")
-            # with open(bg_label_path, 'wb') as file:
-            #     pickle.dump(rays_to_ints_pts_dict, file)
-            # with open(bg_label_path, 'rb') as file:
-            #     load_label = pickle.load(file)
-        else:
-            query_ray_samples, ints_pts_samples = query_rays.cal_ints_points(key_rays_list, occ_thrd, ray_ints_idx_list)
-            if query_ray_samples is not None and ints_pts_samples is not None:
+            # calculate intersection points
+            ray_samples_save, bg_samples_save = query_rays.cal_ints_points(key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, args, for_vis=False)
+            assert np.sum(ray_samples_save[:, -1]) == len(bg_samples_save)
+            if ray_samples_save is not None and bg_samples_save is not None:
                 num_valid_samples += 1
                 bg_label_dir = os.path.join(nusc.dataroot, 'bg_labels', nusc.version)
                 os.makedirs(bg_label_dir, exist_ok=True)
-                bg_label_path = os.path.join(bg_label_dir, sd_tok_query + "_bg_points.npy")
-                ints_pts_samples.tofile(bg_label_path)
+                bg_label_path = os.path.join(bg_label_dir, sd_tok_query + "_bg_samples.npy")
+                bg_samples_save.tofile(bg_label_path)
                 ray_samples_path = os.path.join(bg_label_dir, sd_tok_query + "_ray_samples.npy")
-                query_ray_samples.tofile(ray_samples_path)
+                ray_samples_save.tofile(ray_samples_path)
             else:
                 print(f"Sample data tok {sd_tok_query}, index {sample_idx} do not have valid background points")
+        print(f"Number of valid samples: {num_valid_samples}")
+
+        # number statistics of backgroudn sample points
+        plt.figure()
+        plt.hist(np.array(num_bg_samples_per_ray), bins=50, color='skyblue', alpha=1, log=True)
+        plt.title('Distribution of Background Samples')
+        plt.xlabel('Number of Background Points')
+        plt.ylabel('Frequency (Ray Samples)')
+        plt.savefig('./background samples distribution.jpg')
+
+        # number statistics of backgroudn sample points
+        plt.figure()
+        plt.hist(np.array(num_occ_percentage_per_ray), bins=100, color='lightsalmon', alpha=1, log=True)
+        plt.title('Distribution of Occ Percentage')
+        plt.xlabel('Occ Percentage (/Occ + Free)')
+        plt.ylabel('Frequency (Ray Samples)')
+        plt.savefig('./occ percentage distribution.jpg')
+
+        # ratio of unk, free, occ
+        num_unk_free_occ = torch.stack(num_unk_free_occ_per_scan).numpy()
+        np.savetxt("./number of unk free occ.txt", num_unk_free_occ, fmt='%d')
+
+
+
+
 
 
     # #################### calculate ray intersection points: solution-1 ####################
@@ -690,22 +758,3 @@ if __name__ == '__main__':
 
     # TODO: torch.where(condition) is identical to torch.nonzero(condition, as_tuple=True)
     # TODO: matmul will cost too much cuda memory
-    # def find_ints(self, key_rays_list):
-    #     query_org_vec_list = []
-    #     key_rays_dir_list = []
-    #     for key_rays in key_rays_list:
-    #         # query_org_vec
-    #         query_org_vec = key_rays.get_query_org_vec(self.ray_start, self.ray_size)
-    #         query_org_vec_list.append(query_org_vec)
-    #         # key_rays_dir
-    #         key_rays_dir = key_rays.get_ray_dir()
-    #         key_rays_dir_list.append(key_rays_dir)
-    #     # calculate norm vector of reference plane (query_rays_dir; query_org -> key_org)
-    #     query_org_vec = torch.cat(query_org_vec_list, dim=0)
-    #     query_ray_dir = self.get_ray_dir().repeat(len(key_rays_list), 1)
-    #     ref_plane_norm = torch.cross(query_ray_dir, query_org_vec)  # unit vector: (rays_size * key_rays_size, 3)
-    #     # calculate cos value of key_rays to reference plane
-    #     key_rays_dir = torch.cat(key_rays_dir_list, dim=0).T
-    #     key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir)
-    #     ints_rays_idx = torch.where(torch.abs(key_rays_to_ref_plane) <= np.cos(np.deg2rad(89.99999)))
-    #     return ints_rays_idx
