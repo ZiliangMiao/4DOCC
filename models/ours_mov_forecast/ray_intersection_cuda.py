@@ -515,7 +515,7 @@ class QueryRays(object):
             ints_pts = self.ray_start + q.reshape(-1, 1) * self.get_ray_dir()[query_rays_ints_idx]
 
             # calculate occupancy label of the ints pts
-            ints_labels = torch.zeros(len(ints_pts))  # 0: unknown, 1: free, 2:occupied
+            ints_labels = torch.zeros(len(ints_pts)).cuda()  # 0: unknown, 1: free, 2:occupied
             key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_rays_ints_idx])
             key_ints_depth = key_rays.get_ray_depth(ints_pts)
             key_ints_depth_res = key_ints_depth - key_ray_depth
@@ -535,7 +535,6 @@ class QueryRays(object):
             # TODO: parallel rays (intersection rays contain parallel rays)
             query_rays_para_idx = ray_parallel_idx_list[key_sensor_idx][0]
             key_rays_para_idx = ray_parallel_idx_list[key_sensor_idx][1]
-
             proj_para_depth = torch.sum(key_rays.get_ray_end()[key_rays_para_idx] * query_rays.get_ray_dir()[query_rays_para_idx], dim=1)  # torch不能对二维tensor求点积, 对应位置元素相乘再相加
             proj_para_pts = torch.mul(proj_para_depth.reshape(-1, 1), query_rays.get_ray_dir()[query_rays_para_idx])
             proj_depth_residual = proj_para_depth - self.get_ray_depth(self.ray_end[query_rays_para_idx])
@@ -547,7 +546,7 @@ class QueryRays(object):
             key_rays_para_same_idx = key_rays_para_idx[torch.where(para_same_mask)]
             num_para_same_rays = len(query_rays_para_same_idx)
             ints_pts_para_same = proj_para_pts[para_same_mask]
-            ints_labels_para_same = torch.full((num_para_same_rays, 1), 2)
+            ints_labels_para_same = torch.full((num_para_same_rays, 1), 2).cuda()
 
             # TODO: logic 2, if depth residual far more than 0
             para_valid_mask = proj_depth_residual > args.max_dis_error
@@ -555,15 +554,15 @@ class QueryRays(object):
             key_rays_para_valid_idx = key_rays_para_idx[torch.where(para_valid_mask)]
             num_para_valid_rays = len(query_rays_para_valid_idx)
             ints_pts_para_valid_occ = proj_para_pts[para_valid_mask]
-            ints_labels_para_valid_occ = torch.full((num_para_valid_rays, 1), 2)
+            ints_labels_para_valid_occ = torch.full((num_para_valid_rays, 1), 2).cuda()
             ints_pts_para_valid_free = (proj_para_pts[para_valid_mask] + self.ray_end[query_rays_para_valid_idx]) / 2
-            ints_labels_para_valid_free = torch.full((num_para_valid_rays, 1), 1)
+            ints_labels_para_valid_free = torch.full((num_para_valid_rays, 1), 1).cuda()
             # TODO: logic 3, if depth residual far less than 0 -> unknown label, not used now
 
             # concat to bg points with labels
             bg_pts = torch.cat((ints_pts_valid, ints_pts_para_same, ints_pts_para_valid_occ, ints_pts_para_valid_free), dim=0).cpu()
             bg_ts = torch.full((num_ints_valid_rays + num_para_same_rays + num_para_valid_rays * 2, 1), key_rays.get_ray_ts())
-            bg_labels = torch.cat((ints_labels_valid, ints_labels_para_same, ints_labels_para_valid_occ, ints_labels_para_valid_free), dim=0)
+            bg_labels = torch.cat((ints_labels_valid, ints_labels_para_same, ints_labels_para_valid_occ, ints_labels_para_valid_free), dim=0).cpu()
             bg_samples = torch.cat((bg_pts, bg_ts, bg_labels), dim=1)
 
             # statistics
