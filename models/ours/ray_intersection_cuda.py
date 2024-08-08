@@ -557,6 +557,7 @@ class QueryRays(object):
             ints_labels_para_valid_occ = torch.full((num_para_valid_rays, 1), 2).cuda()
             ints_pts_para_valid_free = (proj_para_pts[para_valid_mask] + self.ray_end[query_rays_para_valid_idx]) / 2
             ints_labels_para_valid_free = torch.full((num_para_valid_rays, 1), 1).cuda()
+
             # TODO: logic 3, if depth residual far less than 0 -> unknown label, not used now
 
             # concat to bg points with labels
@@ -642,10 +643,15 @@ def load_rays(nusc, sd_tok_query, args, for_vis:bool):
 
 
 if __name__ == '__main__':
+    # tf32 core
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision('high')
+
     # load nusc dataset
     nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
     # get query rays and key rays
-    open3d_vis = False
+    open3d_vis = True
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--max_range", type=float, default=70, help="max measurement range of lidar")
@@ -657,7 +663,7 @@ if __name__ == '__main__':
 
     # open3d visualization
     if open3d_vis:
-        sd_tok_vis = 'b6e7ff91eb684ae8b24f42eb04069a18'
+        sd_tok_vis = '0b4506df6e3c4e2ba771c81711c066b1'
         query_rays, key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, mos_labels_query, mos_labels_key_list = load_rays(nusc, sd_tok_vis, args, for_vis=True)
         rays_to_ints_pts_dict = query_rays.cal_ints_points(key_rays_list, ray_ints_idx_list, ray_parallel_idx_list, args, for_vis=True)
         # visualization
@@ -687,8 +693,8 @@ if __name__ == '__main__':
                 num_valid_samples += 1
                 bg_label_dir = os.path.join(nusc.dataroot, 'bg_labels', nusc.version)
                 os.makedirs(bg_label_dir, exist_ok=True)
-                bg_label_path = os.path.join(bg_label_dir, sd_tok_query + "_bg_samples.npy")
-                bg_samples_save.tofile(bg_label_path)
+                bg_samples_path = os.path.join(bg_label_dir, sd_tok_query + "_bg_samples.npy")
+                bg_samples_save.tofile(bg_samples_path)
                 ray_samples_path = os.path.join(bg_label_dir, sd_tok_query + "_ray_samples.npy")
                 ray_samples_save.tofile(ray_samples_path)
             else:
@@ -703,7 +709,7 @@ if __name__ == '__main__':
         plt.ylabel('Frequency (Ray Samples)')
         plt.savefig('./background samples distribution.jpg')
 
-        # number statistics of backgroudn sample points
+        # number statistics of background sample points
         plt.figure()
         plt.hist(np.array(num_occ_percentage_per_ray), bins=100, color='lightsalmon', alpha=1, log=True)
         plt.title('Distribution of Occ Percentage')

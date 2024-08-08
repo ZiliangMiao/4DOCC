@@ -4,7 +4,7 @@ mode: "pretrain"
 data:
   dataset_name: "nuscenes"  # "kitti", "argo"
   dataset_pct: 100  # not used now; percentage of data used for training
-  voxel_size: 1.0  # voxel size
+  voxel_size: 0.1  # voxel size
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
   time_interval: 0.05
   t_scans: 6  # number of input point cloud scan 6, 9, 6 (num of input scans = output scans)

@@ -2,6 +2,12 @@ import torch
 import numpy as np
 
 def set_deterministic(random_seed=666):
+    # tf32 core
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision('high')
+
+    # deterministic
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     np.random.seed(random_seed)
