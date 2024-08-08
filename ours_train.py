@@ -142,22 +142,23 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     # TODO: test bg labels
-    # nusc = NuScenes(dataroot=cfg["dataset"]["nuscenes"]["root"], version=cfg["dataset"]["nuscenes"]["version"])
-    # nuscenes = nusc_dataset.NuscSequentialDataset(cfg, nusc, "train")
-    # (ref_sd_tok, num_rays_all, num_bg_samples_all), pcds_4d, ray_to_bg_samples_dict = nuscenes.__getitem__(0)
-    #
-    # # number statistics of background sample points
-    # num_occ_percentage_per_ray = []
-    # for ray_idx, bg_samples in ray_to_bg_samples_dict.items():
-    #     num_occ_ray = np.sum(bg_samples[:, -1] == 2)
-    #     num_free_ray = np.sum(bg_samples[:, -1] == 1)
-    #     num_occ_percentage_per_ray.append((num_occ_ray / (num_occ_ray + num_free_ray)) * 100)
-    # plt.figure()
-    # plt.hist(np.array(num_occ_percentage_per_ray), bins=10, color='lightsalmon', alpha=1, log=True)
-    # plt.title('Distribution of Occ Percentage')
-    # plt.xlabel('Occ Percentage (/Occ + Free)')
-    # plt.ylabel('Frequency (Ray Samples)')
-    # plt.savefig('./occ percentage distribution.jpg')
+    nusc = NuScenes(dataroot=cfg["dataset"]["nuscenes"]["root"], version=cfg["dataset"]["nuscenes"]["version"])
+    nuscenes = nusc_dataset.NuscSequentialDataset(cfg, nusc, "train")
+    (ref_sd_tok, num_rays_all, num_bg_samples_all), pcds_4d, ray_to_bg_samples_dict = nuscenes.__getitem__(0)
+    test = 1
+
+    # number statistics of background sample points
+    num_occ_percentage_per_ray = []
+    for ray_idx, bg_samples in ray_to_bg_samples_dict.items():
+        num_occ_ray = np.sum(bg_samples[:, -1] == 2)
+        num_free_ray = np.sum(bg_samples[:, -1] == 1)
+        num_occ_percentage_per_ray.append((num_occ_ray / (num_occ_ray + num_free_ray)) * 100)
+    plt.figure()
+    plt.hist(np.array(num_occ_percentage_per_ray), bins=10, color='lightsalmon', alpha=1, log=True)
+    plt.title('Distribution of Occ Percentage')
+    plt.xlabel('Occ Percentage (/Occ + Free)')
+    plt.ylabel('Frequency (Ray Samples)')
+    plt.savefig('./occ percentage distribution.jpg')
 
     # training
     main(cfg)
