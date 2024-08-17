@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from pytorch_lightning import LightningDataModule
 
-from datasets.mos4d.utils import load_poses, load_calib, load_files
+from utils.load_files import load_poses, load_calib, load_files
 from datasets.mos4d.augmentation import (
     shift_point_cloud,
     rotate_point_cloud,

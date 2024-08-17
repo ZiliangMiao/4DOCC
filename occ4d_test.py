@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from datasets.occ4d.common import MinkCollateFn
 from models.occ4d.models import MinkOccupancyForecastingNetwork
 from utils.vis.vis_occ import get_occupancy_as_pcd
-from utils.evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
+from utils.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
 from utils.deterministic import set_deterministic
 
 from torch.utils.cpp_extension import load

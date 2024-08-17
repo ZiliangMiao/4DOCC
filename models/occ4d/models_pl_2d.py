@@ -15,7 +15,7 @@ import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 
-from utils.evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
+from utils.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
 
 # JIT
 from torch.utils.cpp_extension import load

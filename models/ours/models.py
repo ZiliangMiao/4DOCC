@@ -1,229 +1,150 @@
 import os
-import yaml
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 import numpy as np
 
 from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
-from models.ours.metrics import ClassificationMetrics
+from utils.metrics import ClassificationMetrics
 from datasets.ours.nusc import NuscSequentialDataset
 
-#######################################
-# Modules
-#######################################
-
-class MinkUNet14(MinkUNetBase):
-    BLOCK = BasicBlock
-    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
-    # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
-    PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
-    INIT_DIM = 8
-
-class MotionEncoder(nn.Module):
-    def __init__(self, cfg: dict, n_classes: int):
-        super().__init__()
-        # backbone network
-        self.MinkUNet = MinkUNet14(in_channels=1, out_channels=n_classes, D=4)  # D=4: spatial dimension is 4, 4D UNet
-
-        # TODO: quantization resolution
-        dx = dy = dz = cfg["data"]["quant_size"]
-        dt = 1  # TODO: should be cfg["data"]["time_interval"], handle different lidar frequency of kitti and nuscenes
-        self.quant = torch.Tensor([dx, dy, dz, dt])
-
-        # TODO: feature map shape
-        self.scene_bbox = self.cfg["data"]["scene_bbox"]
-        featmap_size = cfg["data"]["featmap_size"]
-        t_input = cfg["data"]["n_input"]
-        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / featmap_size)
-        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / featmap_size)
-        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / featmap_size)
-        b_size = cfg["model"]["batch_size"]
-        self.featmap_shape = [b_size, x_width, y_length, z_height, t_input]
-
-    def forward(self, input_4d_pcds):
-        # quantized 4d pcd and initialized features
-        self.quant = self.quant.type_as(input_4d_pcds[0])
-        quant_4d_pcds = [torch.div(pcd, self.quant) for pcd in input_4d_pcds]
-        feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in input_4d_pcds]
-
-        # sparse collate, tensor field, net calculation
-        coords, feats = ME.utils.sparse_collate(quant_4d_pcds, feats)
-        tensor_field = ME.TensorField(features=feats, coordinates=coords,
-                                      quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
-        sparse_input = tensor_field.sparse()
-        sparse_output = self.MinkUNet(sparse_input)
-
-        # # TODO: point-wise sparse output
-        # point_wise_feats = sparse_output.slice(tensor_field)
-        # point_wise_feats.coordinates[:, 1:] = torch.mul(point_wise_feats.coordinates[:, 1:], quant)
-
-        # TODO: dense feature map output
-        featmap_shape = torch.Size([self.featmap_shape[0], 1, self.featmap_shape[1], self.featmap_shape[2], self.featmap_shape[3], self.featmap_shape[4]])
-        dense_featmap, _, _ = sparse_output.dense(shape=featmap_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
-        return dense_featmap
-
-class BackgroundFieldMLP(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_size, n_blocks, points_factor=1.0, **kwargs):
-        super().__init__()
-
-        dims = [hidden_size] + [hidden_size for _ in range(n_blocks)] + [out_dim]
-        self.num_layers = len(dims)
-
-        for l in range(self.num_layers - 1):
-            lin = nn.Linear(dims[l], dims[l + 1])
-            setattr(self, "lin" + str(l), lin)
-
-        self.fc_c = nn.ModuleList(
-            [nn.Linear(in_dim, hidden_size) for i in range(self.num_layers - 1)]
-        )
-        self.fc_p = nn.Linear(3, hidden_size)
-
-        self.activation = nn.Softplus(beta=100)  # TODO: what is soft plus
-
-        self.points_factor = points_factor
-
-    def forward(self, points, point_feats):
-        x = self.fc_p(points) * self.points_factor
-        for l in range(self.num_layers - 1):
-            x = x + self.fc_c[l](point_feats)
-            lin = getattr(self, "lin" + str(l))
-            x = lin(x)
-            if l < self.num_layers - 2:
-                x = self.activation(x)
-        return x
 
 #######################################
 # Lightning Module
 #######################################
 
+
 class MotionPretrainNetwork(LightningModule):
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg_model: dict, train_flag: bool):
         super().__init__()
         # parameters
-        self.save_hyperparameters(cfg)
-        self.cfg = cfg
-        self.n_input = cfg["data"]["n_input"]
+        self.save_hyperparameters(cfg_model)
+        self.cfg_model = cfg_model
+        self.n_bg_cls = 2
 
-        # learning rate
-        if self.cfg["mode"] != "test":
-            self.lr_start = self.hparams["model"]["lr_start"]
-            self.lr_epoch = cfg["model"]["lr_epoch"]
-            self.lr_decay = cfg["model"]["lr_decay"]
-            self.weight_decay = cfg["model"]["weight_decay"]
+        # encoder and decoder
+        self.encoder = MotionEncoder(self.cfg_model, self.n_bg_cls)
+        self.pe = PositionalEncoding(feat_dim=self.cfg_model["feat_dim"], pos_dim=self.cfg_model['pos_dim'])
+        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 128, 64, 32, 16, self.n_bg_cls])
 
-        self.n_occ_class = 2
-        self.feat_dim = cfg["model"]["feat_dim"]
-        self.encoder = MotionEncoder(cfg, self.n_occ_class)
-        self.decoder = BackgroundFieldMLP(in_dim=self.feat_dim, out_dim=self.feat_dim + 1, hidden_size=16, n_blocks=5)
+        # metrics
+        self.ClassificationMetrics = ClassificationMetrics(self.n_bg_cls, ignore_index=[])
 
-
-        self.ClassificationMetrics = ClassificationMetrics(self.n_occ_class, ignore_index=[])
-
-        # init
+        # pytorch lightning training output
         self.training_step_outputs = []
         self.validation_step_outputs = []
 
-        # loss calculation
-        self.softmax = nn.Softmax(dim=1)
-        weight = [1.0 for i in range(self.n_occ_class)]
-        weight = torch.Tensor([w / sum(weight) for w in weight])  # ignore unknown class when calculate loss
-        self.loss = nn.NLLLoss(weight=weight)
+        # loss
+        self.loss = nn.NLLLoss(weight=torch.Tensor(self.cfg_model['bg_cls_weight']))
 
-        # save mos predictions
-        if self.cfg["mode"] == "test":
-            model_dataset = self.cfg["model"]["model_dataset"]
-            model_name = self.cfg["model"]["model_name"]
-            model_version = self.cfg["model"]["model_version"]
-            test_epoch = self.cfg["model"]["test_epoch"]
-            model_dir = os.path.join("./logs", "mos4d", model_dataset, model_name, model_version)
-            self.mos_pred_dir = os.path.join(model_dir, "results", f"epoch_{test_epoch}", "predictions", "mos_pred")
-            os.makedirs(self.mos_pred_dir, exist_ok=True)
+        # save predictions
+        if not train_flag:  # TODO: modify the trained model name, and the test directory
+            model_dataset = self.cfg_model["model_dataset"]
+            test_epoch = self.cfg_model["test_epoch"]
+            model_dir = os.path.join("./logs", "ours", model_dataset)
+            self.bg_pred_dir = os.path.join(model_dir, "results", f"epoch_{test_epoch}", "predictions", "ours_pred")
+            os.makedirs(self.bg_pred_dir, exist_ok=True)
+
+    def forward(self, batch):
+        # unfold batch: [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
+        meta_batch, pcds_batch, bg_samples_batch = batch
+
+        # encoder
+        sparse_featmap = self.encoder(pcds_batch)
+
+        # get bg samples
+        bg_labels_batch = []
+        bg_feats_batch = []
+        for batch_idx, bg_samples_dict in enumerate(bg_samples_batch):
+            # point-wise features
+            coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
+            feats = sparse_featmap.features_at(batch_index=batch_idx)
+            ref_time_mask = coords[:, -1] == 0
+            query_points_idx = np.array(list(bg_samples_dict.keys()))
+            query_feats = feats[ref_time_mask][query_points_idx]
+            # query_points = pcds_batch[batch_idx][query_points_idx]
+            # query_points_with_quant_error = coords[ref_time_mask][query_points_idx]
+
+            # bg_samples
+            bg_samples = torch.from_numpy(np.concatenate(list(bg_samples_dict.values()))).cuda()
+            bg_points_4d = bg_samples[:, 0:self.cfg_model['pos_dim']]
+            bg_labels = bg_samples[:, -1] - 1  # TODO: 1:free, 2:occ -> 0: free, 1: occ
+
+            # bg points positional encoding
+            num_bg_samples_per_ray_list = meta_batch[batch_idx][3]
+            pe_feats = self.pe(bg_points_4d)
+            query_feats = torch.repeat_interleave(query_feats, torch.tensor(num_bg_samples_per_ray_list).cuda(), dim=0)
+            bg_feats = query_feats + pe_feats
+
+            # collate to batch
+            bg_feats_batch.append(bg_feats)
+            bg_labels_batch.append(bg_labels)
+        bg_feats = torch.cat(bg_feats_batch, dim=0)
+        bg_labels = torch.cat(bg_labels_batch, dim=0)
+        # decoder
+        bg_probs = self.decoder(bg_feats)  # logits -> softmax -> probs
+        return bg_probs, bg_labels
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr_start, weight_decay=self.weight_decay)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=self.lr_epoch, gamma=self.lr_decay)
+        # TODO: will be call only at training stage, do not need 'train_flag'
+        lr_start = self.cfg_model["lr_start"]
+        lr_epoch = self.cfg_model["lr_epoch"]
+        lr_decay = self.cfg_model["lr_decay"]
+        weight_decay = self.cfg_model["weight_decay"]
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr_start, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
         return [optimizer], [scheduler]
 
-    def get_confusion_matrix(self, curr_feats_list, mos_labels):
-        pred_logits = torch.cat(curr_feats_list, dim=0).detach().cpu()
-        gt_labels = torch.cat(mos_labels, dim=0).detach().cpu()
-        conf_mat = self.ClassificationMetrics.compute_confusion_matrix(pred_logits, gt_labels)
-        return conf_mat
-
-    def save_mos_pred(self, pred_logits, mos_pred_file):
-        assert pred_logits is not list
-        # Set ignored classes to -inf to not influence softmax
-        ignore_idx = self.ignore_class_idx[0]
-        pred_logits[:, ignore_idx] = -float("inf")
-        pred_softmax = F.softmax(pred_logits, dim=1)
-        pred_labels = torch.argmax(pred_softmax, dim=1).type(torch.uint8).detach().cpu().numpy()
-        # save mos pred labels
-        pred_labels.tofile(mos_pred_file)
-
-    def get_loss(self, curr_feats_list, mos_labels: list):
-        # loop each batch data
-        for curr_feats in curr_feats_list:
-            curr_feats[:, self.ignore_class_idx] = -float("inf")
-        logits = torch.cat(curr_feats_list, dim=0)
-        softmax = self.softmax(logits)
-        log_softmax = torch.log(softmax.clamp(min=1e-8))
-        gt_labels = torch.cat(mos_labels, dim=0)
-        assert len(gt_labels) == len(logits)
-        loss = self.loss(log_softmax, gt_labels.long())  # dtype of label of torch.nllloss has to be torch.long
+    def get_loss(self, bg_probs, bg_labels):
+        bg_labels = bg_labels.long()
+        assert len(bg_labels) == len(bg_probs)
+        bg_prob_log = torch.log(bg_probs.clamp(min=1e-8))
+        loss = self.loss(bg_prob_log, bg_labels)  # dtype of torch.nllloss must be torch.long
         return loss
 
-    def forward(self, past_point_clouds: dict):
-        out = self.encoder(past_point_clouds)
-        # only output current timestamp
-        curr_coords_list = []
-        curr_feats_list = []
-        for feats, coords in zip(out.decomposed_features, out.decomposed_coordinates):
-            curr_time_mask = coords[:, -1] == (self.n_input - 1)
-            curr_feats = feats[curr_time_mask]
-            curr_coords = coords[curr_time_mask]
-            curr_coords_list.append(curr_coords)
-            curr_feats_list.append(curr_feats)
-        return (curr_coords_list, curr_feats_list)
-
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
-        # check state dict
-        # model_dict = self.state_dict()
+        # model_dict = self.state_dict()  # check state dict
 
-        # unfold batch
-        (ref_sd_tok, num_rays_all, num_bg_samples_all), pcds_4d, ray_to_bg_samples_dict = batch
-
-        # model forward
-        _, curr_feats_list = self.forward(pcds_4d)
-
-        # loss
-        loss = self.get_loss(curr_feats_list, mos_labels)
+        bg_probs, bg_labels = self.forward(batch)  # encoder & decoder
+        loss = self.get_loss(bg_probs, bg_labels)  # TODO: bg loss only
 
         # metrics
-        conf_mat = self.get_confusion_matrix(curr_feats_list, mos_labels)  # confusion matrix
-        tp, fp, fn = self.ClassificationMetrics.getStats(conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
+        conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
+        free_iou, occ_iou = self.ClassificationMetrics.get_iou(conf_mat)
+        free_acc, occ_acc = self.ClassificationMetrics.get_acc(conf_mat)
 
         # logging
-        self.log("train_loss", loss.item(), on_step=True, prog_bar=True, logger=True)
-        self.log("train_iou", iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.training_step_outputs.append({"train_loss": loss.item(), "confusion_matrix": conf_mat})
+        self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("free_iou", free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("occ_iou", occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("free_acc", free_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("occ_acc", occ_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.training_step_outputs.append({"loss": loss.item(), "confusion_matrix": conf_mat})
         torch.cuda.empty_cache()
         return loss
 
     def on_train_epoch_end(self):
         conf_mat_list = [output["confusion_matrix"] for output in self.training_step_outputs]
-        acc_conf_mat = torch.zeros(self.n_occ_class, self.n_occ_class)
+        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
         for conf_mat in conf_mat_list:
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
-        tp, fp, fn = self.ClassificationMetrics.getStats(acc_conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
-        self.log("train_iou_epoch", iou.item() * 100, on_epoch=True, logger=True)
+        # metrics in one epoch
+        tp, fp, fn = self.ClassificationMetrics.get_stats(acc_conf_mat)  # stat of current sample
+        iou = self.ClassificationMetrics.get_iou(tp, fp, fn)
+        free_iou = iou[0]
+        occ_iou = iou[1]
+        free_acc, occ_acc, acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
+        self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_occ_acc", occ_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
         # clean
         self.training_step_outputs = []
@@ -240,16 +161,26 @@ class MotionPretrainNetwork(LightningModule):
 
     def on_validation_epoch_end(self):
         conf_mat_list = self.validation_step_outputs
-        acc_conf_mat = torch.zeros(self.n_occ_class, self.n_occ_class)
+        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
         for conf_mat in conf_mat_list:
             acc_conf_mat = acc_conf_mat.add(conf_mat)
-        tp, fp, fn = self.ClassificationMetrics.getStats(acc_conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
-        self.log("val_iou", iou.item() * 100,  on_epoch=True, logger=True)
+        tp, fp, fn = self.ClassificationMetrics.get_stats(acc_conf_mat)  # stat of current sample
+        iou = self.ClassificationMetrics.get_iou(tp, fp, fn)[self.mov_class_idx]
+        self.log("val_iou", iou.item() * 100, on_epoch=True, logger=True)
 
         # clean
         self.validation_step_outputs = []
         torch.cuda.empty_cache()
+
+    def save_mos_pred(self, pred_logits, mos_pred_file):
+        assert pred_logits is not list
+        # Set ignored classes to -inf to not influence softmax
+        ignore_idx = self.ignore_class_idx[0]
+        pred_logits[:, ignore_idx] = -float("inf")
+        pred_softmax = F.softmax(pred_logits, dim=1)
+        pred_labels = torch.argmax(pred_softmax, dim=1).type(torch.uint8).detach().cpu().numpy()
+        # save mos pred labels
+        pred_labels.tofile(mos_pred_file)
 
     # func "predict_step" is called by "trainer.predict"
     def predict_step(self, batch: tuple, batch_idx):
@@ -260,54 +191,126 @@ class MotionPretrainNetwork(LightningModule):
         # network prediction
         curr_coords_list, curr_feats_list = self.forward(point_clouds)
         # loop batch data list
-        acc_conf_mat = torch.zeros(self.n_occ_class, self.n_occ_class)
+        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
         for i, (curr_feats, mos_label) in enumerate(zip(curr_feats_list, mos_labels)):
             # get ego mask
-            curr_time_mask = point_clouds[i][:, -1] == (self.n_input - 1)
+            curr_time_mask = point_clouds[i][:, -1] == (self.cfg_model["n_input"] - 1)
             ego_mask = NuscSequentialDataset.get_ego_mask(point_clouds[i][curr_time_mask])
             # save mos pred (with ego vehicle points)
-            mos_pred_file = os.path.join(self.mos_pred_dir, f"{sample_data_tokens[i]}_mos_pred.label")
+            mos_pred_file = os.path.join(self.bg_pred_dir, f"{sample_data_tokens[i]}_mos_pred.label")
             self.save_mos_pred(curr_feats, mos_pred_file)
             # compute confusion matrix (without ego vehicle points)
             conf_mat = self.get_confusion_matrix([curr_feats[~ego_mask]], [mos_label[~ego_mask]])
             acc_conf_mat = acc_conf_mat.add(conf_mat)
             # compute iou metric
-            tp, fp, fn = self.ClassificationMetrics.getStats(conf_mat)  # stat of current sample
-            iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
-            print(f"Validation Sample Index {i + batch_idx * batch_size}, Moving Object IoU w/o ego vehicle: {iou.item() * 100}")
+            tp, fp, fn = self.ClassificationMetrics.get_stats(conf_mat)  # stat of current sample
+            iou = self.ClassificationMetrics.get_iou(tp, fp, fn)[self.mov_class_idx]
+            print(
+                f"Validation Sample Index {i + batch_idx * batch_size}, Moving Object IoU w/o ego vehicle: {iou.item() * 100}")
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
 
-
-        # for batch_idx in range(len(batch[0])):
-        #     sample_data_token = sample_data_tokens[batch_idx]
-        #     mos_label = mos_labels[batch_idx].cpu().detach().numpy()
-        #     step = 0  # only evaluate the performance of current timestamp
-        #     coords = out.coordinates_at(batch_idx)
-        #     logits = out.features_at(batch_idx)
-        #
-        #     t = round(-step * self.dt_prediction, 3)
-        #     mask = coords[:, -1].isclose(torch.tensor(t))
-        #     masked_logits = logits[mask]
-        #     masked_logits[:, self.ignore_class_idx] = -float("inf")  # ingore: 0, i.e., unknown or noise
-        #
-        #     pred_softmax = F.softmax(masked_logits, dim=1)
-        #     pred_softmax = pred_softmax.detach().cpu().numpy()
-        #     assert pred_softmax.shape[1] == 3
-        #     assert pred_softmax.shape[0] >= 0
-        #     sum = np.sum(pred_softmax[:, 1:3], axis=1)
-        #     assert np.isclose(sum, np.ones_like(sum)).all()
-        #     moving_confidence = pred_softmax[:, 2]
-        #
-        #     # directly output the mos label, without any bayesian strategy (do not need confidences_to_labels.py file)
-        #     pred_label = np.ones_like(moving_confidence, dtype=np.uint8)  # notice: dtype of nusc labels are always uint8
-        #     pred_label[moving_confidence > 0.5] = 2
-        #     pred_label_dir = os.path.join(self.test_datapath, "4dmos_sekitti_pred", self.version)
-        #     os.makedirs(pred_label_dir, exist_ok=True)
-        #     pred_label_file = os.path.join(pred_label_dir, sample_data_token + "_mos_pred.label")
-        #     pred_label.tofile(pred_label_file)
-        # torch.cuda.empty_cache()
+#######################################
+# Modules
+#######################################
 
 
+class MinkUNet14(MinkUNetBase):
+    BLOCK = BasicBlock
+    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
+    # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
+    PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
+    INIT_DIM = 8
+
+
+class MotionEncoder(nn.Module):
+    def __init__(self, cfg_model: dict, n_classes: int):
+        super().__init__()
+        # backbone network
+        self.feat_dim = cfg_model["feat_dim"]
+        self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
+
+        # TODO: quantization resolution
+        dx = dy = dz = cfg_model["quant_size"]
+        dt = 1  # TODO: should be cfg_model["time_interval"], handle different lidar frequency of kitti and nuscenes
+        self.quant = torch.Tensor([dx, dy, dz, dt])
+
+        # TODO: feature map shape
+        self.scene_bbox = cfg_model["scene_bbox"]
+        featmap_size = cfg_model["featmap_size"]
+        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / featmap_size)
+        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / featmap_size)
+        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / featmap_size)
+        b_size = cfg_model["batch_size"]
+        self.featmap_shape = [b_size, x_width, y_length, z_height, cfg_model["n_input"]]
+
+    def forward(self, pcds_4d_batch):
+        # quantized 4d pcd and initialized features
+        self.quant = self.quant.type_as(pcds_4d_batch[0])
+        quant_4d_pcds = [torch.div(pcd, self.quant) for pcd in pcds_4d_batch]
+        feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in pcds_4d_batch]
+
+        # sparse collate, tensor field, net calculation
+        coords, feats = ME.utils.sparse_collate(quant_4d_pcds, feats)
+        tensor_field = ME.TensorField(features=feats, coordinates=coords,
+                                      quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
+        sparse_input = tensor_field.sparse()
+        sparse_output = self.MinkUNet(sparse_input)
+
+        # TODO: point-wise sparse feature output
+        sparse_featmap = sparse_output.slice(tensor_field)
+        sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
+
+        # TODO: dense feature map output
+        # featmap_shape = torch.Size([self.featmap_shape[0], 1, self.featmap_shape[1], self.featmap_shape[2], self.featmap_shape[3], self.featmap_shape[4]])
+        # dense_featmap, _, _ = sparse_output.dense(shape=featmap_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
+        return sparse_featmap
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, feat_dim, pos_dim):
+        # d_model是每个词embedding后的维度
+        super(PositionalEncoding, self).__init__()
+        self.feat_dim = feat_dim
+        self.pos_dim = pos_dim
+        # self.dropout = nn.Dropout(p=dropout)
+        # self.register_buffer('pe', pe)  # will not train this parameter -> use self.pe to call
+
+    def forward(self, bg_points_4d):
+        pe_xyzt = []
+        for i in range(self.pos_dim):
+            assert self.feat_dim % self.pos_dim == 0
+            i_dim = int(self.feat_dim / self.pos_dim)
+            pe_i = torch.zeros(len(bg_points_4d), i_dim).cuda()
+            position = bg_points_4d[:, i].unsqueeze(-1)
+            div_term = torch.exp(torch.arange(0, i_dim, 2).float() * (-math.log(10000.0) / i_dim)).cuda()
+            # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样
+            pe_i[:, 0::2] = torch.sin(position * div_term)
+            pe_i[:, 1::2] = torch.cos(position * div_term)
+            pe_xyzt.append(pe_i)
+            # self.dropout(pos_4d)
+        return torch.hstack(pe_xyzt)
+
+
+class BackgroundFieldMLP(nn.Module):
+    def __init__(self, in_dim, planes, **kwargs):
+        super().__init__()
+        self.block = nn.Sequential(OrderedDict([
+            ('linear0', nn.Linear(in_dim, planes[0])),
+            ('relu0', nn.ReLU(inplace=False)),
+            ('linear1', nn.Linear(planes[0], planes[1])),
+            ('relu1', nn.ReLU(inplace=False)),
+            ('linear2', nn.Linear(planes[1], planes[2])),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('linear3', nn.Linear(planes[2], planes[3])),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('linear4', nn.Linear(planes[3], planes[4])),
+            ('relu4', nn.ReLU(inplace=False)),
+            ('final', nn.Linear(planes[4], planes[5])),
+            ('softmax', nn.Softmax(dim=1)),
+        ]))
+
+    def forward(self, x):
+        return self.block(x)
 

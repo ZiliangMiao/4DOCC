@@ -1,43 +1,6 @@
 import torch
 import numpy as np
 
-def KittiPoint2nuScenes(point):
-    # nuscenes x = - (kitti y)
-    # nuscenes y = (kitti x)
-    # nuscenes z = (kitti z)
-    x, y, z = point
-    return np.array([-y, x, z], dtype=point.dtype)
-
-
-def KittiPoints2nuScenes(points):
-    # nuscenes x = - (kitti y)
-    # nuscenes y = (kitti x)
-    # nuscenes z = (kitti z)
-    xx, yy, zz = points[:, :3].T
-    return np.stack((-yy, xx, zz)).T
-
-
-def nuScenesPoints2Kitti(points):
-    # kitti x = (nuscenes y)
-    # kitti y = - (nuscenes x)
-    # kitti z = (nuscenes z)
-    xx, yy, zz = points[:, :3].T
-    return np.stack((yy, -xx, zz)).T
-
-
-def nuScenesVolume2Kitti(volume):
-    # kitti x = (nuscenes y)
-    # kitti y = - (nuscenes x)
-    # kitti z = (nuscenes z)
-    if torch.is_tensor(volume):
-        # NOTE: double checked how semantic kitti indexes the voxel grid
-        # it is (xi, yi, zi), which is why we only have to do flipping below
-        volume = torch.flip(volume, [-1])
-    else:
-        raise TypeError("Unsupported type for volume.")
-
-    return volume
-
 
 # A CUSTOMIZED COLLATION FUNCTION TO ACCOMMODATE THE FACT THAT
 # WE HAVE A DIFFERENT NUMBER OF POINTS FROM EVERY FRAME
@@ -151,8 +114,4 @@ def MinkCollateFn(batch):  # no map prior
             input_points_4d,
             output_origin,
             output_points)
-
-def get_argoverse2_split():
-    from av2.datasets.lidar.splits import TRAIN, TEST, VAL
-    return {'train': TRAIN, 'val': VAL, 'test': TEST}
 

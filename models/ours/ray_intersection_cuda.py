@@ -379,22 +379,22 @@ def get_global_pose(nusc, sd_token, inverse=False):
         pose = sensor_from_ego.dot(ego_from_global)
     return pose
 
-
-def filter_points(points, valid_range):
+def filter_points(points, scene_bbox):
     # nuscenes car: length (4.084 m), width (1.730 m), height (1.562 m)
     ego_mask = torch.logical_and(
         torch.logical_and(-0.865 <= points[:, 0], points[:, 0] <= 0.865),
         torch.logical_and(-1.5 <= points[:, 1], points[:, 1] <= 2.5),
     )
     inside_scene_bbox_mask = torch.logical_and(
-        torch.logical_and(-valid_range <= points[:, 0], points[:, 0] <= valid_range),
-        torch.logical_and(-valid_range <= points[:, 1], points[:, 1] <= valid_range),
+        torch.logical_and(scene_bbox[0] <= points[:, 0], points[:, 0] <= scene_bbox[3]),
+        torch.logical_and(scene_bbox[1] <= points[:, 1], points[:, 1] <= scene_bbox[4]),
+        # torch.logical_and(scene_bbox[2] <= points[:, 2], points[:, 2] <= scene_bbox[5])
     )
     mask = torch.logical_and(~ego_mask, inside_scene_bbox_mask)
     return points[mask], mask.cpu().numpy()
 
 
-def get_transformed_pcd(nusc, sd_token_ref, sd_token, max_range):
+def get_transformed_pcd(nusc, sd_token_ref, sd_token, scene_bbox):
     # sample data -> pcd
     sample_data = nusc.get("sample_data", sd_token)
     lidar_pcd = LidarPointCloud.from_file(f"{nusc.dataroot}/{sample_data['filename']}")  # [num_pts, x, y, z, i]
@@ -415,7 +415,7 @@ def get_transformed_pcd(nusc, sd_token_ref, sd_token, max_range):
     # intensity = torch.tensor(lidar_pcd.points[-1, :].T, dtype=torch.float32).cuda()
     lidar_pcd.transform(ref_from_curr)
     points_tf = torch.tensor(lidar_pcd.points[:3].T, dtype=torch.float32).cuda()  # curr point cloud, at {ref lidar} frame
-    points_tf, filter_mask = filter_points(points_tf, max_range)
+    points_tf, filter_mask = filter_points(points_tf, scene_bbox)
     return origin_tf, points_tf, ts_rela, filter_mask
 
 
@@ -617,7 +617,7 @@ def load_rays(nusc, sd_tok_query, args, for_vis:bool):
     sd_tok_key_list = sd_tok_key_prev_list[::-1] + sd_tok_key_next_list  # -0.5, ..., -0.1, 0.1, ..., 0.5
 
     # get query rays
-    org_query, pts_query, ts_query, filter_mask_query = get_transformed_pcd(nusc, sd_tok_query, sd_tok_query, args.max_range)
+    org_query, pts_query, ts_query, filter_mask_query = get_transformed_pcd(nusc, sd_tok_query, sd_tok_query, args.scene_bbox)
     query_rays = QueryRays(org_query, pts_query, ts_query)
     # get key rays
     key_rays_list = []
@@ -625,7 +625,7 @@ def load_rays(nusc, sd_tok_query, args, for_vis:bool):
     ray_parallel_idx_list = []
     mos_labels_key_list = []
     for sd_tok_key in sd_tok_key_list:
-        org_key, pts_key, ts_key, filter_mask_key = get_transformed_pcd(nusc, sd_tok_query, sd_tok_key, args.max_range)
+        org_key, pts_key, ts_key, filter_mask_key = get_transformed_pcd(nusc, sd_tok_query, sd_tok_key, args.scene_bbox)
         key_rays = KeyRays(org_key, pts_key, ts_key)
         key_rays_list.append(key_rays)
         ray_ints_idx, ray_parallel_idx = key_rays.find_ints(query_rays, args)
@@ -654,7 +654,7 @@ if __name__ == '__main__':
     open3d_vis = True
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max_range", type=float, default=70, help="max measurement range of lidar")
+    parser.add_argument("--scene_bbox", type=list, default=[-70.0, -70.0, -4.5, 70.0, 70.0, 4.5], help="max measurement range of lidar")
     parser.add_argument("--max_dis_error", type=float, default=0.05, help="distance error at max measurement range")
     parser.add_argument("--occ_thrd", type=float, default=0.10, help="consider space occupied beyond observed point")
     parser.add_argument("--num_key_samples", type=int, default=10, help="number of key samples")
@@ -700,30 +700,6 @@ if __name__ == '__main__':
             else:
                 print(f"Sample data tok {sd_tok_query}, index {sample_idx} do not have valid background points")
         print(f"Number of valid samples: {num_valid_samples}")
-
-        # number statistics of backgroudn sample points
-        plt.figure()
-        plt.hist(np.array(num_bg_samples_per_ray), bins=50, color='skyblue', alpha=1, log=True)
-        plt.title('Distribution of Background Samples')
-        plt.xlabel('Number of Background Points')
-        plt.ylabel('Frequency (Ray Samples)')
-        plt.savefig('./background samples distribution.jpg')
-
-        # number statistics of background sample points
-        plt.figure()
-        plt.hist(np.array(num_occ_percentage_per_ray), bins=100, color='lightsalmon', alpha=1, log=True)
-        plt.title('Distribution of Occ Percentage')
-        plt.xlabel('Occ Percentage (/Occ + Free)')
-        plt.ylabel('Frequency (Ray Samples)')
-        plt.savefig('./occ percentage distribution.jpg')
-
-        # ratio of unk, free, occ
-        num_unk_free_occ = torch.stack(num_unk_free_occ_per_scan).numpy()
-        np.savetxt("./number of unk free occ.txt", num_unk_free_occ, fmt='%d')
-
-
-
-
 
 
     # #################### calculate ray intersection points: solution-1 ####################
