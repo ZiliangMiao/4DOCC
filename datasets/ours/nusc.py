@@ -28,7 +28,7 @@ class NuscSequentialModule(LightningDataModule):
     def __init__(self, nusc, cfg_model, cfg_dataset, train_flag: bool):
         super(NuscSequentialModule, self).__init__()
         self.nusc = nusc
-        self.cfg_model = cfg_model  # TODO: only part of the cfg
+        self.cfg_model = cfg_model
         self.cfg_dataset = cfg_dataset
         self.train_flag = train_flag
         self.train_loader = None
@@ -104,7 +104,7 @@ class NuscSequentialDataset(Dataset):
         self.cfg_dataset = cfg_dataset
         self.split = split  # "train" "val" "mini_train" "mini_val" "test"
 
-        # TODO: split scenes to samples, and dataset downn-sampling
+        # dataset down-sampling: sequence level or sample level
         if self.cfg_model["downsample_level"] is None:  # for test set and validation set
             split_logs = create_splits_logs(split, self.nusc)
             sample_toks = self._split_logs_to_samples(split_logs)

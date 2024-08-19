@@ -74,7 +74,7 @@ class MotionPretrainNetwork(LightningModule):
             # bg_samples
             bg_samples = torch.from_numpy(np.concatenate(list(bg_samples_dict.values()))).cuda()
             bg_points_4d = bg_samples[:, 0:self.cfg_model['pos_dim']]
-            bg_labels = bg_samples[:, -1] - 1  # TODO: 1:free, 2:occ -> 0: free, 1: occ
+            bg_labels = bg_samples[:, -1] - 1  # 1:free, 2:occ -> 0: free, 1: occ
 
             # bg points positional encoding
             num_bg_samples_per_ray_list = meta_batch[batch_idx][3]
@@ -136,11 +136,8 @@ class MotionPretrainNetwork(LightningModule):
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
         # metrics in one epoch
-        tp, fp, fn = self.ClassificationMetrics.get_stats(acc_conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.get_iou(tp, fp, fn)
-        free_iou = iou[0]
-        occ_iou = iou[1]
-        free_acc, occ_acc, acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
+        free_iou, occ_iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+        free_acc, occ_acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
@@ -231,12 +228,10 @@ class MotionEncoder(nn.Module):
         self.feat_dim = cfg_model["feat_dim"]
         self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
 
-        # TODO: quantization resolution
         dx = dy = dz = cfg_model["quant_size"]
         dt = 1  # TODO: should be cfg_model["time_interval"], handle different lidar frequency of kitti and nuscenes
         self.quant = torch.Tensor([dx, dy, dz, dt])
 
-        # TODO: feature map shape
         self.scene_bbox = cfg_model["scene_bbox"]
         featmap_size = cfg_model["featmap_size"]
         z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / featmap_size)
@@ -262,7 +257,7 @@ class MotionEncoder(nn.Module):
         sparse_featmap = sparse_output.slice(tensor_field)
         sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
 
-        # TODO: dense feature map output
+        # TODO: dense feature map output (with interpolation)
         # featmap_shape = torch.Size([self.featmap_shape[0], 1, self.featmap_shape[1], self.featmap_shape[2], self.featmap_shape[3], self.featmap_shape[4]])
         # dense_featmap, _, _ = sparse_output.dense(shape=featmap_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
         return sparse_featmap

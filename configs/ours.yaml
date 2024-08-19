@@ -1,12 +1,12 @@
 # Pretraining params
 bg_pretrain:
   # model .ckpt related
-  resume_ckpt: null
+  resume_ckpt: # "/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4_epoch-100/version_0/checkpoints/epoch=9.ckpt" # null
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence"  # "sequence", "sample", "none"
-  downsample_pct: 1   # use 10% of training dataset to train the model
+  downsample_pct: 100   # use 10% of training dataset to train the model
   shuffle: False # not used, random sampler default shuffle?
   augmentation: True
 
@@ -45,11 +45,8 @@ bg_test:
 # Finetuning params
 mos_finetune:
   resume_ckpt: null
-  pretrain_method: "ours"
-  pretrain_dataset: "100%nuscenes"
-  pretrain_model_name:
-  pretrain_version:
-  pretrain_epoch:  # finetuned model name: occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-xx_t-xx_bs-xx
+  pretrain_model_dir: "ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4_epoch-100/version_0/checkpoints/"
+  pretrain_epoch: 99 # finetuned model name: occ4d_100%nuscenes_vs-0.2_t-3.0_bs-1_epoch=14_vs-xx_t-xx_bs-xx
   lr_start: 0.0001
   lr_epoch: 1
   lr_decay: 0.99
