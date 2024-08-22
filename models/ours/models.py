@@ -116,9 +116,9 @@ class MotionPretrainNetwork(LightningModule):
         # metrics
         conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
         iou = self.ClassificationMetrics.get_iou(conf_mat)
-        free_iou, occ_iou = iou[1], iou[2]
+        free_iou, occ_iou = iou[0], iou[1]
         acc = self.ClassificationMetrics.get_acc(conf_mat)
-        free_acc, occ_acc = acc[1], acc[2]
+        free_acc, occ_acc = acc[0], acc[1]
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
@@ -138,9 +138,9 @@ class MotionPretrainNetwork(LightningModule):
 
         # metrics in one epoch
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        free_iou, occ_iou = iou[1], iou[2]
+        free_iou, occ_iou = iou[0], iou[1]
         acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
-        free_acc, occ_acc = acc[1], acc[2]
+        free_acc, occ_acc = acc[0], acc[1]
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
@@ -165,7 +165,7 @@ class MotionPretrainNetwork(LightningModule):
         for conf_mat in conf_mat_list:
             acc_conf_mat = acc_conf_mat.add(conf_mat)
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        free_iou, occ_iou = iou[1], iou[2]
+        free_iou, occ_iou = iou[0], iou[1]
         self.log("val_free_iou", free_iou.item() * 100, on_epoch=True, logger=True)
         self.log("val_occ_iou", occ_iou.item() * 100, on_epoch=True, logger=True)
 
@@ -205,7 +205,7 @@ class MotionPretrainNetwork(LightningModule):
             acc_conf_mat = acc_conf_mat.add(conf_mat)
             # compute iou metric
             iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-            free_iou, occ_iou = iou[1], iou[2]
+            free_iou, occ_iou = iou[0], iou[1]
             print(f"Val Sample Index {i + batch_idx * batch_size}, Free IoU: {free_iou.item() * 100}")
             print(f"Val Sample Index {i + batch_idx * batch_size}, Occ IoU: {occ_iou.item() * 100}")
         torch.cuda.empty_cache()
