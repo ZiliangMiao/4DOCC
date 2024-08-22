@@ -19,7 +19,7 @@ from datasets.mos4d.nusc import NuscMosDataset
 #######################################
 
 
-class MOSNet(LightningModule):
+class MosNetwork(LightningModule):
     def __init__(self, cfg_model: dict, train_flag: bool):
         super().__init__()
         self.save_hyperparameters(cfg_model)
@@ -119,8 +119,8 @@ class MOSNet(LightningModule):
         # metrics in one epoch
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
         sta_iou, mov_iou = iou[1], iou[2]
-        self.log("epoch_free_iou", sta_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_occ_iou", mov_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_sta_iou", sta_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_mov_iou", mov_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
         # clean
         self.training_step_outputs = []

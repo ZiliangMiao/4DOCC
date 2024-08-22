@@ -10,3 +10,15 @@ SEKITTI:
   TRAIN: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
   VAL: [8]
   TEST: [8]
+KITTITRA:
+  PATH: "./data/KITTITra/sequences" # labeled by PRPonn, seq 19
+  LIDAR_NAME: "velodyne"
+KITTITRA_M:
+  PATH: "./data/KITTITra_M/sequences" # labeled by MaRS, seq 00, 01-20
+  LIDAR_NAME: "velodyne"
+APOLLO: # labeled by PRPonn, seq 00-04
+  PATH: "./data/Apollo/sequences"
+  LIDAR_NAME: "velodyne"
+WAYMO_M: # labeled by MaRS, seq ?00-43 (NOT ORG IDX)
+  PATH: "./data/Waymo_M/sequences"
+  LIDAR_NAME: "lidar"

@@ -1,34 +1,61 @@
 # base
-import sys
+import re
+import os
 import click
 import yaml
-import logging
-import os.path
-import datetime
-import sklearn
+import copy
 import numpy as np
 from tqdm import tqdm
+import sys
+import logging
+from datetime import datetime
 # torch
 import torch
-import torch.nn.functional as F
 from pytorch_lightning import Trainer
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
-from nuscenes import NuScenes
-# lib
-from models.mos4d.metrics import ClassificationMetrics
-import models.mos4d.models as nusc_models
+from nuscenes.nuscenes import NuScenes
+from models.mos4d import models
 from datasets.mos4d import nusc as nusc_dataset
-from datasets.mos4d import kitti as kitti_dataset
-from datasets.mos4d.kitti import KittiSequentialDataset
-from datasets.mos4d.nusc import NuscMosDataset
+from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
+from ours_script import general_pipeline
+from models.mos4d.models import MosNetwork
+from datasets.nusc_utils import NuscDataloader
+from datasets.mos4d.nusc import NuscMosDataset
 
-def main(cfg, test_epoch):
-    cfg["model"]["test_epoch"] = test_epoch
-    num_device = cfg["model"]["num_devices"]
-    model_dataset = cfg["model"]["model_dataset"]
-    model_name = cfg["model"]["model_name"]
-    model_version = cfg["model"]["model_version"]
+from ours_script import mos_finetune
+
+def mos_train_from_scratch(cfg_model, cfg_dataset):
+    # fine-tuning params
+    dataset_name = cfg_model['dataset_name']
+    assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
+    downsample_pct = cfg_model['downsample_pct']
+    train_dir = f"./logs/mos_baseline/mos4d/{downsample_pct}%{dataset_name}"
+
+    # load pre-trained encoder to fine-tuning model
+    model = MosNetwork(cfg_model, True)
+
+    # dataloader
+    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
+    train_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, True)
+    dataloader.setup()
+    train_dataloader = dataloader.train_dataloader()
+    val_dataloader = dataloader.val_dataloader()
+
+    # training
+    general_pipeline(cfg_model, model, train_dataloader, train_dir)
+
+
+def mos_test(cfg, test_epoch):
+    cfg["mos_test"]["test_epoch"] = test_epoch
+    num_device = cfg["mos_test"]["num_devices"]
+    model_dataset = cfg["mos_test"]["model_dataset"]
+    model_name = cfg["mos_test"]["model_name"]
+    model_version = cfg["mos_test"]["model_version"]
     model_dir = os.path.join("./logs", "mos4d", model_dataset, model_name, model_version)
     ckpt_path = os.path.join(model_dir, "checkpoints", f"{model_name}_epoch={test_epoch}.ckpt")
 
@@ -40,15 +67,12 @@ def main(cfg, test_epoch):
     test_dataset = cfg["data"]["dataset_name"]
     if test_dataset == "nuscenes":
         nusc = NuScenes(dataroot=cfg["dataset"]["nuscenes"]["root"], version=cfg["dataset"]["nuscenes"]["version"])
-        data = nusc_dataset.NuscSequentialModule(cfg, nusc, "test")
-        data.setup()
-    elif test_dataset == "SEKITTI":
-        data = kitti_dataset.KittiSequentialModule(cfg)
+        data = NuscMosDataset.NuscSequentialModule(cfg, nusc, "test")
         data.setup()
     else:
         raise ValueError("Not supported test dataset.")
 
-    model = nusc_models.MOSNet(cfg)
+    model = MosNetwork(cfg)
     # org 4dmos: Load ckeckpoint model
     # ckpt = torch.load(ckpt_path)
     # model = model.cuda()
@@ -103,8 +127,8 @@ def main(cfg, test_epoch):
     acc_conf_mat_pred = torch.zeros(3, 3)
     for conf_mat in conf_mat_list_pred:
         acc_conf_mat_pred = acc_conf_mat_pred.add(conf_mat)
-    TP_pred, FP_pred, FN_pred = metrics.getStats(acc_conf_mat_pred)
-    IOU_pred = metrics.getIoU(TP_pred, FP_pred, FN_pred)[2]
+    TP_pred, FP_pred, FN_pred = metrics.get_stats(acc_conf_mat_pred)
+    IOU_pred = metrics.get_iou(TP_pred, FP_pred, FN_pred)[2]
     logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU_pred.item() * 100))
 
     # # validate
@@ -118,7 +142,6 @@ def main(cfg, test_epoch):
     # IOU = metrics.getIoU(TP, FP, FN)[2]
     # logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU.item() * 100))
     # a = 1
-
 
     # # loop batch
     # num_classes = 3
@@ -181,17 +204,53 @@ def main(cfg, test_epoch):
     # # IOU = metrics.getIoU(TP, FP, FN)
     #
     # logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU_mov * 100))
-    #
-    # a = 1
+
+
+def create_sekitti_mos_labels(dataset_path):
+    semantic_config = yaml.safe_load(open("./config/semantic-kitti-mos.yaml"))
+    def save_mos_labels(lidarseg_label_file, mos_label_file):
+        """Load moving object labels from .label file"""
+        if os.path.isfile(lidarseg_label_file):
+            labels = np.fromfile(lidarseg_label_file, dtype=np.uint32)
+            labels = labels.reshape((-1))
+            labels = labels & 0xFFFF  # Mask semantics in lower half
+            mapped_labels = copy.deepcopy(labels)
+            for semantic_label, mos_label in semantic_config["learning_map"].items():
+                mapped_labels[labels == semantic_label] = mos_label
+            mos_labels = mapped_labels.astype(np.uint8)
+            mos_labels.tofile(mos_label_file)
+            num_unk = np.sum(mos_labels == 0)
+            num_sta = np.sum(mos_labels == 1)
+            num_mov = np.sum(mos_labels == 2)
+            print(f"num of unknown pts: {num_unk}, num of static pts: {num_sta}, num of moving pts: {num_mov}")
+            # Directly load saved mos labels and check if it is correct
+            # mos_labels = np.fromfile(mos_label_file, dtype=np.uint32).reshape((-1)) & 0xFFFF
+            # check_true = (mos_labels == mapped_labels).all()
+            return None
+        else:
+            return torch.Tensor(1, 1).long()
+
+    seqs_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    for seq_idx in tqdm(seqs_list):
+        lidarseg_dir = os.path.join(dataset_path, str(seq_idx).zfill(4), "labels")
+        mos_labels_dir = os.path.join(dataset_path, str(seq_idx).zfill(4), "mos_labels")
+        os.makedirs(mos_labels_dir, exist_ok=True)
+        for i, filename in enumerate(os.listdir(lidarseg_dir)):
+            lidarseg_label_file = os.path.join(lidarseg_dir, filename)
+            mos_label_file = os.path.join(mos_labels_dir, filename)
+            save_mos_labels(lidarseg_label_file, mos_label_file)
+
 
 if __name__ == "__main__":
     # deterministic
     set_deterministic(666)
 
-    # load test config
-    with open("configs/mos4d_test.yaml", "r") as f:
-        cfg = yaml.safe_load(f)
+    # load train config
+    with open("configs/mos4d.yaml", "r") as f:
+        cfg_model = yaml.safe_load(f)
+    with open("configs/dataset.yaml", "r") as f:
+        cfg_dataset = yaml.safe_load(f)
 
-    test_epoch_list = [59, 49, 39, 29, 19, 9]
-    for test_epoch in test_epoch_list:
-        main(cfg, test_epoch)
+    # training from scratch
+    mos_train_from_scratch(cfg_model, cfg_dataset)
+

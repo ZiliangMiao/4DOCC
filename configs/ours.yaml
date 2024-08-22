@@ -44,6 +44,7 @@ bg_test:
 
 # Finetuning params
 mos_finetune:
+  # resume
   resume_ckpt: null
   pretrain_method: "bg_pretrain"
   pretrain_dataset: "100%nuscenes"

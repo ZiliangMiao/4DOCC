@@ -4,11 +4,11 @@ from torch.utils.data import DataLoader
 from typing import List
 
 
-class NuscSequentialModule(LightningDataModule):
+class NuscDataloader(LightningDataModule):
     """A Pytorch Lightning module for Sequential Nusc data; Contains train, valid, test data"""
 
     def __init__(self, nusc, cfg_model, train_set, val_set, train_flag: bool):
-        super(NuscSequentialModule, self).__init__()
+        super(NuscDataloader, self).__init__()
         self.nusc = nusc
         self.cfg_model = cfg_model
         self.train_set = train_set
