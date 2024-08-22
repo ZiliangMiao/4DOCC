@@ -1,4 +1,5 @@
 # base
+import argparse
 import re
 import os
 import click
@@ -24,15 +25,15 @@ from ours_script import general_pipeline
 from models.mos4d.models import MosNetwork
 from datasets.nusc_utils import NuscDataloader
 from datasets.mos4d.nusc import NuscMosDataset
-
 from ours_script import mos_finetune
+
 
 def mos_train_from_scratch(cfg_model, cfg_dataset):
     # fine-tuning params
     dataset_name = cfg_model['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = cfg_model['downsample_pct']
-    train_dir = f"./logs/mos_baseline/mos4d/{downsample_pct}%{dataset_name}"
+    train_dir = f"./logs/mos_baseline/mos4d_train/{downsample_pct}%{dataset_name}"
 
     # load pre-trained encoder to fine-tuning model
     model = MosNetwork(cfg_model, True)
@@ -50,8 +51,8 @@ def mos_train_from_scratch(cfg_model, cfg_dataset):
     general_pipeline(cfg_model, model, train_dataloader, train_dir)
 
 
-def mos_test(cfg, test_epoch):
-    cfg["mos_test"]["test_epoch"] = test_epoch
+def mos_test(cfg):
+    test_epoch = cfg["mos_test"]["test_epoch"]
     num_device = cfg["mos_test"]["num_devices"]
     model_dataset = cfg["mos_test"]["model_dataset"]
     model_name = cfg["mos_test"]["model_name"]
@@ -245,12 +246,22 @@ if __name__ == "__main__":
     # deterministic
     set_deterministic(666)
 
-    # load train config
+    # mode
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    args = parser.parse_args()
+
+    # load config
     with open("configs/mos4d.yaml", "r") as f:
-        cfg_model = yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
     with open("configs/dataset.yaml", "r") as f:
         cfg_dataset = yaml.safe_load(f)
 
     # training from scratch
-    mos_train_from_scratch(cfg_model, cfg_dataset)
+    if args.mode == 'train':
+        mos_train_from_scratch(cfg[args.mode], cfg_dataset)
+    elif args.mode == 'finetune':
+        mos_finetune(cfg, cfg_dataset, args.mode)
+    elif args.mode == 'test':
+        mos_test(cfg)
 

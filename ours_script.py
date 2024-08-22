@@ -23,6 +23,7 @@ from datasets.mos4d.nusc import NuscMosDataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
+from mos_baseline_script import mos_test
 
 
 def statistics(cfg_model, cfg_dataset):
@@ -216,11 +217,15 @@ def bg_test(cfg, test_epoch):
 
 
 if __name__ == "__main__":
-    # load config
+    # deterministic
+    set_deterministic(666)
+
+    # mode
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['bg_pretrain', 'mos_finetune', 'mos_test'], default='mos_finetune')
     args = parser.parse_args()
-    set_deterministic(666)
+
+    # load config
     with open("configs/ours.yaml", "r") as f:
         cfg = yaml.safe_load(f)
     with open("configs/dataset.yaml", "r") as f:
