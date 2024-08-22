@@ -23,7 +23,6 @@ from datasets.mos4d.nusc import NuscMosDataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
-from mos_baseline_script import mos_test
 
 
 def statistics(cfg_model, cfg_dataset):
@@ -250,4 +249,4 @@ if __name__ == "__main__":
 
     # test on moving object segmentation benchmark
     elif args.mode == 'mos_test':
-        mos_test(cfg, test_epoch=49)
+        asd = 1
