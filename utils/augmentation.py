@@ -7,6 +7,16 @@ import torch
 import numpy as np
 
 
+def augment_pcds(pcds):
+    pcds = rotate_point_cloud(pcds)
+    pcds = rotate_perturbation_point_cloud(pcds)
+    pcds = jitter_point_cloud(pcds)
+    pcds = shift_point_cloud(pcds)
+    pcds = random_flip_point_cloud(pcds)
+    pcds = random_scale_point_cloud(pcds)
+    return pcds
+
+
 def rotate_point_cloud(pcd):
     """Randomly rotate the point clouds to augument the dataset
     Input:

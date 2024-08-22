@@ -15,9 +15,8 @@ class ClassificationMetrics(nn.Module):
         self.ignore_index = ignore_index
 
     def compute_conf_mat(self, pred_probs: torch.Tensor, gt_labels: torch.Tensor):
-        from torcheval.metrics import BinaryConfusionMatrix
-        # binary confusion matrix (can use multi class confusion matrix too)
-        metric = BinaryConfusionMatrix()
+        from torcheval.metrics import MulticlassConfusionMatrix
+        metric = MulticlassConfusionMatrix(self.n_classes)
         pred_labels = torch.argmax(pred_probs, axis=1).long()
         gt_labels = gt_labels.long()
         metric.update(pred_labels, gt_labels)
@@ -38,9 +37,9 @@ class ClassificationMetrics(nn.Module):
         intersection = tp
         union = tp + fp + fn + 1e-15
         iou = intersection / union
-        return iou[0], iou[1]
+        return iou
 
     def get_acc(self, conf_mat):
         tp, fp, fn = self.get_stats(conf_mat)
         acc = tp / (tp + fp)
-        return acc[0], acc[1]
+        return acc

@@ -20,7 +20,7 @@ import models.mos4d.models as nusc_models
 from datasets.mos4d import nusc as nusc_dataset
 from datasets.mos4d import kitti as kitti_dataset
 from datasets.mos4d.kitti import KittiSequentialDataset
-from datasets.mos4d.nusc import NuscSequentialDataset
+from datasets.mos4d.nusc import NuscMosDataset
 from utils.deterministic import set_deterministic
 
 def main(cfg, test_epoch):

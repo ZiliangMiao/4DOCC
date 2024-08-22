@@ -16,18 +16,17 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
 from nuscenes.nuscenes import NuScenes
+from datasets.nusc_utils import NuscSequentialModule
+from datasets.ours.nusc import NuscBgDataset as nusc_bg_dataset
+from datasets.mos4d.nusc import NuscMosDataset as nusc_mos_dataset
 # lib
-from models.ours import models
-from datasets.ours import nusc as nusc_bg_dataset
-from datasets.mos4d import nusc as nusc_mos_dataset
 from utils.deterministic import set_deterministic
-
 from utils.metrics import ClassificationMetrics
 
 
 def statistics(cfg_model, cfg_dataset):
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    nuscenes = nusc_bg_dataset.NuscSequentialDataset(nusc, cfg_model, cfg_dataset, "train")
+    nuscenes = nusc_bg_dataset(nusc, cfg_model, cfg_dataset, "train")
     num_occ_percentage_per_ray = []
     num_occ_total = 0
     num_free_total = 0
@@ -82,7 +81,7 @@ def statistics(cfg_model, cfg_dataset):
 def background_pretrain(cfg, cfg_dataset, mode: str):
     cfg_model = cfg[mode]
 
-    # data params
+    # pre-training params
     dataset_name = cfg_model['dataset_name']
     assert dataset_name == 'nuscenes', "Only nuscenes dataset supported now!"
     downsample_pct = cfg_model['downsample_pct']
@@ -91,14 +90,12 @@ def background_pretrain(cfg, cfg_dataset, mode: str):
     n_input = cfg_model['n_input']
     n_skip = cfg_model['n_skip']
     time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
-
-    # model params
     num_epoch = cfg_model['num_epoch']
     batch_size = cfg_model['batch_size']
-    model_name = f"vs-{quant_size}_t-{time}_bs-{batch_size}_epoch-{num_epoch}"
 
     # pretrain model
-    model = models.MotionPretrainNetwork(cfg_model, True)
+    from models.ours import models
+    pretrain_model = models.MotionPretrainNetwork(cfg_model, True)
 
     # Add callbacks
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -113,17 +110,21 @@ def background_pretrain(cfg, cfg_dataset, mode: str):
     )
 
     # Logger
-    log_dir = f"./logs/ours/{mode}/{downsample_pct}%{dataset_name}"
-    os.makedirs(log_dir, exist_ok=True)
-    tb_logger = pl_loggers.TensorBoardLogger(log_dir, name=model_name, default_hp_metric=False)
+    pretrain_dir = f"./logs/ours/{mode}/{downsample_pct}%{dataset_name}"
+    pretrain_model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
+    os.makedirs(pretrain_dir, exist_ok=True)
+    tb_logger = pl_loggers.TensorBoardLogger(pretrain_dir, name=pretrain_model_params, default_hp_metric=False)
 
-    # load data and construct data loader
+    # Load data and construct data loader
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    dataset_module = nusc_bg_dataset.NuscSequentialModule(nusc, cfg_model, cfg_dataset, True)
-    dataset_module.setup()
-    train_dataloader = dataset_module.train_dataloader()
+    train_set = nusc_bg_dataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = nusc_bg_dataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscSequentialModule(nusc, cfg_model, train_set, val_set, True)
+    dataloader.setup()
+    train_dataloader = dataloader.train_dataloader()
+    val_dataloader = dataloader.val_dataloader()
 
-    # Setup trainer and fit
+    # Setup trainer
     trainer = Trainer(
         accelerator="gpu",
         strategy="ddp",
@@ -135,9 +136,9 @@ def background_pretrain(cfg, cfg_dataset, mode: str):
         callbacks=[lr_monitor, checkpoint_saver],
     )
 
-    # fit
+    # Training
     resume_ckpt_path = cfg_model["resume_ckpt"]
-    trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
+    trainer.fit(pretrain_model, train_dataloader, ckpt_path=resume_ckpt_path)
 
 
 def load_pretrained_encoder(ckpt_path, model):
@@ -161,6 +162,7 @@ def load_pretrained_encoder(ckpt_path, model):
     pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
     pretrained_dict.pop('encoder.MinkUNet.final.kernel')
     pretrained_dict.pop('encoder.MinkUNet.final.bias')
+    pretrained_dict.pop('loss.weight')
     # overwrite finetune model dict
     model_dict.update(pretrained_dict)
     # load the pretrained model dict
@@ -170,36 +172,36 @@ def load_pretrained_encoder(ckpt_path, model):
 
 def mos_finetune(cfg, cfg_dataset, mode: str):
     cfg_model = cfg[mode]
-    # data params
-    dataset_name = cfg_model["dataset_name"]
-    assert dataset_name == "nuscenes", "Only nuscenes dataset supported now!"
-    downsample_pct = cfg_model["downsample_pct"]
-    quant_size = cfg_model["quant_size"]
-    time_interval = cfg_model["time_interval"]
-    n_input = cfg_model["n_input"]
-    n_skip = cfg_model["n_skip"]
-    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
-    # model params
-    num_epoch = cfg_model["num_epoch"]
-    batch_size = cfg_model["batch_size"]
-    # pretrain params
+
+    # pre-training params
     pre_method = cfg_model["pretrain_method"]
     pre_dataset = cfg_model["pretrain_dataset"]
-    pre_model = cfg_model["pretrain_model_name"]
+    pre_params = cfg_model["pretrain_params"]
     pre_version = cfg_model["pretrain_version"]
     pre_epoch = cfg_model["pretrain_epoch"]
-    if pre_method == "occ4d":
-        pre_ckpt_name = f"{pre_model}_epoch={pre_epoch}"
-        pre_ckpt = f"./logs/{pre_method}/{pre_dataset}/{pre_model}/{pre_version}/checkpoints/{pre_ckpt_name}.ckpt"
-        model_name = f"{pre_method}_{pre_dataset}_{pre_ckpt_name}_vs-{quant_size}_t-{time}_bs-{batch_size}"
+    pretrain_model_dir = f"./logs/ours/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints"
+    pretrain_ckpt_name = f"epoch={pre_epoch}.ckpt"
+    pretrain_ckpt_path = os.path.join(pretrain_model_dir, pretrain_ckpt_name)
 
-    # load pretrained encoder
-    pretrain_ckpt = torch.load(pre_ckpt)
-    torch.save(pretrain_ckpt, pre_ckpt)
-    model = models.MotionPretrainNetwork(cfg)
-    model = load_pretrained_encoder(pre_ckpt, model)
+    # fine-tuning params
+    dataset_name = cfg_model['dataset_name']
+    assert dataset_name == 'nuscenes', "Only nuscenes dataset supported now!"
+    downsample_pct = cfg_model['downsample_pct']
+    quant_size = cfg_model['quant_size']
+    time_interval = cfg_model['time_interval']
+    n_input = cfg_model['n_input']
+    n_skip = cfg_model['n_skip']
+    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
+    num_epoch = cfg_model['num_epoch']
+    batch_size = cfg_model['batch_size']
 
-    # Add callbacks
+    # load pre-trained encoder to fine-tuning model
+    assert pre_method in ['bg_pretrain', 'occ4d']
+    from models.mos4d import models
+    finetune_model = models.MOSNet(cfg_model, True)
+    finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model)
+
+    # add callbacks
     lr_monitor = LearningRateMonitor(logging_interval="step")
     checkpoint_saver = ModelCheckpoint(
         monitor="epoch",
@@ -211,21 +213,22 @@ def mos_finetune(cfg, cfg_dataset, mode: str):
         save_last=True,
     )
 
-    # Logger
-    log_dir = f"./logs/ours/{mode}/{downsample_pct}%{dataset_name}"
-    os.makedirs(log_dir, exist_ok=True)
-    tb_logger = pl_loggers.TensorBoardLogger(log_dir, name=model_name, default_hp_metric=False)
+    # logger
+    finetune_dir = f"./logs/ours/{pre_method}(epoch-{pre_epoch})-{mode}/{pre_dataset}-{downsample_pct}%{dataset_name}"
+    finetune_model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
+    os.makedirs(finetune_dir, exist_ok=True)
+    tb_logger = pl_loggers.TensorBoardLogger(finetune_dir, name=finetune_model_params, default_hp_metric=False)
 
-    # load data from different datasets
-    if dataset_name == "nuscenes":
-        nusc = NuScenes(dataroot=cfg["dataset"]["nuscenes"]["root"], version=cfg["dataset"]["nuscenes"]["version"])
-        data = nusc_mos_dataset.NuscSequentialModule(cfg, nusc, "train")
-        data.setup()
+    # Load data and construct data loader
+    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
+    train_set = nusc_mos_dataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = nusc_mos_dataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscSequentialModule(nusc, cfg_model, train_set, val_set, True)
+    dataloader.setup()
+    train_dataloader = dataloader.train_dataloader()
+    val_dataloader = dataloader.val_dataloader()
 
-    train_dataloader = data.train_dataloader()
-    val_dataloader = data.val_dataloader()
-
-    # Setup trainer and fit
+    # setup trainer
     trainer = Trainer(
         accelerator="gpu",
         strategy="ddp",
@@ -235,13 +238,11 @@ def mos_finetune(cfg, cfg_dataset, mode: str):
         max_epochs=num_epoch,
         accumulate_grad_batches=cfg_model["acc_batches"],  # accumulate batches, default=1
         callbacks=[lr_monitor, checkpoint_saver],
-        # check_val_every_n_epoch=5,
-        # val_check_interval=100,
     )
 
-    # fit
+    # fine-tuning
     resume_ckpt_path = cfg_model["resume_ckpt"]
-    trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
+    trainer.fit(finetune_model, train_dataloader, ckpt_path=resume_ckpt_path)
 
 
 def mos_test(cfg, test_epoch):
@@ -403,7 +404,7 @@ def mos_test(cfg, test_epoch):
 if __name__ == "__main__":
     # load config
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['bg_pretrain', 'mos_finetune', 'mos_test'], default='bg_pretrain')
+    parser.add_argument("--mode", choices=['bg_pretrain', 'mos_finetune', 'mos_test'], default='mos_finetune')
     args = parser.parse_args()
     set_deterministic(666)
     with open("configs/ours.yaml", "r") as f:

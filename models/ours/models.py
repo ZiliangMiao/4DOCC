@@ -12,7 +12,7 @@ import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 from utils.metrics import ClassificationMetrics
-from datasets.ours.nusc import NuscSequentialDataset
+from datasets.ours.nusc import NuscBgDataset
 
 
 #######################################
@@ -92,7 +92,6 @@ class MotionPretrainNetwork(LightningModule):
         return bg_probs, bg_labels
 
     def configure_optimizers(self):
-        # TODO: will be call only at training stage, do not need 'train_flag'
         lr_start = self.cfg_model["lr_start"]
         lr_epoch = self.cfg_model["lr_epoch"]
         lr_decay = self.cfg_model["lr_decay"]
@@ -116,8 +115,10 @@ class MotionPretrainNetwork(LightningModule):
 
         # metrics
         conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
-        free_iou, occ_iou = self.ClassificationMetrics.get_iou(conf_mat)
-        free_acc, occ_acc = self.ClassificationMetrics.get_acc(conf_mat)
+        iou = self.ClassificationMetrics.get_iou(conf_mat)
+        free_iou, occ_iou = iou[1], iou[2]
+        acc = self.ClassificationMetrics.get_acc(conf_mat)
+        free_acc, occ_acc = acc[1], acc[2]
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
@@ -136,8 +137,10 @@ class MotionPretrainNetwork(LightningModule):
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
         # metrics in one epoch
-        free_iou, occ_iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        free_acc, occ_acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
+        iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+        free_iou, occ_iou = iou[1], iou[2]
+        acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
+        free_acc, occ_acc = acc[1], acc[2]
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
@@ -161,9 +164,10 @@ class MotionPretrainNetwork(LightningModule):
         acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
         for conf_mat in conf_mat_list:
             acc_conf_mat = acc_conf_mat.add(conf_mat)
-        tp, fp, fn = self.ClassificationMetrics.get_stats(acc_conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.get_iou(tp, fp, fn)[self.mov_class_idx]
-        self.log("val_iou", iou.item() * 100, on_epoch=True, logger=True)
+        iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+        free_iou, occ_iou = iou[1], iou[2]
+        self.log("val_free_iou", free_iou.item() * 100, on_epoch=True, logger=True)
+        self.log("val_occ_iou", occ_iou.item() * 100, on_epoch=True, logger=True)
 
         # clean
         self.validation_step_outputs = []
@@ -192,7 +196,7 @@ class MotionPretrainNetwork(LightningModule):
         for i, (curr_feats, mos_label) in enumerate(zip(curr_feats_list, mos_labels)):
             # get ego mask
             curr_time_mask = point_clouds[i][:, -1] == (self.cfg_model["n_input"] - 1)
-            ego_mask = NuscSequentialDataset.get_ego_mask(point_clouds[i][curr_time_mask])
+            ego_mask = NuscBgDataset.get_ego_mask(point_clouds[i][curr_time_mask])
             # save mos pred (with ego vehicle points)
             mos_pred_file = os.path.join(self.bg_pred_dir, f"{sample_data_tokens[i]}_mos_pred.label")
             self.save_mos_pred(curr_feats, mos_pred_file)
@@ -200,10 +204,10 @@ class MotionPretrainNetwork(LightningModule):
             conf_mat = self.get_confusion_matrix([curr_feats[~ego_mask]], [mos_label[~ego_mask]])
             acc_conf_mat = acc_conf_mat.add(conf_mat)
             # compute iou metric
-            tp, fp, fn = self.ClassificationMetrics.get_stats(conf_mat)  # stat of current sample
-            iou = self.ClassificationMetrics.get_iou(tp, fp, fn)[self.mov_class_idx]
-            print(
-                f"Validation Sample Index {i + batch_idx * batch_size}, Moving Object IoU w/o ego vehicle: {iou.item() * 100}")
+            iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+            free_iou, occ_iou = iou[1], iou[2]
+            print(f"Val Sample Index {i + batch_idx * batch_size}, Free IoU: {free_iou.item() * 100}")
+            print(f"Val Sample Index {i + batch_idx * batch_size}, Occ IoU: {occ_iou.item() * 100}")
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
