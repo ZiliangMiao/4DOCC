@@ -1,7 +1,7 @@
 # Pretraining params
 bg_pretrain:
   # model .ckpt related
-  resume_ckpt: "/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_3/checkpoints/epoch=64.ckpt" # null
+  resume_ckpt: null # "/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_3/checkpoints/epoch=64.ckpt"
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
