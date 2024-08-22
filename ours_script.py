@@ -106,7 +106,7 @@ def background_pretrain(cfg, cfg_dataset, mode: str):
         mode="max",
         filename="{epoch}",
         every_n_epochs=5,
-        save_last=False,
+        save_last=True,
     )
 
     # Logger
