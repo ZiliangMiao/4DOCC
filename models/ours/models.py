@@ -1,3 +1,4 @@
+import logging
 import os
 from collections import OrderedDict
 
@@ -21,10 +22,10 @@ from datasets.ours.nusc import NuscBgDataset
 
 
 class MotionPretrainNetwork(LightningModule):
-    def __init__(self, cfg_model: dict, train_flag: bool):
+    def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
         super().__init__()
-        # parameters
-        self.save_hyperparameters(cfg_model)
+        if train_flag:
+            self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
         self.n_bg_cls = 2
 
@@ -44,12 +45,12 @@ class MotionPretrainNetwork(LightningModule):
         self.loss = nn.NLLLoss(weight=torch.Tensor(self.cfg_model['bg_cls_weight']))
 
         # save predictions
-        if not train_flag:  # TODO: modify the trained model name, and the test directory
-            model_dataset = self.cfg_model["model_dataset"]
-            test_epoch = self.cfg_model["test_epoch"]
-            model_dir = os.path.join("./logs", "ours", model_dataset)
-            self.bg_pred_dir = os.path.join(model_dir, "results", f"epoch_{test_epoch}", "predictions", "ours_pred")
-            os.makedirs(self.bg_pred_dir, exist_ok=True)
+        if not train_flag:
+            self.model_dir = kwargs['model_dir']
+            self.test_epoch = kwargs['test_epoch']
+            self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
+            os.makedirs(self.pred_dir, exist_ok=True)
+            # self.mov_iou_list = []
 
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
@@ -85,11 +86,9 @@ class MotionPretrainNetwork(LightningModule):
             # collate to batch
             bg_feats_batch.append(bg_feats)
             bg_labels_batch.append(bg_labels)
-        bg_feats = torch.cat(bg_feats_batch, dim=0)
-        bg_labels = torch.cat(bg_labels_batch, dim=0)
         # decoder
-        bg_probs = self.decoder(bg_feats)  # logits -> softmax -> probs
-        return bg_probs, bg_labels
+        bg_probs_batch = self.decoder(bg_feats_batch)  # logits -> softmax -> probs
+        return bg_probs_batch, bg_labels_batch
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
@@ -173,41 +172,35 @@ class MotionPretrainNetwork(LightningModule):
         self.validation_step_outputs = []
         torch.cuda.empty_cache()
 
-    def save_mos_pred(self, pred_logits, mos_pred_file):
-        assert pred_logits is not list
-        # Set ignored classes to -inf to not influence softmax
-        ignore_idx = self.ignore_class_idx[0]
-        pred_logits[:, ignore_idx] = -float("inf")
-        pred_softmax = F.softmax(pred_logits, dim=1)
-        pred_labels = torch.argmax(pred_softmax, dim=1).type(torch.uint8).detach().cpu().numpy()
-        # save mos pred labels
-        pred_labels.tofile(mos_pred_file)
-
-    # func "predict_step" is called by "trainer.predict"
     def predict_step(self, batch: tuple, batch_idx):
-        # unfold batch data
-        sample_data_tokens, point_clouds, mos_labels = batch
-        batch_size = len(point_clouds)
+        # unfold batch: [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
+        meta_batch, pcds_batch, bg_samples_batch = batch
 
         # network prediction
-        curr_coords_list, curr_feats_list = self.forward(point_clouds)
-        # loop batch data list
+        bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
+
+        # iterate each batch data for predicted label saving
         acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
-        for i, (curr_feats, mos_label) in enumerate(zip(curr_feats_list, mos_labels)):
-            # get ego mask
-            curr_time_mask = point_clouds[i][:, -1] == (self.cfg_model["n_input"] - 1)
-            ego_mask = NuscBgDataset.get_ego_mask(point_clouds[i][curr_time_mask])
-            # save mos pred (with ego vehicle points)
-            mos_pred_file = os.path.join(self.bg_pred_dir, f"{sample_data_tokens[i]}_mos_pred.label")
-            self.save_mos_pred(curr_feats, mos_pred_file)
-            # compute confusion matrix (without ego vehicle points)
-            conf_mat = self.get_confusion_matrix([curr_feats[~ego_mask]], [mos_label[~ego_mask]])
+        for meta, bg_probs, bg_labels in zip(meta_batch, bg_probs_batch, bg_labels_batch):
+            sd_tok = meta[0]
+            # metrics
+            conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
+            iou = self.ClassificationMetrics.get_iou(conf_mat)
+            free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
+            acc = self.ClassificationMetrics.get_acc(conf_mat)
+            free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
+
+            # update confusion matrix
             acc_conf_mat = acc_conf_mat.add(conf_mat)
-            # compute iou metric
-            iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-            free_iou, occ_iou = iou[0], iou[1]
-            print(f"Val Sample Index {i + batch_idx * batch_size}, Free IoU: {free_iou.item() * 100}")
-            print(f"Val Sample Index {i + batch_idx * batch_size}, Occ IoU: {occ_iou.item() * 100}")
+
+            # TODO: save predicted labels, how to vis bg predictions?
+            pred_file = os.path.join(self.pred_dir, f"{sd_tok}_bg_pred.label")
+            pred_labels = torch.argmax(bg_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
+            pred_labels.tofile(pred_file)
+
+            # logger
+            logging.info("Val sd tok: %s, Occ IoU/Acc: %.3f / %.3f, Free IoU/Acc: %.3f / %.3f", sd_tok, occ_iou, occ_acc, free_iou, free_acc)
+            # self.mov_iou_list.append(occ_iou.item())
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
@@ -311,5 +304,11 @@ class BackgroundFieldMLP(nn.Module):
         ]))
 
     def forward(self, x):
-        return self.block(x)
+        if type(x) is list:  # input batch data, not concatenated data
+            probs_list = []
+            for x_i in x:
+                probs_list.append(self.block(x_i))
+            return probs_list
+        else:
+            return self.block(x)
 

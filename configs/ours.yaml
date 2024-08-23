@@ -40,17 +40,24 @@ bg_pretrain:
 
 # Background samples test
 bg_test:
+  # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1' # 29
+  # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_2' # 49
+  # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_5' # 99
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_4'
+  test_epoch: 89
+  test_dataset: 'nuscenes'
+  num_devices: 1
 
 
 # Finetuning params
 mos_finetune:
   # resume
-  resume_ckpt: null
+  resume_ckpt: null # "/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_1/checkpoints/last.ckpt"
   pretrain_method: "bg_pretrain"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-9.5_bs-4"
-  pretrain_version: 2
-  pretrain_epoch: 49
+  pretrain_version: 5
+  pretrain_epoch: 99
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
@@ -62,7 +69,7 @@ mos_finetune:
   # data processing related
   n_input: 10
   n_skip: 1
-  scene_bbox: [ -70.0, -70.0, -4.5, 70.0, 70.0, 4.5 ] # valid point cloud range
+  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t

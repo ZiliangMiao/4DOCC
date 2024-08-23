@@ -1,7 +1,9 @@
 # base
 import argparse
+import logging
 import os
-
+import sys
+from datetime import datetime
 
 import yaml
 import numpy as np
@@ -120,15 +122,12 @@ def general_pipeline(cfg_model, model, train_dataloader, logger_dir):
     trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
 
 
-def background_pretrain(cfg, cfg_dataset, mode: str):
-    # model cfg
-    cfg_model = cfg[mode]
-
+def background_pretrain(cfg_model, cfg_dataset):
     # logger
     dataset_name = cfg_model['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = cfg_model['downsample_pct']
-    pretrain_dir = f"./logs/ours/{mode}/{downsample_pct}%{dataset_name}"
+    pretrain_dir = f"./logs/ours/bg_pretrain/{downsample_pct}%{dataset_name}"
 
     # pretrain model
     pretrain_model = MotionPretrainNetwork(cfg_model, True)
@@ -173,10 +172,7 @@ def load_pretrained_encoder(ckpt_path, model):
     return model
 
 
-def mos_finetune(cfg, cfg_dataset, mode: str):
-    # model cfg
-    cfg_model = cfg[mode]
-
+def mos_finetune(cfg_model, cfg_dataset):
     # pre-training checkpoint path
     pre_method = cfg_model["pretrain_method"]
     assert pre_method == 'bg_pretrain'
@@ -192,7 +188,7 @@ def mos_finetune(cfg, cfg_dataset, mode: str):
     dataset_name = cfg_model['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = cfg_model['downsample_pct']
-    finetune_dir = f"./logs/ours/{pre_method}(epoch-{pre_epoch})-{mode}/{pre_dataset}-{downsample_pct}%{dataset_name}"
+    finetune_dir = f"./logs/ours/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
 
     # load pre-trained encoder to fine-tuning model
     finetune_model = MosNetwork(cfg_model, True)
@@ -211,8 +207,61 @@ def mos_finetune(cfg, cfg_dataset, mode: str):
     general_pipeline(cfg_model, finetune_model, train_dataloader, finetune_dir)
 
 
-def bg_test(cfg, test_epoch):
-    a = 1
+def bg_test(cfg_test, cfg_dataset):
+    # test checkpoint
+    model_dir = cfg_test['model_dir']
+    test_epoch = cfg_test["test_epoch"]
+    ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
+
+    # model
+    cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
+    model = MotionPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
+
+    # dataloader
+    test_dataset = cfg_test['test_dataset']
+    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
+    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
+    train_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
+    dataloader.setup()
+    test_dataloader = dataloader.test_dataloader()
+
+    # logger
+    log_folder = os.path.join(model_dir, 'results')
+    os.makedirs(log_folder, exist_ok=True)
+    date = datetime.now().strftime('%m%d-%H%M')
+    log_file = os.path.join(log_folder, f"epoch_{test_epoch}_{date}.txt")
+    logging.basicConfig(filename=log_file, level=logging.INFO,
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(str(cfg_test))
+    logging.info(log_file)
+
+    # metrics
+    metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
+
+    # predict
+    trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
+    pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+
+    # pred iou and acc
+    conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
+    acc_conf_mat = torch.zeros(2, 2)
+    for conf_mat in conf_mat_list:
+        acc_conf_mat = acc_conf_mat.add(conf_mat)
+    iou = metrics.get_iou(acc_conf_mat)
+    free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
+    acc = metrics.get_acc(acc_conf_mat)
+    free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
+    logging.info("Background Occ IoU/Acc: %.3f / %.3f, Free IoU/Acc: %.3f / %.3f", occ_iou, occ_acc, free_iou, free_acc)
+
+    # mov_iou_list = model.get_mov_iou_list()
+    # mov_iou_samples = torch.tensor(mov_iou_list)
+    # mov_iou_mean = torch.mean(mov_iou_samples)
+    # mov_iou_var = torch.var(mov_iou_samples)
+    # logging.info('Moving Object IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
+    # logging.info('Moving Object IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
 
 
 if __name__ == "__main__":
@@ -221,7 +270,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['bg_pretrain', 'mos_finetune', 'mos_test'], default='mos_finetune')
+    parser.add_argument("--mode", choices=['bg_pretrain', 'bg_test', 'mos_finetune', 'mos_test'], default='bg_test')
     args = parser.parse_args()
 
     # load config
@@ -237,16 +286,16 @@ if __name__ == "__main__":
 
     # pre-training on background for motion segmentation task
     if args.mode == 'bg_pretrain':
-        background_pretrain(cfg, cfg_dataset, mode=args.mode)
+        background_pretrain(cfg[args.mode], cfg_dataset)
 
     # background test
     elif args.mode == 'bg_test':
-        a = 1
+        bg_test(cfg[args.mode], cfg_dataset)
 
     # fine-tuning on moving object segmentation benchmark
     elif args.mode == 'mos_finetune':
-        mos_finetune(cfg, cfg_dataset, mode=args.mode)
+        mos_finetune(cfg[args.mode], cfg_dataset)
 
     # test on moving object segmentation benchmark
     elif args.mode == 'mos_test':
-        asd = 1
+        bg_test(cfg[args.mode], cfg_dataset)

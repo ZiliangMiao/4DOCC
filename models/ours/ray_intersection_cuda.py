@@ -379,6 +379,7 @@ def get_global_pose(nusc, sd_token, inverse=False):
         pose = sensor_from_ego.dot(ego_from_global)
     return pose
 
+
 def filter_points(points, scene_bbox):
     # nuscenes car: length (4.084 m), width (1.730 m), height (1.562 m)
     ego_mask = torch.logical_and(

@@ -17,8 +17,6 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
 from nuscenes.nuscenes import NuScenes
-from models.mos4d import models
-from datasets.mos4d import nusc as nusc_dataset
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from ours_script import general_pipeline
@@ -51,164 +49,66 @@ def mos_train_from_scratch(cfg_model, cfg_dataset):
     general_pipeline(cfg_model, model, train_dataloader, train_dir)
 
 
-def mos_test(cfg):
-    test_epoch = cfg["mos_test"]["test_epoch"]
-    num_device = cfg["mos_test"]["num_devices"]
-    model_dataset = cfg["mos_test"]["model_dataset"]
-    model_name = cfg["mos_test"]["model_name"]
-    model_version = cfg["mos_test"]["model_version"]
-    model_dir = os.path.join("./logs", "mos4d", model_dataset, model_name, model_version)
-    ckpt_path = os.path.join(model_dir, "checkpoints", f"{model_name}_epoch={test_epoch}.ckpt")
+def mos_test(cfg_test, cfg_dataset):
+    # test checkpoint
+    model_dir = cfg_test['model_dir']
+    test_epoch = cfg_test["test_epoch"]
+    ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
-    # org 4dmos, load trained model's hparams
-    # hparams_path = os.path.join(model_dir, "hparams.yaml")
-    # hparams = yaml.safe_load(open(hparams_path))
+    # model
+    cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
+    model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
-    # dataset
-    test_dataset = cfg["data"]["dataset_name"]
-    if test_dataset == "nuscenes":
-        nusc = NuScenes(dataroot=cfg["dataset"]["nuscenes"]["root"], version=cfg["dataset"]["nuscenes"]["version"])
-        data = NuscMosDataset.NuscSequentialModule(cfg, nusc, "test")
-        data.setup()
-    else:
-        raise ValueError("Not supported test dataset.")
-
-    model = MosNetwork(cfg)
-    # org 4dmos: Load ckeckpoint model
-    # ckpt = torch.load(ckpt_path)
-    # model = model.cuda()
-    # model.load_state_dict(ckpt["state_dict"])
-    # model.eval()
-    # model.freeze()
-
-    # testing
-    test_dataloader = data.test_dataloader()
-
-    ##############################################################################
-    # test_data_list = list(test_dataloader)
-    # from torch.utils.data import DataLoader, Dataset
-    # class PartialDataset(Dataset):
-    #     def __init__(self, data_list):
-    #         self.data_list = data_list
-    #     def __len__(self):
-    #         return len(self.data_list)
-    #     def __getitem__(self, index):
-    #         return self.data_list[index]
-    # def collate_fn(batch):  # define how to merge a list of samples to from a mini-batch samples
-    #     sample_data_token = [item[0][0] for item in batch]
-    #     point_cloud = [item[1][0] for item in batch]
-    #     mos_label = [item[2][0] for item in batch]
-    #     return [sample_data_token, point_cloud, mos_label]
-    # # 创建自定义的Dataset对象
-    # partial_dataset = PartialDataset(test_data_list)
-    # # 创建DataLoader对象
-    # partial_dataloader = DataLoader(partial_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
-    # listss = list(partial_dataloader)
-    ##############################################################################
+    # dataloader
+    test_dataset = cfg_test['test_dataset']
+    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
+    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
+    train_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
+    dataloader.setup()
+    test_dataloader = dataloader.test_dataloader()
 
     # logger
-    log_folder = os.path.join(model_dir, "results", f"epoch_{test_epoch}")
+    log_folder = os.path.join(model_dir, 'results')
     os.makedirs(log_folder, exist_ok=True)
-    date = datetime.date.today().strftime('%Y%m%d')
-    log_file = os.path.join(log_folder, f"{model_name}_epoch-{test_epoch}_{date}.txt")
+    date = datetime.now().strftime('%m%d-%H%M')
+    log_file = os.path.join(log_folder, f"epoch_{test_epoch}_{date}.txt")
     logging.basicConfig(filename=log_file, level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(cfg))
+    logging.info(str(cfg_test))
     logging.info(log_file)
 
     # metrics
     metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
 
-    # predict with pytorch-lightning
-    trainer = Trainer(accelerator="gpu", strategy="ddp", devices=num_device, deterministic=True)
+    # predict
+    trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
     pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+
     # pred iou
-    conf_mat_list_pred = [output["confusion_matrix"] for output in pred_outputs]
-    acc_conf_mat_pred = torch.zeros(3, 3)
-    for conf_mat in conf_mat_list_pred:
-        acc_conf_mat_pred = acc_conf_mat_pred.add(conf_mat)
-    TP_pred, FP_pred, FN_pred = metrics.get_stats(acc_conf_mat_pred)
-    IOU_pred = metrics.get_iou(TP_pred, FP_pred, FN_pred)[2]
-    logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU_pred.item() * 100))
+    conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
+    acc_conf_mat = torch.zeros(3, 3)
+    for conf_mat in conf_mat_list:
+        acc_conf_mat = acc_conf_mat.add(conf_mat)
+    iou = metrics.get_iou(acc_conf_mat)
+    sta_iou = iou[1]
+    mov_iou = iou[2]
+    logging.info('Moving Object IoU w/o ego vehicle (point-level): %.3f' % (sta_iou.item() * 100))
+    logging.info('Moving Object IoU w/o ego vehicle (point-level): %.3f' % (mov_iou.item() * 100))
 
-    # # validate
-    # valid_outputs = trainer.validate(model, dataloaders=test_dataloader, ckpt_path=ckpt_path)
-    # # valid iou
-    # conf_mat_list = model.validation_step_outputs
-    # acc_conf_mat = torch.zeros(3, 3)
-    # for conf_mat in conf_mat_list:
-    #     acc_conf_mat = acc_conf_mat.add(conf_mat)
-    # TP, FP, FN = metrics.getStats(acc_conf_mat)
-    # IOU = metrics.getIoU(TP, FP, FN)[2]
-    # logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU.item() * 100))
-    # a = 1
-
-    # # loop batch
-    # num_classes = 3
-    # ignore_class_idx = 0
-    # moving_class_idx = 2
-    # TP_mov, FP_mov, FN_mov = 0, 0, 0
-    # acc_conf_mat = torch.zeros(num_classes, num_classes).cuda()
-    # num_samples = 0
-    # for i, batch in tqdm(enumerate(test_dataloader)):
-    #     meta, point_clouds, mos_labels = batch
-    #     point_clouds = [point_cloud.cuda() for point_cloud in point_clouds]
-    #     curr_coords_list, curr_feats_list = model(point_clouds)
-    #
-    #     for batch_idx, (coords, logits) in enumerate(zip(curr_coords_list, curr_feats_list)):
-    #         gt_label = mos_labels[batch_idx].cuda()
-    #         if test_dataset == "nuscenes":
-    #             # get ego mask
-    #             curr_time_mask = point_clouds[batch_idx][:, -1] == 0.0
-    #             ego_mask = NuscSequentialDataset.get_ego_mask(point_clouds[batch_idx][curr_time_mask]).cpu().numpy()
-    #             # get pred mos label file name
-    #             sample_data_token = meta[batch_idx]
-    #             pred_label_file = os.path.join(pred_mos_labels_dir, f"{sample_data_token}_mos_pred.label")
-    #         elif test_dataset == "SEKITTI":
-    #             # get ego mask
-    #             curr_time_mask = point_clouds[batch_idx][:, -1] == 0.0
-    #             ego_mask = KittiSequentialDataset.get_ego_mask(point_clouds[batch_idx][curr_time_mask]).cpu().numpy()
-    #             # get pred mos label file name
-    #             seq_idx, scan_idx, _ = meta[batch_idx]
-    #             pred_label_file = os.path.join(pred_mos_labels_dir, f"seq-{seq_idx}_scan-{scan_idx}_mos_pred.label")
-    #         else:
-    #             raise Exception("Not supported test dataset")
-    #
-    #         # save predictions
-    #         logits[:, ignore_class_idx] = -float("inf")  # ingore: 0, i.e., unknown or noise
-    #         pred_confidence = F.softmax(logits, dim=1).detach().cpu().numpy()
-    #         moving_confidence = pred_confidence[:, moving_class_idx]
-    #         pred_label = np.ones_like(moving_confidence, dtype=np.uint8)  # notice: dtype of mos labels is uint8
-    #         pred_label[moving_confidence > 0.5] = 2
-    #
-    #         # calculate iou w/o ego vehicle pts
-    #         cfs_mat = metrics.compute_confusion_matrix(logits[~ego_mask], gt_label[~ego_mask])
-    #         acc_conf_mat = acc_conf_mat.add(cfs_mat)
-    #         tp, fp, fn = metrics.getStats(cfs_mat)  # stat of current sample
-    #         iou_mov = metrics.getIoU(tp, fp, fn)[moving_class_idx] * 100  # IoU of moving object (class 2)
-    #         TP_mov += tp[moving_class_idx]
-    #         FP_mov += fp[moving_class_idx]
-    #         FN_mov += fn[moving_class_idx]
-    #         # logging two iou
-    #         num_samples += 1
-    #         logging.info('Validation Sample Index %d, Moving Object IoU w/o ego vehicle: %f' % (num_samples, iou_mov))
-    #         # save predicted labels
-    #         if save_pred_wo_ego:
-    #             pred_label[ego_mask] = 0  # set ego vehicle points as unknown for visualization
-    #         # save pred mos label
-    #         pred_label.tofile(pred_label_file)
-    #     torch.cuda.empty_cache()
-    # IOU_mov = metrics.getIoU(TP_mov, FP_mov, FN_mov)
-    #
-    # # TP, FP, FN = metrics.getStats(acc_conf_mat)
-    # # IOU = metrics.getIoU(TP, FP, FN)
-    #
-    # logging.info('Final Avg. Moving Object IoU w/o ego vehicle: %f' % (IOU_mov * 100))
+    mov_iou_list = model.get_mov_iou_list()
+    mov_iou_samples = torch.tensor(mov_iou_list)
+    mov_iou_mean = torch.mean(mov_iou_samples)
+    mov_iou_var = torch.var(mov_iou_samples)
+    logging.info('Moving Object IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
+    logging.info('Moving Object IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
 
 
 def create_sekitti_mos_labels(dataset_path):
     semantic_config = yaml.safe_load(open("./config/semantic-kitti-mos.yaml"))
+
     def save_mos_labels(lidarseg_label_file, mos_label_file):
         """Load moving object labels from .label file"""
         if os.path.isfile(lidarseg_label_file):
@@ -248,7 +148,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
     args = parser.parse_args()
 
     # load config
@@ -261,7 +161,6 @@ if __name__ == "__main__":
     if args.mode == 'train':
         mos_train_from_scratch(cfg[args.mode], cfg_dataset)
     elif args.mode == 'finetune':
-        mos_finetune(cfg, cfg_dataset, args.mode)
+        mos_finetune(cfg[args.mode], cfg_dataset)
     elif args.mode == 'test':
-        mos_test(cfg)
-
+        mos_test(cfg[args.mode], cfg_dataset)

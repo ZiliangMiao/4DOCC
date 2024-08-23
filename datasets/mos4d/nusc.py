@@ -21,23 +21,27 @@ class NuscMosDataset(Dataset):
         self.cfg_dataset = cfg_dataset
         self.split = split  # "train" "val" "mini_train" "mini_val" "test"
 
-        # dataset down-sampling: sequence level or sample level
-        if self.cfg_model["downsample_level"] is None:  # for test set and validation set
-            split_logs = create_splits_logs(split, self.nusc)
-            sample_toks = split_logs_to_samples(self.nusc, split_logs)
-        elif self.cfg_model["downsample_level"] == "sequence":
-            split_scenes = create_splits_scenes(verbose=True)
-            split_scenes = split_scenes[self.split]
-            train_data_pct = self.cfg_model["downsample_pct"] / 100
-            ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
-            sample_toks = split_scenes_to_samples(self.nusc, ds_split_scenes)
-        elif self.cfg_model["downsample_level"] == "sample":
-            split_logs = create_splits_logs(split, self.nusc)
-            sample_toks = split_logs_to_samples(self.nusc, split_logs)
-            train_data_pct = self.cfg_model["downsample_pct"] / 100
-            sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
+        if split == 'train':
+            # dataset down-sampling: sequence level or sample level
+            if self.cfg_model["downsample_level"] is None:  # for test set and validation set
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = split_logs_to_samples(self.nusc, split_logs)
+            elif self.cfg_model["downsample_level"] == "sequence":
+                split_scenes = create_splits_scenes(verbose=True)
+                split_scenes = split_scenes[self.split]
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
+                sample_toks = split_scenes_to_samples(self.nusc, ds_split_scenes)
+            elif self.cfg_model["downsample_level"] == "sample":
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = split_logs_to_samples(self.nusc, split_logs)
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
+            else:
+                raise ValueError("Invalid dataset down-sampling strategy!")
         else:
-            raise ValueError("Invalid dataset down-sampling strategy!")
+            split_logs = create_splits_logs(split, self.nusc)
+            sample_toks = split_logs_to_samples(self.nusc, split_logs)
 
         # sample tokens: drop the samples without full sequence length
         self.sample_to_sd_toks_dict = get_sd_toks_dict(self.nusc, self.cfg_model, sample_toks)

@@ -9,6 +9,7 @@ import argparse
 import warnings
 import matplotlib
 import numpy as np
+import torch
 from tqdm import tqdm
 import multiprocessing
 from nuscenes.nuscenes import NuScenes
@@ -16,6 +17,8 @@ from nuscenes.utils.geometry_utils import points_in_box
 from nuscenes.utils.data_io import load_bin_file
 from nuscenes.utils.data_classes import LidarPointCloud, LidarSegPointCloud
 from nuscenes.utils.splits import create_splits_logs
+from datasets.nusc_utils import get_outside_scene_mask, get_ego_mask
+
 
 classname_to_color = {  # RGB.
         "noise": (255, 255, 255),  # White: noise
@@ -57,16 +60,19 @@ classname_to_color = {  # RGB.
         "vehicle.ego": (255, 127, 80)  # Coral: movable vehicles
     }
 
+
 mos_colormap = {
         0: (255/255, 255/255, 255/255),  # unknown: white
         1: (25/255, 80/255, 25/255),    # static: green
         2: (255/255, 20/255, 20/255)     # moving: red
     }
 
+
 check_colormap = {
         0: (255/255, 20/255, 20/255),     # moving: red
         1: (255/255, 255/255, 255/255),  # unknown: white
     }
+
 
 lidarseg_colormap = {  # RGB.
         0: (0, 0, 0),  # Black.
@@ -122,6 +128,7 @@ def get_coor_colors(obj_labels):
 
     return label_rgba
 
+
 def translate_boxes_to_open3d_instance(gt_boxes):
     """
              4-------- 6
@@ -147,6 +154,7 @@ def translate_boxes_to_open3d_instance(gt_boxes):
     line_set.lines = open3d.utility.Vector2iVector(lines)
 
     return line_set, box3d
+
 
 def translate_nusc_boxes_to_open3d_instance(gt_boxes):
     """
@@ -188,6 +196,7 @@ def draw_box(vis, boxes):
 
         vis.add_geometry(line_set)
     return vis
+
 
 def render_samples(nusc, sample_tokens, show_mos_gt=True, show_mos_pred=False, show_lidarseg=False, show_inconsistent=False, show_inside=False):
     if show_mos_gt:
@@ -295,7 +304,6 @@ def render_samples(nusc, sample_tokens, show_mos_gt=True, show_mos_pred=False, s
         vis.poll_events()
         vis.update_renderer()
 
-
     def render_next(vis):
         nonlocal sample_idx
         sample_idx += 1
@@ -315,110 +323,135 @@ def render_samples(nusc, sample_tokens, show_mos_gt=True, show_mos_pred=False, s
     vis.register_key_callback(ord('A'), render_prev)
     vis.run()
 
-def render_mos_samples(nusc, sample_tokens, pred_dir):
-    sample_idx = 0
-    vis_gt = open3d.visualization.VisualizerWithKeyCallback()
-    vis_pred = open3d.visualization.Visualizer()
 
-    def draw_sample(vis_gt, vis_pred):
+def render_mos_samples(nusc, sd_toks_list, baseline_dir, pred_dir):
+    sample_idx = 0
+    gt_vis = open3d.visualization.VisualizerWithKeyCallback()
+    baseline_vis = open3d.visualization.Visualizer()
+    pred_vis = open3d.visualization.Visualizer()
+
+    def draw_sample(gt_vis, baseline_vis, pred_vis):
         nonlocal sample_idx
         print("Rendering sample: " + str(sample_idx))
         # clear geometry
-        vis_gt.clear_geometries()
-        vis_pred.clear_geometries()
+        gt_vis.clear_geometries()
+        baseline_vis.clear_geometries()
+        pred_vis.clear_geometries()
 
-        # get points and bboxes
-        sample_token = sample_tokens[sample_idx]
+        # sample and sample data
+        sd_tok = sd_toks_list[sample_idx]
+        sample_data = nusc.get('sample_data', sd_tok)
+        sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        lidar_tok = sample['data']['LIDAR_TOP']
-        lidar_data = nusc.get('sample_data', lidar_tok)
-        pcl_path = os.path.join(nusc.dataroot, lidar_data['filename'])
+
+        # points
+        pcl_path = os.path.join(nusc.dataroot, sample_data['filename'])
         points = LidarPointCloud.from_file(pcl_path).points.T  # [num_points, 4]
+        ego_mask = get_ego_mask(torch.tensor(points))
+        outside_scene_mask = get_outside_scene_mask(torch.tensor(points), [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5])
+        valid_mask = torch.logical_and(~ego_mask, ~outside_scene_mask)
+        filter_points = points[valid_mask]
+
+        # bboxes
         boxes = []
         for ann_token in sample['anns']:  # bbox
-            _, box, _ = nusc.get_sample_data(lidar_tok, selected_anntokens=[ann_token], use_flat_vehicle_coordinates=False)
+            _, box, _ = nusc.get_sample_data(sd_tok, selected_anntokens=[ann_token], use_flat_vehicle_coordinates=False)
             boxes.append(box)
 
-        # get gt and pred mos labels:
-        gt_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, lidar_tok + "_mos.label")
+        # get labels
+        gt_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
         gt_labels = np.fromfile(gt_labels_file, dtype=np.uint8)
-        pred_labels_file = os.path.join(pred_dir, lidar_tok + "_mos_pred.label")
+        baseline_labels_file = os.path.join(baseline_dir, sd_tok + "_mos_pred.label")
+        baseline_labels = np.fromfile(baseline_labels_file, dtype=np.uint8)
+        pred_labels_file = os.path.join(pred_dir, sd_tok + "_mos_pred.label")
         pred_labels = np.fromfile(pred_labels_file, dtype=np.uint8)
 
         # draw origin
         axis_pcd = open3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
-        vis_gt.add_geometry(axis_pcd)
-        vis_pred.add_geometry(axis_pcd)
+        gt_vis.add_geometry(axis_pcd)
+        baseline_vis.add_geometry(axis_pcd)
+        pred_vis.add_geometry(axis_pcd)
 
         # draw points
-        pts_gt = open3d.geometry.PointCloud()
-        pts_gt.points = open3d.utility.Vector3dVector(points[:, :3])
-        pts_pred = open3d.geometry.PointCloud()
-
-        ###################################
-        # visualize flipped x-axis for singapore dataset
-        # points[:, 0] *= -1
-        ###################################
-
-        pts_pred.points = open3d.utility.Vector3dVector(points[:, :3])
-        vis_gt.add_geometry(pts_gt)
-        vis_pred.add_geometry(pts_pred)
+        gt_pts = open3d.geometry.PointCloud()
+        gt_pts.points = open3d.utility.Vector3dVector(points[:, :3])
+        gt_vis.add_geometry(gt_pts)
+        baseline_pts = open3d.geometry.PointCloud()
+        baseline_pts.points = open3d.utility.Vector3dVector(filter_points[:, :3])
+        baseline_vis.add_geometry(baseline_pts)
+        pred_pts = open3d.geometry.PointCloud()
+        pred_pts.points = open3d.utility.Vector3dVector(filter_points[:, :3])
+        pred_vis.add_geometry(pred_pts)
 
         # draw points label
         vfunc = np.vectorize(mos_colormap.get)
-        pts_gt.colors = open3d.utility.Vector3dVector(np.array(vfunc(gt_labels)).T)
-        pts_pred.colors = open3d.utility.Vector3dVector(np.array(vfunc(pred_labels)).T)
+        gt_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(gt_labels)).T)
+        baseline_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(baseline_labels)).T)
+        pred_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(pred_labels)).T)
 
         # draw bbox
-        vis_gt = draw_box(vis_gt, boxes)
-        vis_pred = draw_box(vis_pred, boxes)
+        gt_vis = draw_box(gt_vis, boxes)
+        baseline_vis = draw_box(baseline_vis, boxes)
+        pred_vis = draw_box(pred_vis, boxes)
 
         # view settings
-        vis_gt.get_render_option().point_size = 7.0
-        vis_gt.get_render_option().background_color = np.zeros(3)
-        vis_pred.get_render_option().point_size = 7.0
-        vis_pred.get_render_option().background_color = np.zeros(3)
+        gt_vis.get_render_option().point_size = 7.0
+        gt_vis.get_render_option().background_color = np.zeros(3)
+        baseline_vis.get_render_option().point_size = 7.0
+        baseline_vis.get_render_option().background_color = np.zeros(3)
+        pred_vis.get_render_option().point_size = 7.0
+        pred_vis.get_render_option().background_color = np.zeros(3)
 
-        view_ctrl_gt = vis_gt.get_view_control()
+        view_ctrl_gt = gt_vis.get_view_control()
         view_ctrl_gt.set_front((0.75263429526187886, -0.13358133681379755, 0.64474618575893383))
         view_ctrl_gt.set_lookat((16.206845402638745, -3.8676194858766819, 15.365323753623207))
         view_ctrl_gt.set_up((-0.64932205862151104, 0.011806106960120792, 0.76042190922274799))
         view_ctrl_gt.set_zoom((0.17999999999999999))
-        view_ctrl_pred = vis_pred.get_view_control()
+        view_ctrl_baseline = baseline_vis.get_view_control()
+        view_ctrl_baseline.set_front((0.75263429526187886, -0.13358133681379755, 0.64474618575893383))
+        view_ctrl_baseline.set_lookat((16.206845402638745, -3.8676194858766819, 15.365323753623207))
+        view_ctrl_baseline.set_up((-0.64932205862151104, 0.011806106960120792, 0.76042190922274799))
+        view_ctrl_baseline.set_zoom((0.17999999999999999))
+        view_ctrl_pred = pred_vis.get_view_control()
         view_ctrl_pred.set_front((0.75263429526187886, -0.13358133681379755, 0.64474618575893383))
         view_ctrl_pred.set_lookat((16.206845402638745, -3.8676194858766819, 15.365323753623207))
         view_ctrl_pred.set_up((-0.64932205862151104, 0.011806106960120792, 0.76042190922274799))
         view_ctrl_pred.set_zoom((0.17999999999999999))
 
         # update vis
-        vis_gt.poll_events()
-        vis_gt.update_renderer()
-        vis_pred.poll_events()
-        vis_pred.update_renderer()
+        gt_vis.poll_events()
+        gt_vis.update_renderer()
+        baseline_vis.poll_events()
+        baseline_vis.update_renderer()
+        pred_vis.poll_events()
+        pred_vis.update_renderer()
 
     def render_next(vis):
         nonlocal sample_idx
-        nonlocal vis_gt, vis_pred
+        nonlocal gt_vis, baseline_vis, pred_vis
         sample_idx += 1
-        if sample_idx >= len(sample_tokens):
-            sample_idx = len(sample_tokens) - 1
-        draw_sample(vis_gt, vis_pred)
+        if sample_idx >= len(sd_toks_list):
+            sample_idx = len(sd_toks_list) - 1
+        draw_sample(gt_vis, baseline_vis, pred_vis)
 
     def render_prev(vis):
         nonlocal sample_idx
-        nonlocal vis_gt, vis_pred
+        nonlocal gt_vis, baseline_vis, pred_vis
         sample_idx -= 1
         if sample_idx < 0:
             sample_idx = 0
-        draw_sample(vis_gt, vis_pred)
+        draw_sample(gt_vis, baseline_vis, pred_vis)
 
     # display resolution * display scale (2560 * 1440 * 175%)
-    vis_gt.create_window(window_name='ground truth mos labels', width=2160, height=2300, left=0, top=100, visible=True)
-    vis_pred.create_window(window_name='predicted mos labels', width=2160, height=2300, left=2160, top=100, visible=True)
-    vis_gt.register_key_callback(ord('D'), render_next)
-    vis_gt.register_key_callback(ord('A'), render_prev)
-    vis_gt.run()
-    vis_pred.run()
+    gt_vis.create_window(window_name='ground truth mos labels', width=853 * 2, height=1440 * 2, left=0, top=0, visible=True)
+    baseline_vis.create_window(window_name='baseline mos predictions', width=853 * 2, height=1440 * 2, left=853 * 2, top=0, visible=True)
+    pred_vis.create_window(window_name='predicted mos predictions', width=853 * 2, height=1440 * 2, left=853 * 4, top=0, visible=True)
+    gt_vis.register_key_callback(ord('D'), render_next)
+    gt_vis.register_key_callback(ord('A'), render_prev)
+    gt_vis.run()
+    baseline_vis.run()
+    pred_vis.run()
+
 
 def split_to_samples(nusc, split_logs):
     sample_tokens = []  # store the sample tokens
@@ -433,6 +466,7 @@ def split_to_samples(nusc, split_logs):
             sample_tokens.append(sample['token'])
     return sample_tokens, sample_data_tokens
 
+
 def split_to_samples_singapore(nusc, split_logs):
     sample_tokens = []  # store the sample tokens
     sample_data_tokens = []
@@ -446,6 +480,7 @@ def split_to_samples_singapore(nusc, split_logs):
                 sample_data_tokens.append(sample_data_token)
                 sample_tokens.append(sample['token'])
     return sample_tokens, sample_data_tokens
+
 
 def split_to_samples_boston(nusc, split_logs):
     sample_tokens = []  # store the sample tokens
@@ -462,12 +497,11 @@ def split_to_samples_boston(nusc, split_logs):
     return sample_tokens, sample_data_tokens
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate nuScenes lidar panaptic gt.')
     parser.add_argument('--root_dir', type=str, default='/home/user/Datasets/nuScenes')
-    parser.add_argument('--pred_dir', type=str, default="/home/user/Projects/4DOCC/logs/mos4d/100%nuscenes/vs-0.2_t-0.5_bs-8/version_1/results/epoch_34/predictions/mos_pred")
-
+    parser.add_argument('--baseline_dir', type=str, default='/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_1/predictions/epoch_49')
+    parser.add_argument('--pred_dir', type=str, default='/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_49')
     parser.add_argument('--version', type=str, default='v1.0-trainval')
     parser.add_argument('--verbose', type=bool, default=True, help='Whether to print to stdout.')
     args = parser.parse_args()
@@ -476,15 +510,44 @@ if __name__ == '__main__':
     nusc = NuScenes(version=args.version, dataroot=args.root_dir, verbose=args.verbose)
     if not hasattr(nusc, "lidarseg") or len(getattr(nusc, 'lidarseg')) == 0:
         raise RuntimeError(f"No nuscenes-lidarseg annotations found in {nusc.version}")
-
     warnings.filterwarnings("ignore")
 
-    # split train, val, test samples
-    split = "val"
-    split_logs = create_splits_logs(split, nusc)
-    sample_tokens, sample_data_tokens = split_to_samples_singapore(nusc, split_logs)
+    samples_source = 'given'  # 'all', 'predicted', 'given'
+    if samples_source == 'all':
+        split = "val"
+        split_logs = create_splits_logs(split, nusc)
+        sample_tokens, sd_toks_list = split_to_samples_singapore(nusc, split_logs)
+    elif samples_source == 'predicted':
+        mos_pred_file_list = os.listdir(args.pred_dir)
+        for i in range(len(mos_pred_file_list)):
+            mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
+        sd_toks_list = mos_pred_file_list
+    elif samples_source == 'given':
+        sd_toks_list = [
+            # good
+            'ceb1ea63e1ed4723a4733519efba7f0c',
+            '2a4fbce161e8415bae3b1060fa7aae1b',
+            'c6bc2dbe5b054f39affedc328858ed85',
+            'd41de152975643e582db47ccb82af9da',
+            'f9dfbfbc874741d0bd2f09435e3ecce5',
+            '5ddfabbb76be4c3bbd7b399235c58f4b',
+            '08afd415763142b4803ea5210bdc7b3c',
+            'ee6b827d19eb4f05a9a2926104d41810',
+            'cdcd16821ea048d1bf1e856b15bd87be',
+            '170657f8642646a2ad676a7d5490ce02',
+            'c9d9d8c615c5488ea284b5d109eea834',
+            'b110abb9219e473798f10b1c809656ca',
+
+            # bad
+            'c2d48f3c6de24822869a31de381d90c8',
+            '95b6b42748234237a58df02029b233f3',
+            'c6879ea1c3d845eebd7825e6e454bee1',
+            '5866a2059b964ff68d6868d8562c4b58',
+            'b0ed3aefd1f54695b9c478deb152a0eb',
+        ]
+    else:
+        sd_toks_list = None
 
     # render mos samples
-    # render_samples(nusc, sample_tokens, show_mos_gt=False, show_mos_pred=True, show_inconsistent=False, show_inside=False)
-    render_mos_samples(nusc, sample_tokens, args.pred_dir)
+    render_mos_samples(nusc, sd_toks_list, args.baseline_dir, args.pred_dir)
     print('Finished rendering.')
