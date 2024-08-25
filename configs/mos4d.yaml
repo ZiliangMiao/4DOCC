@@ -43,7 +43,7 @@ test:
   # '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_1'
   # '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1'
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_2'
-  test_epoch: 49
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
+  test_epoch: 29
   test_dataset: 'nuscenes'
   num_devices: 1

@@ -43,8 +43,8 @@ bg_test:
   # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1' # 29
   # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_2' # 49
   # '/home/user/Projects/4DOCC/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_5' # 99
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_4'
-  test_epoch: 89
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
+  test_epoch: 99
   test_dataset: 'nuscenes'
   num_devices: 1
 
