@@ -1,11 +1,11 @@
 train:
   # resume
-  resume_ckpt: null # '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_1/last.ckpt'
+  resume_ckpt: '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_1/checkpoints/epoch=49.ckpt' # '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_1/last.ckpt'
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 20 # use 10% of training dataset to train the model
+  downsample_pct: 50 # use 10% of training dataset to train the model
   shuffle: False # not used, random sampler default shuffle?
   augmentation: True
 
@@ -21,7 +21,7 @@ train:
   outside_scene_mask: True
 
   # training related
-  num_epoch: 50
+  num_epoch: 100
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
@@ -43,7 +43,7 @@ test:
   # '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_1'
   # '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1'
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  test_epoch: 29
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
+  test_epoch: 49
   test_dataset: 'nuscenes'
   num_devices: 1

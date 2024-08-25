@@ -173,7 +173,13 @@ class MosNetwork(LightningModule):
 
             # logger
             logging.info("Val sd tok: %s, Moving IoU: %.3f", sd_tok, mov_iou.item() * 100)
-            self.mov_iou_list.append(mov_iou.item())
+
+            # TODO: method robustness at different scene (calculate sample level IoU avg.), ignore samples that have no moving points
+            num_mov_pts = conf_mat[2][1] + conf_mat[2][2]
+            num_sta_pts = conf_mat[1][1] + conf_mat[1][2]
+            assert len(mos_probs) == num_mov_pts + num_sta_pts
+            if num_mov_pts != 0:
+                self.mov_iou_list.append(mov_iou.item())
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
