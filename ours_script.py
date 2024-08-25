@@ -192,7 +192,8 @@ def mos_finetune(cfg_model, cfg_dataset):
 
     # load pre-trained encoder to fine-tuning model
     finetune_model = MosNetwork(cfg_model, True)
-    finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model)
+    if cfg_model['resume_ckpt'] is None:
+        finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model)
 
     # dataloader
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
