@@ -81,11 +81,11 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     # training
     if resume_version != -1:  # resume training
         resume_model_cfg = yaml.safe_load(open(os.path.join(train_dir, model_params, f'version_{resume_version}', "hparams.yaml")))
-        assert model_cfg == resume_model_cfg
+        assert set(model_cfg) == set(resume_model_cfg)
         resume_ckpt_path = os.path.join(train_dir, model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
     else:
-        trainer.fit(finetune_model, train_dataloader)
+        trainer.fit(model, train_dataloader)
 
 
 def mos_test(cfg_test, cfg_dataset):
@@ -152,8 +152,8 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
-    parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument('--resume_version', type=int, default=0)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()
 

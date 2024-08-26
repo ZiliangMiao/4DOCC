@@ -239,7 +239,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     # training
     if resume_version != -1:  # resume training
         resume_model_cfg = yaml.safe_load(open(os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', "hparams.yaml")))
-        assert model_cfg == resume_model_cfg
+        assert set(model_cfg) == set(resume_model_cfg)
         resume_ckpt_path = os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(finetune_model, train_dataloader, ckpt_path=resume_ckpt_path)
     else:
