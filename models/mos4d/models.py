@@ -50,6 +50,7 @@ class MosNetwork(LightningModule):
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
             os.makedirs(self.pred_dir, exist_ok=True)
             self.mov_iou_list = []
+            self.num_sample_wo_mov = 0
 
     def forward(self, batch: dict):
         # unfold batch data
@@ -87,6 +88,9 @@ class MosNetwork(LightningModule):
 
     def get_mov_iou_list(self):
         return self.mov_iou_list
+
+    def get_num_sample_wo_mov(self):
+        return self.num_sample_wo_mov
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
@@ -181,6 +185,9 @@ class MosNetwork(LightningModule):
             assert len(mos_probs) == num_mov_pts + num_sta_pts + num_unk_pts
             if num_mov_pts != 0:
                 self.mov_iou_list.append(mov_iou.item())
+            else:
+                self.num_sample_wo_mov += 1
+
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 

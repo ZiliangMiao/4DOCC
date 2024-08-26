@@ -4,9 +4,9 @@ import random
 
 def set_deterministic(random_seed=666):
     # tf32 core
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.set_float32_matmul_precision('high')
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision('highest')  # highest, float32; high, tensorfloat32
 
     # deterministic
     torch.backends.cudnn.deterministic = True

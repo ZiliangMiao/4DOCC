@@ -19,34 +19,73 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from nuscenes.nuscenes import NuScenes
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
-from ours_script import general_pipeline
 from models.mos4d.models import MosNetwork
 from datasets.nusc_utils import NuscDataloader
 from datasets.mos4d.nusc import NuscMosDataset
 from ours_script import mos_finetune
 
 
-def mos_train_from_scratch(cfg_model, cfg_dataset):
-    # fine-tuning params
-    dataset_name = cfg_model['dataset_name']
+def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
+    # params
+    dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
-    downsample_pct = cfg_model['downsample_pct']
+    downsample_pct = model_cfg['downsample_pct']
     train_dir = f"./logs/mos_baseline/mos4d_train/{downsample_pct}%{dataset_name}"
-
-    # load pre-trained encoder to fine-tuning model
-    model = MosNetwork(cfg_model, True)
+    os.makedirs(train_dir, exist_ok=True)
+    quant_size = model_cfg['quant_size']
+    batch_size = model_cfg['batch_size']
+    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + (model_cfg['n_input'] - 1) * model_cfg['n_skip'] * model_cfg['time_interval'], 2)
+    model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
-    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'val')
-    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, True)
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
+    # model
+    model = MosNetwork(model_cfg, True)
+
+    # lr_monitor
+    lr_monitor = LearningRateMonitor(logging_interval="step")
+
+    # tensorboard logger
+    tb_logger = pl_loggers.TensorBoardLogger(train_dir, name=model_params, default_hp_metric=False)
+
+    # checkpoint saver
+    checkpoint_saver = ModelCheckpoint(
+        monitor="epoch",
+        verbose=True,
+        save_top_k=model_cfg['num_epoch'],
+        mode="max",
+        filename="{epoch}",
+        every_n_epochs=5,
+        save_last=True,
+    )
+
+    # trainer
+    trainer = Trainer(
+        accelerator="gpu",
+        strategy="ddp",
+        devices=model_cfg["num_devices"],
+        logger=tb_logger,
+        log_every_n_steps=1,
+        max_epochs=model_cfg['num_epoch'],
+        accumulate_grad_batches=model_cfg["acc_batches"],  # accumulate batches, default=1
+        callbacks=[lr_monitor, checkpoint_saver],
+    )
+
     # training
-    general_pipeline(cfg_model, model, train_dataloader, train_dir)
+    if resume_version != -1:  # resume training
+        resume_model_cfg = yaml.safe_load(open(os.path.join(train_dir, model_params, f'version_{resume_version}', "hparams.yaml")))
+        assert model_cfg == resume_model_cfg
+        resume_ckpt_path = os.path.join(train_dir, model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
+        trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
+    else:
+        trainer.fit(finetune_model, train_dataloader)
 
 
 def mos_test(cfg_test, cfg_dataset):
@@ -104,42 +143,7 @@ def mos_test(cfg_test, cfg_dataset):
     mov_iou_var = torch.var(mov_iou_samples)
     logging.info('Moving Object IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
     logging.info('Moving Object IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
-
-
-def create_sekitti_mos_labels(dataset_path):
-    semantic_config = yaml.safe_load(open("./config/semantic-kitti-mos.yaml"))
-
-    def save_mos_labels(lidarseg_label_file, mos_label_file):
-        """Load moving object labels from .label file"""
-        if os.path.isfile(lidarseg_label_file):
-            labels = np.fromfile(lidarseg_label_file, dtype=np.uint32)
-            labels = labels.reshape((-1))
-            labels = labels & 0xFFFF  # Mask semantics in lower half
-            mapped_labels = copy.deepcopy(labels)
-            for semantic_label, mos_label in semantic_config["learning_map"].items():
-                mapped_labels[labels == semantic_label] = mos_label
-            mos_labels = mapped_labels.astype(np.uint8)
-            mos_labels.tofile(mos_label_file)
-            num_unk = np.sum(mos_labels == 0)
-            num_sta = np.sum(mos_labels == 1)
-            num_mov = np.sum(mos_labels == 2)
-            print(f"num of unknown pts: {num_unk}, num of static pts: {num_sta}, num of moving pts: {num_mov}")
-            # Directly load saved mos labels and check if it is correct
-            # mos_labels = np.fromfile(mos_label_file, dtype=np.uint32).reshape((-1)) & 0xFFFF
-            # check_true = (mos_labels == mapped_labels).all()
-            return None
-        else:
-            return torch.Tensor(1, 1).long()
-
-    seqs_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    for seq_idx in tqdm(seqs_list):
-        lidarseg_dir = os.path.join(dataset_path, str(seq_idx).zfill(4), "labels")
-        mos_labels_dir = os.path.join(dataset_path, str(seq_idx).zfill(4), "mos_labels")
-        os.makedirs(mos_labels_dir, exist_ok=True)
-        for i, filename in enumerate(os.listdir(lidarseg_dir)):
-            lidarseg_label_file = os.path.join(lidarseg_dir, filename)
-            mos_label_file = os.path.join(mos_labels_dir, filename)
-            save_mos_labels(lidarseg_label_file, mos_label_file)
+    logging.info(f'Number of val samples: {len(val_set)}, number of samples w/o moving points: {model.get_num_sample_wo_mov()}')
 
 
 if __name__ == "__main__":
@@ -149,18 +153,26 @@ if __name__ == "__main__":
     # mode
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
+    parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
+    parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()
 
     # load config
     with open("configs/mos4d.yaml", "r") as f:
         cfg = yaml.safe_load(f)
     with open("configs/dataset.yaml", "r") as f:
-        cfg_dataset = yaml.safe_load(f)
+        dataset_cfg = yaml.safe_load(f)
+
+    # dataset root path at different platform
+    if args.autodl:
+        dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
+    else:
+        dataset_cfg['nuscenes']['root'] = '/home/user' + dataset_cfg['nuscenes']['root']
 
     # training from scratch
     if args.mode == 'train':
-        mos_train_from_scratch(cfg[args.mode], cfg_dataset)
+        mos4d_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'finetune':
-        mos_finetune(cfg[args.mode], cfg_dataset)
+        mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'test':
-        mos_test(cfg[args.mode], cfg_dataset)
+        mos_test(cfg[args.mode], dataset_cfg)
