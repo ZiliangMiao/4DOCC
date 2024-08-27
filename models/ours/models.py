@@ -109,7 +109,9 @@ class MotionPretrainNetwork(LightningModule):
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
 
-        bg_probs, bg_labels = self.forward(batch)  # encoder & decoder
+        bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
+        bg_probs = torch.cat(bg_probs_batch, dim=0)
+        bg_labels = torch.cat(bg_labels_batch, dim=0)
         loss = self.get_loss(bg_probs, bg_labels)  # TODO: bg loss only
 
         # metrics
