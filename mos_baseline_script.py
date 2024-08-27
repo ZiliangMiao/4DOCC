@@ -89,14 +89,11 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
 
 
 def mos_test(cfg_test, cfg_dataset):
-    # test checkpoint
+    # model config
     model_dir = cfg_test['model_dir']
-    test_epoch = cfg_test["test_epoch"]
-    ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
-
-    # model
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
-    model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
+    log_dir = os.path.join(model_dir, 'results')
+    os.makedirs(log_dir, exist_ok=True)
 
     # dataloader
     test_dataset = cfg_test['test_dataset']
@@ -108,42 +105,52 @@ def mos_test(cfg_test, cfg_dataset):
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
 
-    # logger
-    log_folder = os.path.join(model_dir, 'results')
-    os.makedirs(log_folder, exist_ok=True)
-    date = datetime.now().strftime('%m%d-%H%M')
-    log_file = os.path.join(log_folder, f"epoch_{test_epoch}_{date}.txt")
-    logging.basicConfig(filename=log_file, level=logging.INFO,
-                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(cfg_test))
-    logging.info(log_file)
+    for test_epoch in cfg_test["test_epoch"]:
+        # logger
+        date = datetime.now().strftime('%m%d')  # %m%d-%H%M
+        log_file = os.path.join(log_dir, f"epoch_{test_epoch}_{date}.txt")
+        formatter = logging.Formatter(fmt='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        stream_handler = logging.StreamHandler()
+        logger = logging.getLogger(f'test epoch {test_epoch} logger')
+        logger.setLevel(logging.INFO)
+        logger.addHandler(file_handler)
+        logger.addHandler(stream_handler)
+        logger.info(str(cfg_test))
+        logger.info(log_file)
 
-    # metrics
-    metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
+        # test checkpoint
+        ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
-    # predict
-    trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
-    pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+        # model
+        model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger)
 
-    # pred iou
-    conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
-    acc_conf_mat = torch.zeros(3, 3)
-    for conf_mat in conf_mat_list:
-        acc_conf_mat = acc_conf_mat.add(conf_mat)
-    iou = metrics.get_iou(acc_conf_mat)
-    sta_iou = iou[1]
-    mov_iou = iou[2]
-    logging.info('Moving Object IoU w/o ego vehicle (point-level): %.3f' % (sta_iou.item() * 100))
-    logging.info('Moving Object IoU w/o ego vehicle (point-level): %.3f' % (mov_iou.item() * 100))
+        # metrics
+        metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
 
-    mov_iou_list = model.get_mov_iou_list()
-    mov_iou_samples = torch.tensor(mov_iou_list)
-    mov_iou_mean = torch.mean(mov_iou_samples)
-    mov_iou_var = torch.var(mov_iou_samples)
-    logging.info('Moving Object IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
-    logging.info('Moving Object IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
-    logging.info(f'Number of val samples: {len(val_set)}, number of samples w/o moving points: {model.get_num_sample_wo_mov()}')
+        # predict
+        trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
+        pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+
+        # pred iou
+        conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
+        acc_conf_mat = torch.zeros(3, 3)
+        for conf_mat in conf_mat_list:
+            acc_conf_mat = acc_conf_mat.add(conf_mat)
+        iou = metrics.get_iou(acc_conf_mat)
+        sta_iou = iou[1]
+        mov_iou = iou[2]
+        logger.info('Static IoU w/o ego vehicle (point-level): %.3f' % (sta_iou.item() * 100))
+        logger.info('Moving IoU w/o ego vehicle (point-level): %.3f' % (mov_iou.item() * 100))
+
+        mov_iou_list = model.get_mov_iou_list()
+        mov_iou_samples = torch.tensor(mov_iou_list)
+        mov_iou_mean = torch.mean(mov_iou_samples)
+        mov_iou_var = torch.var(mov_iou_samples)
+        logger.info('Moving IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
+        logger.info('Moving IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
+        logger.info(f'Number of val samples: {len(val_set)}, number of samples w/o moving points: {model.get_num_sample_wo_mov()}')
 
 
 if __name__ == "__main__":
@@ -152,8 +159,8 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
-    parser.add_argument('--resume_version', type=int, default=0)  # -1: not resuming
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
+    parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()
 

@@ -1,5 +1,9 @@
 import argparse
+
+import torch
 from nuscenes import NuScenes
+from nuscenes.utils.data_classes import LidarPointCloud
+from nuscenes.utils.splits import create_splits_scenes
 import numpy as np
 import open3d as o3d
 import os, time, sys, glob
@@ -11,10 +15,24 @@ import pickle
 
 mos_colormap = {
         0: (255/255, 255/255, 255/255),  # unknown: white
-        1: (25/255, 80/255, 25/255),    # static: green
+        1: (25/255, 80/255, 25/255),    # static: greenregister_key_callback
         2: (255/255, 20/255, 20/255)     # moving: red
     }
 vfunc = np.vectorize(mos_colormap.get)
+
+
+def color_intensity(intensity):
+    min_intensity = 0
+    max_intensity = 0.05 * 255
+    CMAP='coolwarm'
+    cmap = plt.get_cmap(CMAP)
+    cmap = cmap(np.arange(256))[:, :3]
+    n_colors = cmap.shape[0] - 1
+    intensity = np.clip(intensity, 0, max_intensity)
+    color_idx = np.floor((intensity - min_intensity) / (max_intensity - min_intensity) * n_colors).astype(int)
+    color = cmap[color_idx]
+    return color
+
 
 class ThreadStatus(Enum):
     Init = 0
@@ -28,8 +46,28 @@ class PlayStatus(Enum):
     stop = 0
     end = 2
 
+
+def get_ego_mask(pcd):
+    # nuscenes car: length (4.084 m), width (1.730 m), height (1.562 m)
+    # https://forum.nuscenes.org/t/dimensions-of-the-ego-vehicle-used-to-gather-data/550
+    ego_mask = torch.logical_and(
+        torch.logical_and(-0.865 <= pcd[:, 0], pcd[:, 0] <= 0.865),
+        torch.logical_and(-1.5 <= pcd[:, 1], pcd[:, 1] <= 2.5),
+    )
+    return ego_mask
+
+
+def get_outside_scene_mask(pcd, scene_bbox):
+    inside_scene_mask = torch.logical_and(
+        torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3]),
+        torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]),
+        # torch.logical_and(scene_bbox[2] <= points[:, 2], points[:, 2] <= scene_bbox[5])
+    )
+    return ~inside_scene_mask
+
+
 def showPointcloud3d(threadName, mark):
-    global pointcloud_data, pred_mos_label, g_thread_status, current_id, file_name, files_num
+    global pointcloud_data, pred_mos_label, g_thread_status, current_id, pcd_file, files_num
 
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name='model1 result', width=1200,
@@ -85,26 +123,35 @@ def showPointcloud3d(threadName, mark):
         vis1.update_renderer()
 
         sys.stdout.write("\r")  # 清空终端并清空缓冲区
-        sys.stdout.write("{},      {}/{}s".format(file_name, current_id / 10, files_num / 10))  # 往缓冲区里写数据
+        sys.stdout.write("{},      {}/{}s".format(pcd_file, current_id / 10, files_num / 10))  # 往缓冲区里写数据
         sys.stdout.flush()  # 将缓冲区里的数据刷新到终端，但是不会清空缓冲区
 
 
 def play_data(threadName, mark):
-    global pointcloud_data, pred_mos_label,\
-        start_id, end_id, pcd_list, label_list, \
-        g_thread_status, play_status, data_thread_status, \
-        file_name, current_id, files_num
+    global nusc_dataset, pointcloud_data, pred_mos_label,\
+        start_id, end_id, label_list, label_dir,\
+        g_thread_status, play_status, data_thread_status, current_id, files_num, pcd_file
     while (True):
         while (data_thread_status == ThreadStatus.Init):
             if play_status == PlayStatus.start:
                 id = 0
                 for id in range(start_id, end_id):
                     current_id = id
-                    pcd_file = pcd_list[id]
-                    file_name = os.path.basename(pcd_file)
-                    pcd = np.fromfile(pcd_file, dtype=np.float32).reshape(-1, 3)
                     label_file = label_list[id]
-                    label = np.fromfile(label_file, dtype=np.uint8)
+                    label = np.fromfile(os.path.join(label_dir, label_file), dtype=np.uint8)
+
+                    sample_data_token = label_file.partition("_mos_pred.label")[0]
+                    lidar_data = nusc_dataset.get('sample_data', sample_data_token)
+                    pcd_file = os.path.join(nusc_dataset.dataroot, lidar_data['filename'])
+                    pcd = LidarPointCloud.from_file(pcd_file).points.T[:, 0:-1]  # [num_pts, 4]
+
+                    # filter
+                    ego_mask = get_ego_mask(torch.tensor(pcd))
+                    outside_scene_mask = get_outside_scene_mask(torch.tensor(pcd), [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5])
+                    valid_mask = torch.logical_and(~ego_mask, ~outside_scene_mask)
+                    pcd = pcd[valid_mask]
+
+
                     assert len(pcd) == len(label)
                     (pointcloud_data, pred_mos_label) = (pcd, label)
 
@@ -118,27 +165,19 @@ def play_data(threadName, mark):
             time.sleep(1)
         time.sleep(1)
 
-def get_file_list(pcd_dir, label_dir):
-    pcd_list = glob.glob(os.path.join(pcd_dir, "*.bin"))
-    pcd_list.sort()
-    label_list = glob.glob(os.path.join(label_dir, "*.label"))
-    label_list.sort()
-    assert len(pcd_list) == len(label_list)
-    return pcd_list, label_list
+def mogo_vis(label_dir, nusc):
+    global nusc_dataset, pointcloud_data, pred_mos_label, start_id, end_id, label_list,\
+        g_thread_status, play_status, data_thread_status, before_gt_number, before_label_number, current_id, files_num, pcd_file
+    # nusc dataset
+    nusc_dataset = nusc
 
-def mogo_vis(args, nusc):
-    global pointcloud_data, pred_mos_label, start_id, end_id, pcd_list, label_list, \
-        g_thread_status, play_status, data_thread_status, before_gt_number, before_label_number, file_name, current_id, files_num
+    label_list = os.listdir(label_dir)
 
-    pcd_dir = os.path.join(args.model_dir, "results", args.expt_name, "visualization", "valid_points")
-    label_dir = os.path.join(args.model_dir, "results", args.expt_name, "visualization", "pred_mos_labels")
-    pcd_list, label_list = get_file_list(pcd_dir, label_dir)
-
-    files_num = len(pcd_list)
+    files_num = len(label_list)
     start_id = 0
     before_gt_number = 0
     before_label_number = 0
-    end_id = len(pcd_list)
+    end_id = len(label_list)
     g_thread_status = ThreadStatus.Init  # Init Running Close
     data_thread_status = ThreadStatus.Init
     play_status = PlayStatus.start
@@ -151,8 +190,8 @@ def mogo_vis(args, nusc):
 
 def listen_keyboard(thread_name):
     def on_press(key):
-        global pointcloud_data, pred_mos_label, start_id, end_id, pcd_list, \
-            label_list, g_thread_status, play_status, file_name, current_id, data_thread_status
+        global pointcloud_data, pred_mos_label, start_id, end_id, \
+            label_list, label_dir, g_thread_status, play_status, current_id, data_thread_status, pcd_file
 
         if key == keyboard.Key.space:  # 暂停与播放
             if play_status == PlayStatus.start:
@@ -168,11 +207,14 @@ def listen_keyboard(thread_name):
             if current_id < 0:
                 current_id = 0
             start_id = current_id
-            pcd_file = pcd_list[current_id]
-            file_name = os.path.basename(pcd_file)
-            pcd = np.fromfile(pcd_file, dtype=np.float32).reshape(-1, 3)
             label_file = label_list[current_id]
-            label = np.fromfile(label_file, dtype=np.uint8)
+            label = np.fromfile(os.path.join(label_dir, label_file), dtype=np.uint8)
+
+            sample_data_token = label_file.partition("_mos_pred.label")[0]
+            lidar_data = nusc_dataset.get('sample_data', sample_data_token)
+            pcd_file = os.path.join(nusc_dataset.dataroot, lidar_data['filename'])
+            pcd = LidarPointCloud.from_file(pcd_file).points.T[:, 0:-1]  # [num_pts, 4]
+
             assert len(pcd) == len(label)
             (pointcloud_data, pred_mos_label) = (pcd, label)
 
@@ -189,10 +231,13 @@ def listen_keyboard(thread_name):
                 current_id = end_id - 1
             start_id = current_id
 
-            pcd_file = pcd_list[current_id]
-            pcd = np.fromfile(pcd_file, dtype=np.float32).reshape(-1, 3)
             label_file = label_list[current_id]
-            label = np.fromfile(label_file, dtype=np.uint8)
+            label = np.fromfile(os.path.join(label_dir, label_file), dtype=np.uint8)
+
+            sample_data_token = label_file.partition("_mos_pred.label")[0]
+            lidar_data = nusc_dataset.get('sample_data', sample_data_token)
+            pcd_file = os.path.join(nusc_dataset.dataroot, lidar_data['filename'])
+            pcd = LidarPointCloud.from_file(pcd_file).points.T[:, 0:-1]  # [num_pts, 4]
             assert len(pcd) == len(label)
             (pointcloud_data, pred_mos_label) = (pcd, label)
 
@@ -212,11 +257,8 @@ def listen_keyboard(thread_name):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model-dir", type=str, default="models/nusc/1s_forecasting")
-    parser.add_argument("--expt-name", type=str, default="nusc_1s_mos")
-    args = parser.parse_args()
+    label_dir = '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
 
     # load nusc dataset
     nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
-    mogo_vis(args, nusc)
+    mogo_vis(label_dir, nusc)

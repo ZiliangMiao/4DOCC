@@ -51,6 +51,7 @@ class MosNetwork(LightningModule):
             os.makedirs(self.pred_dir, exist_ok=True)
             self.mov_iou_list = []
             self.num_sample_wo_mov = 0
+            self.test_logger = kwargs['test_logger']
 
     def forward(self, batch: dict):
         # unfold batch data
@@ -161,6 +162,7 @@ class MosNetwork(LightningModule):
 
         # iterate each batch data for predicted label saving
         acc_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)
+
         for sd_tok, mos_probs, mos_labels in zip(sd_tok_batch, mos_probs_batch, mos_labels_batch):
             # metrics
             conf_mat = self.ClassificationMetrics.compute_conf_mat(mos_probs.detach(), mos_labels)
@@ -176,7 +178,7 @@ class MosNetwork(LightningModule):
             pred_labels.tofile(mos_pred_file)
 
             # logger
-            logging.info("Val sd tok: %s, Moving IoU: %.3f", sd_tok, mov_iou.item() * 100)
+            self.test_logger.info("Val sd tok: %s, Moving IoU: %.3f", sd_tok, mov_iou.item() * 100)
 
             # TODO: method robustness at different scene (calculate sample level IoU avg.), ignore samples that have no moving points
             num_mov_pts = conf_mat[2][0] + conf_mat[2][1] + conf_mat[2][2]

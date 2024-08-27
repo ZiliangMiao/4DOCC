@@ -46,7 +46,7 @@ test:
   # './logs/mos_baseline/mos4d_train/20%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # './logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # './logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  model_dir: './logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  test_epoch: 99
+  model_dir: './logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1'
+  test_epoch: [179]
   test_dataset: 'nuscenes'
   num_devices: 1

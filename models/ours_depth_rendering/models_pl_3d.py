@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 
 import MinkowskiEngine as ME
@@ -18,7 +17,7 @@ from lib.minkowski.minkunet import MinkUNetBase
 from models.ours_depth_rendering.occlusion_decoder import OcclusionDecoder
 
 # evaluation
-from utils.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
+from models.occ4d.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
 
 
 #######################################

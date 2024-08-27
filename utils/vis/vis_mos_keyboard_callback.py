@@ -3,7 +3,11 @@ Open3d visualization tool box
 Written by Jihan YANG
 All rights preserved from 2021 - present.
 """
+import logging
 import os
+import sys
+from datetime import datetime
+
 import open3d
 import argparse
 import warnings
@@ -359,15 +363,39 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
     ours_vis.run()
 
 
-def render_mos_samples_with_confusion_color(nusc, sd_toks_list, baseline_dir, ours_dir, pred_sd_toks_list):
+def render_mos_samples_with_confusion_color(nusc, sd_toks_list, baseline_dir, ours_dir):
     # vis sample index
     sample_idx = 0
+
+    # TODO: skip flag 实在没办法解决按一次render两次. 打个补丁吧
+    skip_flag = True
 
     # open3d visualizer
     baseline_vis = open3d.visualization.VisualizerWithKeyCallback()
     ours_vis = open3d.visualization.Visualizer()
     baseline_vis.create_window(window_name='baseline mos results', width=853 * 2, height=1440 * 2, left=0, top=0)
     ours_vis.create_window(window_name='ours mos results', width=853 * 2, height=1440 * 2, left=853 * 2, top=0)
+
+    # python logger
+    date = datetime.now().strftime('%m%d')
+    good_log_file = f"./vis_good_sd_toks_{date}.txt"
+    bad_log_file = f"./vis_bad_sd_toks_{date}.txt"
+    formatter = logging.Formatter('%(message)s')
+    stream_handler = logging.StreamHandler()
+
+    good_handler = logging.FileHandler(good_log_file)
+    good_handler.setFormatter(formatter)
+    good_cases_logger = logging.getLogger('good_cases')
+    good_cases_logger.setLevel(logging.INFO)
+    good_cases_logger.addHandler(good_handler)
+    good_cases_logger.addHandler(stream_handler)
+
+    bad_handler = logging.FileHandler(bad_log_file)
+    bad_handler.setFormatter(formatter)
+    bad_cases_logger = logging.getLogger('bad_cases')
+    bad_cases_logger.setLevel(logging.INFO)
+    bad_cases_logger.addHandler(bad_handler)
+    bad_cases_logger.addHandler(stream_handler)
 
     def get_confusion_color(gt_labels, pred_labels):
         unk_mask = gt_labels == 0
@@ -394,8 +422,6 @@ def render_mos_samples_with_confusion_color(nusc, sd_toks_list, baseline_dir, ou
 
         # sample and sample data
         sd_tok = sd_toks_list[sample_idx]
-        if sd_tok not in pred_sd_toks_list:
-            return None
 
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
@@ -457,38 +483,66 @@ def render_mos_samples_with_confusion_color(nusc, sd_toks_list, baseline_dir, ou
         baseline_view = baseline_vis.get_view_control()
         ours_view = ours_vis.get_view_control()
 
+        # only set once while rendering a new sample
         baseline_view.set_front((-0.0026307837086555776, -0.10911602561147189, 0.99402553887303879))
         baseline_view.set_lookat((-4.1540102715460518, -3.1544474823842861, 16.565590452781144))
         baseline_view.set_up((-0.99303496278054726, 0.11737280671055968, 0.01025606846326051))
         baseline_view.set_zoom((0.14000000000000001))
 
-        cam_params = baseline_view.convert_to_pinhole_camera_parameters()
-        ours_view.convert_from_pinhole_camera_parameters(cam_params, allow_arbitrary=True)
+        ours_vis.reset_view_point(True)  # TODO: 只能reset一次, 循环内外都可以
+        while True:
+            cam_params = baseline_view.convert_to_pinhole_camera_parameters()
+            # baseline_view.convert_from_pinhole_camera_parameters(cam_params, allow_arbitrary=True) # TODO: 不能convert主viewer
+            ours_view.convert_from_pinhole_camera_parameters(cam_params, allow_arbitrary=True)
 
-        # update vis
-        baseline_vis.poll_events()
-        ours_vis.poll_events()
-        baseline_vis.update_renderer()
-        ours_vis.update_renderer()
+            # update vis
+            baseline_vis.poll_events()
+            baseline_vis.update_renderer()
+            ours_vis.poll_events()  # TODO: if have two poll event, render_prev or next will be triggered twice
+            ours_vis.update_renderer()
 
     def render_next(vis):
-        nonlocal sample_idx
+        nonlocal sample_idx, skip_flag
         nonlocal baseline_vis, ours_vis
-        sample_idx += 1
-        if sample_idx >= len(sd_toks_list):
-            sample_idx = len(sd_toks_list) - 1
-        draw_sample(baseline_vis, ours_vis)
+
+        if skip_flag:
+            skip_flag = False
+            return None
+        else:
+            skip_flag = True
+            print("render next trigger")
+            sample_idx += 1
+            if sample_idx >= len(sd_toks_list):
+                sample_idx = len(sd_toks_list) - 1
+            draw_sample(baseline_vis, ours_vis)
 
     def render_prev(vis):
-        nonlocal sample_idx
+        nonlocal sample_idx, skip_flag
         nonlocal baseline_vis, ours_vis
-        sample_idx -= 1
-        if sample_idx < 0:
-            sample_idx = 0
-        draw_sample(baseline_vis, ours_vis)
+        if skip_flag:
+            skip_flag = False
+            return None
+        else:
+            skip_flag = True
+            print("render prev trigger")
+            sample_idx -= 1
+            if sample_idx <= 0:
+                sample_idx = 0
+            draw_sample(baseline_vis, ours_vis)
+
+    def log_good_cases(vis):
+        nonlocal sample_idx, good_cases_logger
+        good_cases_logger.info(f"good cases: {sample_idx}, {sd_toks_list[sample_idx]}")
+
+    def log_bad_cases(vis):
+        nonlocal sample_idx, bad_cases_logger
+        bad_cases_logger.info(f"bad cases: {sample_idx}, {sd_toks_list[sample_idx]}")
 
     baseline_vis.register_key_callback(ord('D'), render_next)
     baseline_vis.register_key_callback(ord('A'), render_prev)
+    baseline_vis.register_key_callback(ord('G'), log_good_cases)
+    baseline_vis.register_key_callback(ord('B'), log_bad_cases)
+
     baseline_vis.run()
     ours_vis.run()
 
@@ -538,43 +592,66 @@ def split_to_samples_boston(nusc, split_logs):
 
 
 if __name__ == '__main__':
-    warnings.filterwarnings('ignore')
-    baseline_dir = '/home/user/Projects/4DOCC/logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
-    ours_dir = '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
-    # ours_dir = '/home/user/Projects/4DOCC/logs/ours/bg_pretrain(epoch-49)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_49'
-    samples_source = 'all'  # 'all', 'predicted', 'given'
+    open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)  # TODO: ignore stupid open3d warnings
+
+    baseline_dir = '../../logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
+    ours_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
+    source = 'all'  # 'all', 'predicted', 'given'
 
     parser = argparse.ArgumentParser(description='Generate nuScenes lidar panaptic gt.')
     parser.add_argument('--root_dir', type=str, default='/home/user/Datasets/nuScenes')
     parser.add_argument('--baseline_dir', type=str, default=baseline_dir)
     parser.add_argument('--ours_dir', type=str, default=ours_dir)
-    parser.add_argument('--samples_source', type=str, choices=['all', 'predicted', 'given'], default=samples_source)
+    parser.add_argument('--source', type=str, choices=['all', 'singapore', 'boston', 'given'], default=source)
     parser.add_argument('--version', type=str, default='v1.0-trainval')
     parser.add_argument('--verbose', type=bool, default=True, help='Whether to print to stdout.')
     args = parser.parse_args()
 
-    print(f'Start rendering... \nArguments: {args}')
     nusc = NuScenes(version=args.version, dataroot=args.root_dir, verbose=args.verbose)
     if not hasattr(nusc, "lidarseg") or len(getattr(nusc, 'lidarseg')) == 0:
         raise RuntimeError(f"No nuscenes-lidarseg annotations found in {nusc.version}")
     warnings.filterwarnings("ignore")
 
-    if samples_source == 'all':
+    if source == 'all':
         split = "val"
         split_logs = create_splits_logs(split, nusc)
         sample_tokens, sd_toks_list = split_to_samples(nusc, split_logs)
 
+        # list predicted labels to get all valid sd tokens
         mos_pred_file_list = os.listdir(args.ours_dir)
         for i in range(len(mos_pred_file_list)):
             mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
-        pred_sd_toks_list = mos_pred_file_list
-        # sd_toks_list = list(set(sd_toks_list).intersection(set(pred_sd_toks_list)))
-    elif samples_source == 'predicted':
+        valid_sd_toks_list = mos_pred_file_list
+
+        # all valid sd tokens, and remain the order
+        sd_toks_list = [sd_tok for sd_tok in sd_toks_list if sd_tok in valid_sd_toks_list]
+    elif source == 'singapore':
+        split = "val"
+        split_logs = create_splits_logs(split, nusc)
+        sample_tokens, sd_toks_list = split_to_samples_singapore(nusc, split_logs)
+
+        # list predicted labels to get all valid sd tokens
         mos_pred_file_list = os.listdir(args.ours_dir)
         for i in range(len(mos_pred_file_list)):
             mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
-        sd_toks_list = mos_pred_file_list
-    elif samples_source == 'given':
+        valid_sd_toks_list = mos_pred_file_list
+
+        # all valid sd tokens, and remain the order
+        sd_toks_list = [sd_tok for sd_tok in sd_toks_list if sd_tok in valid_sd_toks_list]
+    elif source == 'boston':
+        split = "val"
+        split_logs = create_splits_logs(split, nusc)
+        sample_tokens, sd_toks_list = split_to_samples_boston(nusc, split_logs)
+
+        # list predicted labels to get all valid sd tokens
+        mos_pred_file_list = os.listdir(args.ours_dir)
+        for i in range(len(mos_pred_file_list)):
+            mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
+        valid_sd_toks_list = mos_pred_file_list
+
+        # all valid sd tokens, and remain the order
+        sd_toks_list = [sd_tok for sd_tok in sd_toks_list if sd_tok in valid_sd_toks_list]
+    elif source == 'given':
         sd_toks_list = [
             # good
             'ceb1ea63e1ed4723a4733519efba7f0c',
@@ -601,5 +678,4 @@ if __name__ == '__main__':
         sd_toks_list = None
 
     # render mos samples
-    render_mos_samples_with_confusion_color(nusc, sd_toks_list, args.baseline_dir, args.ours_dir, pred_sd_toks_list)
-    print('Finished rendering.')
+    render_mos_samples_with_confusion_color(nusc, sd_toks_list, args.baseline_dir, args.ours_dir)
