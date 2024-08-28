@@ -365,7 +365,7 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
 
 def render_mos_samples_with_confusion_color(nusc, sd_toks_list, baseline_dir, ours_dir):
     # vis sample index
-    sample_idx = 0
+    sample_idx = 679
 
     # TODO: skip flag 实在没办法解决按一次render两次. 打个补丁吧
     skip_flag = True
@@ -594,7 +594,7 @@ def split_to_samples_boston(nusc, split_logs):
 if __name__ == '__main__':
     open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)  # TODO: ignore stupid open3d warnings
 
-    baseline_dir = '../../logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
+    baseline_dir = '../../logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1/predictions/epoch_139'
     ours_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_99'
     source = 'all'  # 'all', 'predicted', 'given'
 
