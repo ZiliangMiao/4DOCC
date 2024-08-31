@@ -106,7 +106,7 @@ class NuscBgDataset(Dataset):
         pcds_4d = pcds_4d[valid_mask]
 
         # data augmentation: will not change the order of points
-        if self.cfg_model["augmentation"]:
+        if self.split == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
 
         # load labels

@@ -124,33 +124,32 @@ def mos_test(cfg_test, cfg_dataset):
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
         # model
-        model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger)
-
-        # metrics
-        metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
+        model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc)
+        iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
 
         # predict
         trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
-        pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+        trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
 
-        # pred iou
-        conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
-        acc_conf_mat = torch.zeros(3, 3)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-        iou = metrics.get_iou(acc_conf_mat)
-        sta_iou = iou[1]
-        mov_iou = iou[2]
-        logger.info('Static IoU w/o ego vehicle (point-level): %.3f' % (sta_iou.item() * 100))
-        logger.info('Moving IoU w/o ego vehicle (point-level): %.3f' % (mov_iou.item() * 100))
+        # metric-1: object-level detection rate
+        det_rate = model.det_mov_obj_cnt / (model.mov_obj_num + 1e-15)
+        logger.info('Metric-1 moving object detection rate: %.3f' % (det_rate * 100))
 
-        mov_iou_list = model.get_mov_iou_list()
-        mov_iou_samples = torch.tensor(mov_iou_list)
-        mov_iou_mean = torch.mean(mov_iou_samples)
-        mov_iou_var = torch.var(mov_iou_samples)
-        logger.info('Moving IoU Mean (sample-level): %.3f' % (mov_iou_mean.item() * 100))
-        logger.info('Moving IoU Var (sample-level): %.3f' % (mov_iou_var.item() * 100))
-        logger.info(f'Number of val samples: {len(val_set)}, number of samples w/o moving points: {model.get_num_sample_wo_mov()}')
+        # metric-2: object-level iou
+        obj_iou_mean = torch.mean(torch.tensor(model.object_iou_list)).item()
+        logger.info('Metric-2 object-level avg. moving iou: %.3f' % (obj_iou_mean * 100))
+
+        # metric-3: sample-level iou
+        sample_iou_mean = torch.mean(torch.tensor(model.sample_iou_list)).item()
+        logger.info('Metric-3 sample-level avg. moving iou: %.3f' % (sample_iou_mean * 100))
+
+        # metric-4: point-level iou
+        point_iou = iou_metric.get_iou(model.accumulated_conf_mat)
+        logger.info('Metric-4 point-level moving iou: %.3f' % (point_iou[2] * 100))
+        logger.info('Metric-4 point-level static iou: %.3f' % (point_iou[1] * 100))
+
+        # statistics
+        logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
 
 
 if __name__ == "__main__":

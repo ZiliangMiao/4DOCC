@@ -14,19 +14,17 @@ class ClassificationMetrics(nn.Module):
         self.n_classes = n_classes
         self.ignore_index = ignore_index
 
-    def compute_conf_mat(self, pred_probs: torch.Tensor, gt_labels: torch.Tensor):
+    def compute_conf_mat(self, pred_labels: torch.Tensor, gt_labels: torch.Tensor):
         from torcheval.metrics import MulticlassConfusionMatrix
         metric = MulticlassConfusionMatrix(self.n_classes)
-        pred_labels = torch.argmax(pred_probs, axis=1).long()
-        gt_labels = gt_labels.long()
-        metric.update(pred_labels, gt_labels)
+        metric.update(pred_labels.long(), gt_labels.long())
         conf_mat = metric.compute()
         return conf_mat
 
     def get_stats(self, conf_mat):
         # get TP, FP, FN of both two classes
-        ignore_mask = torch.Tensor(self.ignore_index).long()
-        conf_mat[:, ignore_mask] = 0
+        # ignore_mask = torch.Tensor(self.ignore_index).long()
+        # conf_mat[:, ignore_mask] = 0
         tp = conf_mat.diag()
         fp = conf_mat.sum(dim=1) - tp
         fn = conf_mat.sum(dim=0) - tp

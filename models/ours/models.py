@@ -75,7 +75,7 @@ class MotionPretrainNetwork(LightningModule):
             # bg_samples
             bg_samples = torch.from_numpy(np.concatenate(list(bg_samples_dict.values()))).cuda()
             bg_points_4d = bg_samples[:, 0:self.cfg_model['pos_dim']]
-            bg_labels = bg_samples[:, -1] - 1  # 1:free, 2:occ -> 0: free, 1: occ
+            bg_labels = bg_samples[:, -1] - 1  # TODO: [1:free, 2:occ] -> [0: free, 1: occ]
 
             # bg points positional encoding
             num_bg_samples_per_ray_list = meta_batch[batch_idx][3]
@@ -111,11 +111,12 @@ class MotionPretrainNetwork(LightningModule):
 
         bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
         bg_probs = torch.cat(bg_probs_batch, dim=0)
+        pred_labels = torch.argmax(bg_probs, axis=1)
         bg_labels = torch.cat(bg_labels_batch, dim=0)
         loss = self.get_loss(bg_probs, bg_labels)  # TODO: bg loss only
 
         # metrics
-        conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
+        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, bg_labels)
         iou = self.ClassificationMetrics.get_iou(conf_mat)
         free_iou, occ_iou = iou[0], iou[1]
         acc = self.ClassificationMetrics.get_acc(conf_mat)
@@ -185,8 +186,10 @@ class MotionPretrainNetwork(LightningModule):
         acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
         for meta, bg_probs, bg_labels in zip(meta_batch, bg_probs_batch, bg_labels_batch):
             sd_tok = meta[0]
+
             # metrics
-            conf_mat = self.ClassificationMetrics.compute_conf_mat(bg_probs.detach(), bg_labels)
+            pred_labels = torch.argmax(bg_probs, axis=1)
+            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, bg_labels)
             iou = self.ClassificationMetrics.get_iou(conf_mat)
             free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
             acc = self.ClassificationMetrics.get_acc(conf_mat)

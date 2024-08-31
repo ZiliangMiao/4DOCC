@@ -115,6 +115,6 @@ class NuscMosDataset(Dataset):
         mos_labels = mos_labels[valid_mask[ref_time_mask]]
 
         # data augmentation: will not change the order of points
-        if self.cfg_model["augmentation"]:
+        if self.split == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
         return [ref_sd_tok, pcds_4d, mos_labels]

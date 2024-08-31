@@ -138,7 +138,8 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
     # training
     if resume_version != -1:  # resume training
         resume_model_cfg = yaml.safe_load(open(os.path.join(pretrain_dir, model_params, f'version_{resume_version}', "hparams.yaml")))
-        assert model_cfg == resume_model_cfg
+        assert set(model_cfg) == set(resume_model_cfg), "resume training: cfg dict keys are not the same."
+        assert model_cfg == resume_model_cfg, f"resume training: cfg keys have different values."
         resume_ckpt_path = os.path.join(pretrain_dir, model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(pretrain_model, train_dataloader, ckpt_path=resume_ckpt_path)
     else:
