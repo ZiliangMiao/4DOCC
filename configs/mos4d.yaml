@@ -7,9 +7,9 @@ train:
   augmentation: True
 
   # data processing related
-  n_input: 10
-  n_skip: 3
-  time_interval: 0.05 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  n_input: 6
+  n_skip: 0
+  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   pos_dim: 4 # x, y, z, t
@@ -18,7 +18,7 @@ train:
   outside_scene_mask: True
 
   # training related
-  num_epoch: 200
+  num_epoch: 300
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
