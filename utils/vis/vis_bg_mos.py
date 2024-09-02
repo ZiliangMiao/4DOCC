@@ -80,8 +80,7 @@ class LineMesh(object):
             if axis is not None:
                 axis_a = axis * angle
                 R = open3d.geometry.get_rotation_matrix_from_axis_angle(axis_a)
-                cylinder_segment = cylinder_segment.rotate(R=R, center=(0, 0,
-                                                                        0))  # TODO: rotate center is not boolean: https://www.open3d.org/docs/release/python_api/open3d.geometry.MeshBase.html#open3d.geometry.MeshBase.rotate
+                cylinder_segment = cylinder_segment.rotate(R=R, center=(0, 0, 0))  # TODO: rotate center is not boolean: https://www.open3d.org/docs/release/python_api/open3d.geometry.MeshBase.html#open3d.geometry.MeshBase.rotate
                 # cylinder_segment = cylinder_segment.rotate(
                 #   axis_a, center=True, type=o3d.geometry.RotationType.AxisAngle)
             # color cylinder
@@ -108,7 +107,6 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
     view_init = True
     skip_flag = True
     cam_params = None
-    new_sample = True
     mov_obj_num = 0
     ray_num = 0
 
@@ -117,8 +115,7 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
     vis.create_window(window_name='ray intersection points', width=3840, height=2160, left=0, top=0)
 
     def draw(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, cam_params, view_init, new_sample, mov_obj_num, ray_num
-        # if new_sample:  # initialize sample
+        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, cam_params, view_init, mov_obj_num, ray_num
         ###################################################################################################################
         # get key sample data tokens
         sd_tok = sd_toks_list[vis_sample_idx]
@@ -190,19 +187,16 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
                 if len(ray_idx_list) == 0: continue
                 obj_boxes_list.append(box)
                 obj_ray_indices_list.append(ray_idx_list)
-        mov_obj_num = len(obj_ray_indices_list)
-        ray_num = len(obj_ray_indices_list[vis_obj_idx])
-        new_sample = False
 
-        print(f"Sample idx: {vis_sample_idx} / {len(sd_toks_list)}, Moving object index: {vis_obj_idx} / {mov_obj_num}, Ray index: {vis_ray_idx} / {ray_num}")
-        vis.clear_geometries()
-
+        ################################################################################################################
         # draw static geometries: query lidar orgs, key lidar orgs
+        vis.clear_geometries()
         axis_size = 2.0
         axis_query = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size * 2, origin=query_org)
         vis.add_geometry(axis_query)
         for key_rays_org, key_rays_ts in zip(key_rays_org_list, key_rays_ts_list):
-            axis_key = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size + key_rays_ts * 0.1, origin=key_rays_org)
+            axis_key = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size + key_rays_ts * 0.1,
+                                                                            origin=key_rays_org)
             vis.add_geometry(axis_key)
 
         # mos color indices
@@ -211,9 +205,19 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         # draw query pcd
         pcd = open3d.geometry.PointCloud()
         pcd.points = open3d.utility.Vector3dVector(query_pts)
-        pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(mos_confusion_color_indices)).T)  # static color
+        pcd.colors = open3d.utility.Vector3dVector(
+            np.array(mos_color_func(mos_confusion_color_indices)).T)  # static color
         pcd_down = pcd.voxel_down_sample(voxel_size=0.10)  # point cloud downsample
         vis.add_geometry(pcd_down)
+        ################################################################################################################
+
+        if len(obj_ray_indices_list) == 0:
+            print(f"Sample idx: {vis_sample_idx}, have no moving objects.")
+            return None
+        else:
+            mov_obj_num = len(obj_ray_indices_list)
+            ray_num = len(obj_ray_indices_list[vis_obj_idx])
+            print(f"Sample idx: {vis_sample_idx} / {len(sd_toks_list)}, Moving object index: {vis_obj_idx} / {mov_obj_num}, Ray index: {vis_ray_idx} / {ray_num}")
 
         # draw moving object bboxes
         box = obj_boxes_list[vis_obj_idx]
@@ -221,7 +225,7 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
 
         # draw query ray point [vis_ray_idx]
         obj_ray_idx = obj_ray_indices_list[vis_obj_idx][vis_ray_idx]
-        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.4, resolution=20)
+        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.02, resolution=200)
         obj_point_sphere = obj_point_sphere.translate(query_pts[obj_ray_idx], relative=False)
         obj_point_sphere.paint_uniform_color(mos_color_func(mos_confusion_color_indices[obj_ray_idx]))
         vis.add_geometry(obj_point_sphere)
@@ -243,7 +247,7 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         #     key_sensor_idx = key_sensor_rays_idx[i][0]
         #     key_ray_idx = key_sensor_rays_idx[i][1]
         #     key_ray_point = key_rays_pts_list[key_sensor_idx][key_ray_idx].cpu().numpy()
-        #     key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.2, resolution=20)
+        #     key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.01, resolution=200)
         #     key_ray_point_sphere = key_ray_point_sphere.translate(key_ray_point, relative=False)
         #     key_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_key_list[key_sensor_idx][key_ray_idx]))
         #     vis.add_geometry(key_ray_point_sphere)
@@ -262,7 +266,7 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         lines_key = []
         for i in range(len(bg_samples)):
             # bg point
-            bg_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.2, resolution=20)
+            bg_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.01, resolution=200)
             bg_sphere = bg_sphere.translate(bg_pts[i], relative=False)
             bg_sphere.paint_uniform_color(occ_color_func(bg_confusion_color_indices[i]))
             vis.add_geometry(bg_sphere)
@@ -294,7 +298,7 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
             vis.update_renderer()
 
     def render_next_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag, new_sample
+        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag
         vis_obj_idx = 0
         vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
         if skip_flag:
@@ -302,14 +306,13 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
             return None
         else:
             skip_flag = True
-            new_sample = True
             vis_sample_idx += 1
             if vis_sample_idx >= len(sd_toks_list):
                 vis_sample_idx = len(sd_toks_list) - 1
             draw(vis)
 
     def render_prev_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag, new_sample
+        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag
         vis_obj_idx = 0
         vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
         if skip_flag:
@@ -317,7 +320,6 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
             return None
         else:
             skip_flag = True
-            new_sample = True
             vis_sample_idx -= 1
             if vis_sample_idx < 0:
                 vis_sample_idx = 0
@@ -403,3 +405,5 @@ if __name__ == '__main__':
     source = 'all'
     sd_toks_list = get_vis_sd_toks(nusc, source, pred_mos_dir)
     draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir)
+
+    # Sample idx: 20 / 3319, Moving object index: 3 / 8, Ray index: 0 / 250

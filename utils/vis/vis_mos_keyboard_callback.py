@@ -138,7 +138,7 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
         print(f"Number of moving objects: {mov_obj_num}, Number of inconsistent moving object: {inconsistent_obj_num}")
 
         # colored by TP TN FP FN
-        baseline_colors = get_confusion_color(gt_labels, gt_labels)
+        baseline_colors = get_confusion_color(gt_labels, baseline_labels)
         ours_colors = get_confusion_color(gt_labels, ours_labels)
         baseline_pts.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(baseline_colors)).T)
         ours_pts.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(ours_colors)).T)
@@ -222,9 +222,9 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
 if __name__ == '__main__':
     open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)  # TODO: ignore stupid open3d warnings
 
-    baseline_dir = '../../logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_189'
-    ours_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_129'
-    source = 'given'  # 'all', 'given'
+    baseline_dir = '../../logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_199'
+    ours_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_199'
+    source = 'all'  # 'all', 'given'
 
     parser = argparse.ArgumentParser(description='Generate nuScenes lidar panaptic gt.')
     parser.add_argument('--root_dir', type=str, default='/home/user/Datasets/nuScenes')

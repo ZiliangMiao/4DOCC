@@ -10,7 +10,7 @@ from nuscenes.utils.data_classes import LidarPointCloud
 from pyquaternion import Quaternion
 from random import sample as random_sample
 from nuscenes.utils.geometry_utils import transform_matrix
-from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sd_toks_dict, get_ego_mask, get_outside_scene_mask, add_timestamp
+from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sample_level_seq_input, get_sample_data_level_seq_input, get_ego_mask, get_outside_scene_mask, add_timestamp
 from utils.augmentation import augment_pcds
 
 
@@ -44,7 +44,10 @@ class NuscMosDataset(Dataset):
             sample_toks = split_logs_to_samples(self.nusc, split_logs)
 
         # sample tokens: drop the samples without full sequence length
-        self.sample_to_sd_toks_dict = get_sd_toks_dict(self.nusc, self.cfg_model, sample_toks)
+        if cfg_model['time_interval'] == 0.5:  # sample level input
+            self.sample_to_sd_toks_dict = get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
+        elif cfg_model['time_interval'] == 0.05:  # sample data level input
+            self.sample_to_sd_toks_dict = get_sample_data_level_seq_input(self.nusc, self.cfg_model, sample_toks)
 
     def __len__(self):
         return len(self.sample_to_sd_toks_dict)

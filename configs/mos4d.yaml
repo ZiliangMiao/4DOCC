@@ -2,16 +2,16 @@ train:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 50 # use 10% of training dataset to train the model
+  downsample_pct: 100 # use 10% of training dataset to train the model
   shuffle: False # not used, random sampler default shuffle?
   augmentation: True
 
   # data processing related
   n_input: 10
-  n_skip: 1
+  n_skip: 3
+  time_interval: 0.05 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
@@ -19,7 +19,7 @@ train:
 
   # training related
   num_epoch: 200
-  batch_size: 4
+  batch_size: 8
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
   lr_epoch: 1
@@ -38,7 +38,7 @@ finetune:
 test:
   # './logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # './logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  model_dir: './logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  test_epoch: [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] # [109, 119, 129, 139, 149, 159, 169, 179, 189, 199] [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] [309, 319, 329, 339, 349, 359, 369, 379, 389, 399]
+  model_dir: './logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
+  test_epoch: [9, 19, 29, 39, 49, 59, 69, 79, 89, 99] # [109, 119, 129, 139, 149, 159, 169, 179, 189, 199] [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] [309, 319, 329, 339, 349, 359, 369, 379, 389, 399]
   test_dataset: 'nuscenes'
   num_devices: 1

@@ -34,7 +34,7 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     os.makedirs(train_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
-    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + (model_cfg['n_input'] - 1) * model_cfg['n_skip'] * model_cfg['time_interval'], 2)
+    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + model_cfg['n_input'] * model_cfg['n_skip'] * model_cfg['time_interval'], 2)
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
@@ -158,7 +158,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()

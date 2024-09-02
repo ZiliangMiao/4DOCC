@@ -98,13 +98,7 @@ class MosNetwork(LightningModule):
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
-
-        sd_toks_batch, pcds_batch, labels_tuple_batch = batch
-        mos_labels_batch = []
-        for labels_tuple in labels_tuple_batch:
-            mos_labels, boxes, anns = labels_tuple
-            mos_labels_batch.append(mos_labels)
-
+        sd_toks_batch, pcds_batch, mos_labels_batch = batch
         mos_probs_batch = self.forward(batch)  # encoder & decoder
         mos_probs = torch.cat(mos_probs_batch, dim=0)
         pred_labels = torch.argmax(mos_probs, axis=1)
