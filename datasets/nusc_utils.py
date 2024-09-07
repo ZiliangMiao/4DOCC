@@ -127,7 +127,7 @@ def get_scene_tokens(nusc, split_logs: List[str]) -> List[str]:
     return scene_tokens
 
 
-def get_sample_level_seq_input(nusc, cfg_model, sample_toks: List[str]):
+def get_sample_level_seq_input(nusc, cfg_model, sample_toks: List[str], dir='prev'):
     input_sample_toks_dict = {}
     for sample_tok in sample_toks:
         sample = nusc.get("sample", sample_tok)
@@ -136,26 +136,23 @@ def get_sample_level_seq_input(nusc, cfg_model, sample_toks: List[str]):
         skip_cnt = 0  # already skip 0 samples
         num_input_scans = 1  # already sample 1 lidar sample data
         while num_input_scans < cfg_model["n_input"]:
-            if sample["prev"] != "":
-                sample_prev = nusc.get("sample", sample["prev"])
+            if sample[dir] != "":
+                sample = nusc.get("sample", sample[dir])
                 if skip_cnt < cfg_model["n_skip"]:
                     skip_cnt += 1
-                    sample = sample_prev
                     continue
                 # add input sample data token
-                sd_toks_list.append(sample_prev["data"]["LIDAR_TOP"])
+                sd_toks_list.append(sample["data"]["LIDAR_TOP"])
                 skip_cnt = 0
                 num_input_scans += 1
-                # assign sample data prev to sample data for next loop
-                sample = sample_prev
             else:
                 break
-        assert len(sd_toks_list) == num_input_scans
         if num_input_scans == cfg_model["n_input"]:  # valid sample tokens (full sequence length)
             input_sample_toks_dict[sample_tok] = sd_toks_list
     return input_sample_toks_dict
 
-def get_sample_data_level_seq_input(nusc, cfg_model, sample_toks: List[str]):
+
+def get_sample_data_level_seq_input(nusc, cfg_model, sample_toks: List[str], dir='prev'):
     input_sample_data_toks_dict = {}
     for sample_tok in sample_toks:
         sample = nusc.get("sample", sample_tok)
@@ -166,21 +163,17 @@ def get_sample_data_level_seq_input(nusc, cfg_model, sample_toks: List[str]):
         skip_cnt = 0  # already skip 0 samples
         num_input_scans = 1  # already sample 1 lidar sample data
         while num_input_scans < cfg_model["n_input"]:
-            if sample_data["prev"] != "":
-                sample_data_prev = nusc.get("sample_data", sample_data["prev"])
+            if sample_data[dir] != "":
+                sample_data = nusc.get("sample_data", sample_data[dir])
                 if skip_cnt < cfg_model["n_skip"]:
                     skip_cnt += 1
-                    sample_data = sample_data_prev
                     continue
                 # add input sample data token
-                sd_toks_list.append(sample_data_prev["token"])
+                sd_toks_list.append(sample_data["token"])
                 skip_cnt = 0
                 num_input_scans += 1
-                # assign sample data prev to sample data for next loop
-                sample_data = sample_data_prev
             else:
                 break
-        assert len(sd_toks_list) == num_input_scans
         if num_input_scans == cfg_model["n_input"]:  # valid sample tokens (full sequence length)
             input_sample_data_toks_dict[sample_tok] = sd_toks_list
     return input_sample_data_toks_dict
@@ -200,7 +193,7 @@ def get_outside_scene_mask(pcd, scene_bbox):
     inside_scene_mask = torch.logical_and(
         torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3]),
         torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]),
-        # torch.logical_and(scene_bbox[2] <= points[:, 2], points[:, 2] <= scene_bbox[5])
+        # torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] <= scene_bbox[5])
     )
     return ~inside_scene_mask
 

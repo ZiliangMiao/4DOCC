@@ -1,12 +1,15 @@
 import argparse
 import os
 from collections import defaultdict
+
+import yaml
+
 from utils.vis.open3d_vis_utils import draw_box, get_vis_sd_toks
 import open3d
 import numpy as np
 from nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import points_in_box
-from models.ours.ray_intersection_cuda import get_sd_tok_list, get_transformed_pcd
+from models.ours.ray_intersection_cuda import get_key_sd_toks_dict, get_transformed_pcd
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
@@ -100,7 +103,7 @@ class LineMesh(object):
             vis.remove_geometry(cylinder)
 
 
-def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
+def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color: bool):
     vis_sample_idx = 0  # nonlocal variable: sample index
     vis_obj_idx = 0  # nonlocal variable: moving object index
     vis_ray_idx = 0  # nonlocal variable: ray index of moving object points which have background samples
@@ -116,55 +119,53 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
 
     def draw(vis):
         nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, cam_params, view_init, mov_obj_num, ray_num
-        ###################################################################################################################
         # get key sample data tokens
         sd_tok = sd_toks_list[vis_sample_idx]
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        sd_tok_key_prev_list, fill_flag_prev = get_sd_tok_list(nusc, sample, 'prev',
-                                                               num_samples=args.num_key_samples / 2,
-                                                               every_k_samples=args.every_k_samples)
-        sd_tok_key_next_list, fill_flag_next = get_sd_tok_list(nusc, sample, 'next',
-                                                               num_samples=args.num_key_samples / 2,
-                                                               every_k_samples=args.every_k_samples)
-        key_sd_tok_list = sd_tok_key_prev_list[::-1] + sd_tok_key_next_list  # -0.5, ..., -0.1, 0.1, ..., 0.5
+        key_sd_toks_list = get_key_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
 
         # get query rays and key rays
-        query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, sd_tok, sd_tok, args.scene_bbox)
+        query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
         key_rays_org_list = []
         key_rays_ts_list = []
-        for key_sd_tok in key_sd_tok_list:
-            key_org, _, key_ts, _ = get_transformed_pcd(nusc, sd_tok, key_sd_tok, args.scene_bbox)
+        for key_sd_tok in key_sd_toks_list:
+            key_org, _, key_ts, _ = get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
             key_rays_org_list.append(key_org)
             key_rays_ts_list.append(int(key_ts))
 
-        # load predicted bg labels
-        pred_bg_labels_file = os.path.join(pred_bg_dir, sd_tok + "_bg_pred.label")
-        pred_bg_labels = np.fromfile(pred_bg_labels_file, dtype=np.uint8)
+        # load predicted labels
+        if conf_color:
+            # load predicted bg labels
+            pred_bg_labels_file = os.path.join(pred_bg_dir, sd_tok + "_bg_pred.label")
+            pred_bg_labels = np.fromfile(pred_bg_labels_file, dtype=np.uint8)
+            # load predicted mos labels
+            pred_mos_labels_file = os.path.join(pred_mos_dir, sd_tok + "_mos_pred.label")
+            pred_mos_labels = np.fromfile(pred_mos_labels_file, dtype=np.uint8)
 
         # load gt and pred mos labels
         gt_mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
         gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
-        pred_mos_labels_file = os.path.join(pred_mos_dir, sd_tok + "_mos_pred.label")
-        pred_mos_labels = np.fromfile(pred_mos_labels_file, dtype=np.uint8)
 
         # load gt bg samples
         bg_samples_dir = os.path.join(nusc.dataroot, "bg_labels", nusc.version)
-        bg_samples_file = os.path.join(bg_samples_dir, sd_tok + "_bg_samples.npy")
-        ray_samples_file = os.path.join(bg_samples_dir, sd_tok + "_ray_samples.npy")
+        bg_samples_file = os.path.join(bg_samples_dir, sd_tok + "_bg_samples.label")
+        ray_samples_file = os.path.join(bg_samples_dir, sd_tok + "_ray_samples.label")
         ray_samples = np.fromfile(ray_samples_file, dtype=np.int64).reshape(-1, 2)
         bg_samples = np.fromfile(bg_samples_file, dtype=np.float32).reshape(-1, 5)
         ray_to_bg_samples_dict = defaultdict()
         for ray_sample in list(ray_samples):
             ray_idx = ray_sample[0]
             num_bg_samples = ray_sample[1]
-            # TODO: bg predict labels [0: free, 1: occ]
-            ray_to_bg_samples_dict[ray_idx] = (
-            bg_samples[0:num_bg_samples, :], pred_bg_labels[0:num_bg_samples] + 1)
-            bg_samples = bg_samples[num_bg_samples:, :]
-            pred_bg_labels = pred_bg_labels[num_bg_samples:]
-        ###################################################################################################################
+            if conf_color:
+                # TODO: bg predict labels [0: free, 1: occ]
+                ray_to_bg_samples_dict[ray_idx] = (bg_samples[0:num_bg_samples, :], pred_bg_labels[0:num_bg_samples] + 1)
+                bg_samples = bg_samples[num_bg_samples:, :]
+                pred_bg_labels = pred_bg_labels[num_bg_samples:]
+            else:
+                ray_to_bg_samples_dict[ray_idx] = bg_samples[0:num_bg_samples, :]
+                bg_samples = bg_samples[num_bg_samples:, :]
 
         # vis nusc sample, moving object bboxes
         anns_toks = sample['anns']
@@ -195,18 +196,17 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         axis_query = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size * 2, origin=query_org)
         vis.add_geometry(axis_query)
         for key_rays_org, key_rays_ts in zip(key_rays_org_list, key_rays_ts_list):
-            axis_key = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size + key_rays_ts * 0.1,
-                                                                            origin=key_rays_org)
+            axis_key = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size + key_rays_ts * 0.1, origin=key_rays_org)
             vis.add_geometry(axis_key)
-
-        # mos color indices
-        mos_confusion_color_indices = get_confusion_color(gt_mos_labels, pred_mos_labels)
 
         # draw query pcd
         pcd = open3d.geometry.PointCloud()
         pcd.points = open3d.utility.Vector3dVector(query_pts)
-        pcd.colors = open3d.utility.Vector3dVector(
-            np.array(mos_color_func(mos_confusion_color_indices)).T)  # static color
+        if conf_color:
+            mos_confusion_color_indices = get_confusion_color(gt_mos_labels, pred_mos_labels)
+            pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(mos_confusion_color_indices)).T)
+        else:
+            pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(gt_mos_labels)).T)  # static color
         pcd_down = pcd.voxel_down_sample(voxel_size=0.10)  # point cloud downsample
         vis.add_geometry(pcd_down)
         ################################################################################################################
@@ -225,9 +225,12 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
 
         # draw query ray point [vis_ray_idx]
         obj_ray_idx = obj_ray_indices_list[vis_obj_idx][vis_ray_idx]
-        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.02, resolution=200)
+        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
         obj_point_sphere = obj_point_sphere.translate(query_pts[obj_ray_idx], relative=False)
-        obj_point_sphere.paint_uniform_color(mos_color_func(mos_confusion_color_indices[obj_ray_idx]))
+        if conf_color:
+            obj_point_sphere.paint_uniform_color(mos_color_func(mos_confusion_color_indices[obj_ray_idx]))
+        else:
+            obj_point_sphere.paint_uniform_color(mos_color_func(gt_mos_labels[obj_ray_idx]))
         vis.add_geometry(obj_point_sphere)
 
         # draw query ray
@@ -247,18 +250,20 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         #     key_sensor_idx = key_sensor_rays_idx[i][0]
         #     key_ray_idx = key_sensor_rays_idx[i][1]
         #     key_ray_point = key_rays_pts_list[key_sensor_idx][key_ray_idx].cpu().numpy()
-        #     key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.01, resolution=200)
+        #     key_ray_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
         #     key_ray_point_sphere = key_ray_point_sphere.translate(key_ray_point, relative=False)
         #     key_ray_point_sphere.paint_uniform_color(mos_color_func(mos_labels_key_list[key_sensor_idx][key_ray_idx]))
         #     vis.add_geometry(key_ray_point_sphere)
         #     key_rays_pts_list.append(key_rays_pts_list[key_sensor_idx][key_ray_idx].cpu())
 
         # get bg samples
-        bg_samples, pred_bg_labels = ray_to_bg_samples_dict[obj_ray_idx]
+        if conf_color:
+            bg_samples, pred_bg_labels = ray_to_bg_samples_dict[obj_ray_idx]
+        else:
+            bg_samples = ray_to_bg_samples_dict[obj_ray_idx]
         bg_pts = bg_samples[:, 0:3]
         bg_ts = bg_samples[:, 3]
         gt_bg_labels = bg_samples[:, 4]
-        bg_confusion_color_indices = get_confusion_color(gt_bg_labels, pred_bg_labels)
 
         # draw bg points and rays to bg points
         lineset_key = open3d.geometry.LineSet()
@@ -266,9 +271,13 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
         lines_key = []
         for i in range(len(bg_samples)):
             # bg point
-            bg_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.01, resolution=200)
+            bg_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
             bg_sphere = bg_sphere.translate(bg_pts[i], relative=False)
-            bg_sphere.paint_uniform_color(occ_color_func(bg_confusion_color_indices[i]))
+            if conf_color:
+                bg_confusion_color_indices = get_confusion_color(gt_bg_labels, pred_bg_labels)
+                bg_sphere.paint_uniform_color(occ_color_func(bg_confusion_color_indices[i]))
+            else:
+                bg_sphere.paint_uniform_color(occ_color_func(gt_bg_labels[i]))
             vis.add_geometry(bg_sphere)
             # key rays org to bg point
             key_sensor_idx = key_rays_ts_list.index(int(bg_ts[i]))
@@ -296,34 +305,6 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
             # print(cam_params.extrinsic)
             vis.poll_events()
             vis.update_renderer()
-
-    def render_next_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag
-        vis_obj_idx = 0
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_sample_idx += 1
-            if vis_sample_idx >= len(sd_toks_list):
-                vis_sample_idx = len(sd_toks_list) - 1
-            draw(vis)
-
-    def render_prev_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag
-        vis_obj_idx = 0
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_sample_idx -= 1
-            if vis_sample_idx < 0:
-                vis_sample_idx = 0
-            draw(vis)
 
     def render_next_obj(vis):
         nonlocal vis_obj_idx, vis_ray_idx, skip_flag, mov_obj_num
@@ -376,8 +357,6 @@ def draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir):
             draw(vis)
 
     # render keyboard control
-    vis.register_key_callback(ord('E'), render_next_sample)
-    vis.register_key_callback(ord('Q'), render_prev_sample)
     vis.register_key_callback(ord('D'), render_next_obj)
     vis.register_key_callback(ord('A'), render_prev_obj)
     vis.register_key_callback(ord('C'), render_next_ray)
@@ -392,18 +371,15 @@ if __name__ == '__main__':
 
     # parameters
     nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scene_bbox", type=list, default=[-70.0, -70.0, -4.5, 70.0, 70.0, 4.5])
-    parser.add_argument("--max_range", type=float, default=70.0, help="max measurement range")
-    parser.add_argument("--max_dis_error", type=float, default=0.05, help="distance error at max range")
-    parser.add_argument("--occ_thrd", type=float, default=0.10, help="occupied thrd beyond observed point")
-    parser.add_argument("--num_key_samples", type=int, default=10, help="number of key samples")
-    parser.add_argument("--every_k_samples", type=int, default=2, help="select a sample every k samples")
-    args = parser.parse_args()
+    with open('../../configs/ours.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)['bg_pretrain']
 
     # visualization
     source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, pred_mos_dir)
-    draw_mov_obj_background(nusc, sd_toks_list, pred_bg_dir, pred_mos_dir)
+    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'bg_labels', nusc.version), label_suffix='_bg_samples.label')
+    draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)
+
+
+
 
     # Sample idx: 20 / 3319, Moving object index: 3 / 8, Ray index: 0 / 250

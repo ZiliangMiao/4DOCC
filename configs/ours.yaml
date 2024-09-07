@@ -7,9 +7,16 @@ bg_pretrain:
   shuffle: False # not used, random sampler default shuffle?
   augmentation: True
 
+  # pre-processing
+  max_range: 70 # sqrt(70^2 + 70^2 + 4.5^2)
+  max_dis_error: 0.05
+  occ_thrd: 0.10
+  n_sd_per_sample: 2
+  cuda: True
+
   # data processing related
-  n_input: 10
-  n_skip: 1
+  n_input: 6
+  n_skip: 0
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5

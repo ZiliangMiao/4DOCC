@@ -253,42 +253,39 @@ def split_to_samples_boston(nusc, split_logs):
     return sample_tokens, sample_data_tokens
 
 
-def get_vis_sd_toks(nusc, source: str, pred_dir):
+def get_vis_sd_toks(nusc, source: str, split: str, bg_label_dir, label_suffix: str):
     if source == 'all':
-        split = "val"
         split_logs = create_splits_logs(split, nusc)
         sample_tokens, sd_toks_list = split_to_samples(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(pred_dir)
+        mos_pred_file_list = os.listdir(bg_label_dir)
         for i in range(len(mos_pred_file_list)):
-            mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
+            mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list
 
         # all valid sd tokens, and remain the order
         sd_toks_list = [sd_tok for sd_tok in sd_toks_list if sd_tok in valid_sd_toks_list]
     elif source == 'singapore':
-        split = "val"
         split_logs = create_splits_logs(split, nusc)
         sample_tokens, sd_toks_list = split_to_samples_singapore(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(pred_dir)
+        mos_pred_file_list = os.listdir(bg_label_dir)
         for i in range(len(mos_pred_file_list)):
-            mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
+            mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list
 
         # all valid sd tokens, and remain the order
         sd_toks_list = [sd_tok for sd_tok in sd_toks_list if sd_tok in valid_sd_toks_list]
     elif source == 'boston':
-        split = "val"
         split_logs = create_splits_logs(split, nusc)
         sample_tokens, sd_toks_list = split_to_samples_boston(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(pred_dir)
+        mos_pred_file_list = os.listdir(bg_label_dir)
         for i in range(len(mos_pred_file_list)):
-            mos_pred_file_list[i] = mos_pred_file_list[i].replace('_mos_pred.label', '')
+            mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list
 
         # all valid sd tokens, and remain the order
