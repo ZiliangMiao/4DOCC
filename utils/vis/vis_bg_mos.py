@@ -9,7 +9,7 @@ import open3d
 import numpy as np
 from nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import points_in_box
-from models.ours.ray_intersection_cuda import get_key_sd_toks_dict, get_transformed_pcd
+from models.ours.ray_intersection import get_key_sd_toks_dict, get_transformed_pcd
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
