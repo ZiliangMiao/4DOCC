@@ -222,10 +222,7 @@ class KeyRays(object):
 
     def find_ints_rays(self, cfg, query_rays):
         # get near points
-        # t_s = time.perf_counter()
         # query_rays_same_idx, key_rays_same_idx = self.find_same_end_rays(query_rays.get_ray_end(), cfg['max_dis_error'])
-        # t_e = time.perf_counter()
-        # print(f"find same point: {t_e - t_s}")
 
         # query org to key org vector
         query_key_org_vec = self.get_org_vec(query_rays.get_ray_start(), query_rays.get_ray_size())  # cuda
@@ -240,12 +237,12 @@ class KeyRays(object):
 
         # get intersection rays
         deg_thrd = np.rad2deg(cfg['max_dis_error'] / cfg['max_range'])  # cpu
-        cos_thrd = np.cos(np.deg2rad(90 - deg_thrd))
-        ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= -cos_thrd, key_rays_to_ref_plane <= cos_thrd)
+        cos_thrd = np.cos(np.deg2rad(90 - deg_thrd))  # cpu
+        ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= -cos_thrd, key_rays_to_ref_plane <= cos_thrd)  # cuda
 
         # get nearlly parallel rays
-        rays_ang = torch.matmul(query_rays_dir, key_rays_dir.T)  # cuda
-        ray_para_mask = rays_ang >= np.cos(np.deg2rad(deg_thrd))  # cuda
+        ray_ang = torch.matmul(query_rays_dir, key_rays_dir.T)  # cuda
+        ray_para_mask = ray_ang >= np.cos(np.deg2rad(deg_thrd))  # cuda
         ray_para_mask = torch.logical_and(ray_para_mask, ray_ints_mask)  # cuda
 
         # filter rays that aim to other lidars (self observation)
@@ -267,7 +264,7 @@ class KeyRays(object):
         key_rays_para_idx = ray_para_idx[1]  # cuda
 
         # clear cuda memory
-        del ray_para_mask, rays_ang, ray_ints_mask, key_rays_to_ref_plane, ref_plane_norm, key_rays_dir, query_rays_dir, query_key_org_vec, self_obs_ang, self_obs_mask
+        del ray_para_mask, ray_ang, ray_ints_mask, key_rays_to_ref_plane, ref_plane_norm, key_rays_dir, query_rays_dir, query_key_org_vec, self_obs_ang, self_obs_mask
         torch.cuda.empty_cache()
         return query_rays_ints_idx, key_rays_ints_idx, query_rays_para_idx, key_rays_para_idx
 
