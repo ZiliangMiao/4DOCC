@@ -217,14 +217,15 @@ class KeyRays(object):
 
 
     def find_para_rays(self, query_pts):
+        a = 1
 
 
     def find_ints_rays(self, cfg, query_rays):
         # get near points
-        t_s = time.perf_counter()
-        query_rays_same_idx, key_rays_same_idx = self.find_same_end_rays(query_rays.get_ray_end(), cfg['max_dis_error'])
-        t_e = time.perf_counter()
-        print(f"find same point: {t_e - t_s}")
+        # t_s = time.perf_counter()
+        # query_rays_same_idx, key_rays_same_idx = self.find_same_end_rays(query_rays.get_ray_end(), cfg['max_dis_error'])
+        # t_e = time.perf_counter()
+        # print(f"find same point: {t_e - t_s}")
 
         # query org to key org vector
         query_key_org_vec = self.get_org_vec(query_rays.get_ray_start(), query_rays.get_ray_size())  # cuda
@@ -439,7 +440,7 @@ class QueryRays(object):
             return ray_samples_save, bg_samples_save, bg_key_rays_save
 
 
-def main():
+if __name__ == '__main__':
     # load nusc dataset
     nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
     with open('../../configs/ours.yaml', 'r') as f:
@@ -491,11 +492,6 @@ def main():
         else:
             print(f"Sample data tok {query_sd_tok}, index {query_sample_idx} do not have valid background points")
     print(f"Number of valid samples: {num_valid_samples}")
-
-
-
-if __name__ == '__main__':
-    main()
 
     # TODO: torch.where(condition) is identical to torch.nonzero(condition, as_tuple=True)
     # TODO: matmul will cost too much gpu memory
