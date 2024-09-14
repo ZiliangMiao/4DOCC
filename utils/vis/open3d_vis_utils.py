@@ -235,7 +235,7 @@ def split_to_samples_singapore(nusc, split_logs):
             if log["location"].startswith("singapore"):
                 sample_data_tokens.append(sample_data_token)
                 sample_tokens.append(sample['token'])
-    return sample_tokens, sample_data_tokens
+    return sample_tokens, sample_data_tokensfw_para_mask
 
 
 def split_to_samples_boston(nusc, split_logs):

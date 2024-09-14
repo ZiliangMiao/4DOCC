@@ -10,8 +10,10 @@ bg_pretrain:
   # pre-processing
   max_range: 70 # sqrt(70^2 + 70^2 + 4.5^2)
   max_dis_error: 0.05
+  dvg_ang_h: 0.0030 # beam divergence angle horizontal (Velodyne HDL-32E)
+  dvg_ang_v: 0.0012 # beam divergence angle vertical
   occ_thrd: 0.10
-  n_sd_per_sample: 2
+  n_sd_per_sample: 1
   cuda: True
 
   # data processing related

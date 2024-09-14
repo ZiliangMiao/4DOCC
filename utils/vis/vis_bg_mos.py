@@ -3,7 +3,7 @@ import os
 from collections import defaultdict
 
 import yaml
-
+import torch
 from utils.vis.open3d_vis_utils import draw_box, get_vis_sd_toks
 import open3d
 import numpy as np
@@ -149,14 +149,15 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
 
         # load gt bg samples
-        bg_samples_dir = os.path.join(nusc.dataroot, "bg_labels", nusc.version)
-        bg_samples_file = os.path.join(bg_samples_dir, sd_tok + "_bg_samples.label")
-        ray_samples_file = os.path.join(bg_samples_dir, sd_tok + "_ray_samples.label")
-        ray_samples = np.fromfile(ray_samples_file, dtype=np.int64).reshape(-1, 2)
-        bg_samples = np.fromfile(bg_samples_file, dtype=np.float32).reshape(-1, 5)
+        samples_dir = os.path.join(nusc.dataroot, "bg_labels_cuda", nusc.version)
+        bg_samples_path = os.path.join(samples_dir, sd_tok + "_bg_samples.pt")
+        ray_samples_path = os.path.join(samples_dir, sd_tok + "_ray_samples.pt")
+        bg_samples = torch.load(bg_samples_path, map_location=torch.device('cpu'))
+        ray_samples = torch.load(ray_samples_path, map_location=torch.device('cpu'))
+
         ray_to_bg_samples_dict = defaultdict()
         for ray_sample in list(ray_samples):
-            ray_idx = ray_sample[0]
+            ray_idx = ray_sample[0].item()
             num_bg_samples = ray_sample[1]
             if conf_color:
                 # TODO: bg predict labels [0: free, 1: occ]
@@ -376,7 +377,7 @@ if __name__ == '__main__':
 
     # visualization
     source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'bg_labels', nusc.version), label_suffix='_bg_samples.label')
+    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'bg_labels_cuda', nusc.version), label_suffix='_bg_samples.pt')
     draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)
 
 
