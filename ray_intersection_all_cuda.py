@@ -579,7 +579,6 @@ if __name__ == '__main__':
     for query_sample_idx, query_sample_tok in tqdm(enumerate(key_sd_toks_dict.keys())):
         if query_sample_idx < args.start:
             continue
-        print(f"sample idx: {query_sample_idx}")
         key_sd_toks_list = key_sd_toks_dict[query_sample_tok]
 
         # get rays
