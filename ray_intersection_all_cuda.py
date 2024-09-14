@@ -558,7 +558,7 @@ if __name__ == '__main__':
     # mode
     parser = argparse.ArgumentParser()
     parser.add_argument('--autodl', type=bool, default=False)
-    parser.add_argument('--start', type=int, default=False)
+    parser.add_argument('--start', type=int, default=0)
     args = parser.parse_args()
 
     # load nusc dataset
