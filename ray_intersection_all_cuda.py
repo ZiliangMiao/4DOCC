@@ -558,6 +558,7 @@ if __name__ == '__main__':
     # mode
     parser = argparse.ArgumentParser()
     parser.add_argument('--autodl', type=bool, default=False)
+    parser.add_argument('--start', type=int, default=False)
     args = parser.parse_args()
 
     # load nusc dataset
@@ -576,6 +577,9 @@ if __name__ == '__main__':
     #
     num_valid_samples = 0
     for query_sample_idx, query_sample_tok in tqdm(enumerate(key_sd_toks_dict.keys())):
+        if query_sample_idx < args.start:
+            continue
+        print(f"sample idx: {query_sample_idx}")
         key_sd_toks_list = key_sd_toks_dict[query_sample_tok]
 
         # get rays

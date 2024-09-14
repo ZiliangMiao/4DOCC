@@ -18,7 +18,7 @@ train:
   outside_scene_mask: True
 
   # training related
-  num_epoch: 500
+  num_epoch: 600
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
