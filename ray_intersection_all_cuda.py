@@ -562,9 +562,10 @@ if __name__ == '__main__':
 
     # load nusc dataset
     if args.autodl:
-        nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
-    else:
         nusc = NuScenes(dataroot="/root/autodl-tmp/Datasets/nuScenes", version="v1.0-trainval")
+    else:
+        nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
+
     with open('configs/ours.yaml', 'r') as f:
         cfg = yaml.safe_load(f)['bg_pretrain']
 
