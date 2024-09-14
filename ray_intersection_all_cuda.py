@@ -554,8 +554,16 @@ class QueryRays(object):
 
 
 if __name__ == '__main__':
+    # mode
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--autodl', type=bool, default=False)
+    args = parser.parse_args()
+
     # load nusc dataset
-    nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
+    if args.autodl:
+        nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
+    else:
+        nusc = NuScenes(dataroot="/root/autodl-tmp/Datasets/nuScenes", version="v1.0-trainval")
     with open('configs/ours.yaml', 'r') as f:
         cfg = yaml.safe_load(f)['bg_pretrain']
 
