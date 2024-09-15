@@ -4,12 +4,13 @@ from collections import defaultdict
 
 import yaml
 import torch
+import torch.nn.functional as F
 from utils.vis.open3d_vis_utils import draw_box, get_vis_sd_toks
 import open3d
 import numpy as np
 from nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import points_in_box
-from models.ours.ray_intersection import get_key_sd_toks_dict, get_transformed_pcd
+from ray_intersection_all_cuda import get_key_sd_toks_dict, get_transformed_pcd
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
@@ -128,6 +129,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
 
         # get query rays and key rays
         query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
+        query_dir = F.normalize(query_pts - query_org, p=2, dim=1)  # unit vector
         key_rays_org_list = []
         key_rays_ts_list = []
         for key_sd_tok in key_sd_toks_list:
@@ -149,24 +151,14 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
 
         # load gt bg samples
-        samples_dir = os.path.join(nusc.dataroot, "bg_labels_cuda", nusc.version)
-        bg_samples_path = os.path.join(samples_dir, sd_tok + "_bg_samples.pt")
-        ray_samples_path = os.path.join(samples_dir, sd_tok + "_ray_samples.pt")
-        bg_samples = torch.load(bg_samples_path, map_location=torch.device('cpu'))
-        ray_samples = torch.load(ray_samples_path, map_location=torch.device('cpu'))
-
-        ray_to_bg_samples_dict = defaultdict()
-        for ray_sample in list(ray_samples):
-            ray_idx = ray_sample[0].item()
-            num_bg_samples = ray_sample[1]
-            if conf_color:
-                # TODO: bg predict labels [0: free, 1: occ]
-                ray_to_bg_samples_dict[ray_idx] = (bg_samples[0:num_bg_samples, :], pred_bg_labels[0:num_bg_samples] + 1)
-                bg_samples = bg_samples[num_bg_samples:, :]
-                pred_bg_labels = pred_bg_labels[num_bg_samples:]
-            else:
-                ray_to_bg_samples_dict[ray_idx] = bg_samples[0:num_bg_samples, :]
-                bg_samples = bg_samples[num_bg_samples:, :]
+        samples_dir = os.path.join(nusc.dataroot, "labels_cuda", nusc.version)
+        depth_file = os.path.join(samples_dir, sd_tok + "_depth.bin")
+        labels_file = os.path.join(samples_dir, sd_tok + "_labels.bin")
+        query_rays_idx_file = os.path.join(samples_dir, sd_tok + "_query_rays_idx.bin")
+        depth = np.fromfile(depth_file, dtype=np.float16)
+        labels = np.fromfile(labels_file, dtype=np.uint8)
+        query_rays_idx = np.fromfile(query_rays_idx_file, dtype=np.uint16)
+        query_ray_idx_unq = np.unique(query_rays_idx)
 
         # vis nusc sample, moving object bboxes
         anns_toks = sample['anns']
@@ -185,7 +177,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
             else:
                 obj_pts_mask = points_in_box(box, query_pts[:, :3].T)
                 obj_pts_idx_list = np.where(obj_pts_mask)[0].tolist()
-                ray_idx_list = list(set(obj_pts_idx_list) & set(ray_to_bg_samples_dict.keys()))  # only a part of rays have bg samples
+                ray_idx_list = list(set(obj_pts_idx_list) & set(query_ray_idx_unq))  # only a part of rays have bg samples
                 if len(ray_idx_list) == 0: continue
                 obj_boxes_list.append(box)
                 obj_ray_indices_list.append(ray_idx_list)
@@ -258,13 +250,12 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         #     key_rays_pts_list.append(key_rays_pts_list[key_sensor_idx][key_ray_idx].cpu())
 
         # get bg samples
+        samples_mask = query_rays_idx == obj_ray_idx
+        depth = depth[samples_mask]
+        pts = query_org + query_dir[samples_mask] * depth
+        gt_labels = labels[samples_mask]
         if conf_color:
-            bg_samples, pred_bg_labels = ray_to_bg_samples_dict[obj_ray_idx]
-        else:
-            bg_samples = ray_to_bg_samples_dict[obj_ray_idx]
-        bg_pts = bg_samples[:, 0:3]
-        bg_ts = bg_samples[:, 3]
-        gt_bg_labels = bg_samples[:, 4]
+            pred_bg_labels = pred_bg_labels[samples_mask]
 
         # draw bg points and rays to bg points
         lineset_key = open3d.geometry.LineSet()
@@ -377,10 +368,5 @@ if __name__ == '__main__':
 
     # visualization
     source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'bg_labels_cuda', nusc.version), label_suffix='_bg_samples.pt')
+    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'labels_cuda', nusc.version), label_suffix='_labels.bin')
     draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)
-
-
-
-
-    # Sample idx: 20 / 3319, Moving object index: 3 / 8, Ray index: 0 / 250

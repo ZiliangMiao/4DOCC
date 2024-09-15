@@ -408,7 +408,7 @@ class QueryRays(object):
             key_rays_ints_idx = key_rays_ints_idx[ints_confident_mask]
 
             # clear cuda memory
-            del k_valid, q_valid, valid_ints_mask, k, q, com_norm, ints_key_rays_dir, ints_query_rays_dir, key_rays_to_ref_plane, ref_plane_norm, rays_org_vec, query_key_org_vec
+            del k_valid, q_valid, valid_ints_mask, k, q, com_norm, ints_key_rays_dir, ints_query_rays_dir, key_rays_to_ref_plane, ref_plane_norm, rays_org_vec, query_key_org_vec, ints_confident_mask, key_ray_depth
             torch.cuda.empty_cache()
             ############################################################################################################
 
@@ -416,10 +416,9 @@ class QueryRays(object):
             # TODO: isosceles triangle approximation (point to line distance -> base length)
             dvg_ang_h = cfg['dvg_ang_h']
             ray_ang = torch.matmul(self.get_ray_dir(), key_rays.get_ray_dir().T)  # cuda
-            ray_ang = torch.clip(ray_ang, min=-1, max=1)  # TODO: inner product of two unit vector > 1...
-            ray_para_mask = ray_ang >= np.cos(dvg_ang_h)  # cuda
-            ray_para_mask = torch.logical_and(ray_ints_mask, ray_para_mask)
-            ray_para_idx = torch.where(ray_para_mask)
+            ray_ang = torch.clip(ray_ang, min=-1, max=1)  # cuda, inner product of two unit vector > 1...
+            ray_ints_mask = torch.logical_and(ray_ints_mask, ray_ang >= np.cos(dvg_ang_h))  # to save cuda memory, use same variable name
+            ray_para_idx = torch.where(ray_ints_mask)
             query_rays_para_idx = ray_para_idx[0]
             key_rays_para_idx = ray_para_idx[1]
 
@@ -513,11 +512,11 @@ class QueryRays(object):
             ############################################################################################################
 
             # dictionary: query ray index -> points list
-            depth = torch.cat((ints_depth, para_depth), dim=0).to(torch.float16)  # depth on query ray
-            labels = torch.cat((ints_labels, para_labels), dim=0).to(torch.int8)  # occupancy labels
-            confidence = torch.cat((ints_confidence, para_confidence), dim=0).to(torch.float16)  # confidence of the labels
-            query_rays_idx = torch.cat((query_rays_ints_idx, query_rays_para_idx), dim=0).to(torch.int8)
-            key_rays_idx = torch.cat((key_rays_ints_idx, key_rays_para_idx), dim=0).to(torch.int8)
+            depth = torch.cat((ints_depth, para_depth), dim=0)  # depth on query ray
+            labels = torch.cat((ints_labels, para_labels), dim=0)  # occupancy labels
+            confidence = torch.cat((ints_confidence, para_confidence), dim=0)  # confidence of the labels
+            query_rays_idx = torch.cat((query_rays_ints_idx, query_rays_para_idx), dim=0)
+            key_rays_idx = torch.cat((key_rays_ints_idx, key_rays_para_idx), dim=0)
 
             # append to list
             depth_list.append(depth)
@@ -528,7 +527,7 @@ class QueryRays(object):
             key_meta_info_list.append([key_sensor_idx, len(labels)])
 
             # clear cuda memory
-            del ray_ints_mask, ray_para_mask, key_rays_idx, query_rays_idx, confidence, labels, depth
+            del ray_ints_mask, key_rays_idx, query_rays_idx, confidence, labels, depth, ray_ang, key_rays_ints_idx, key_rays_dir, ints_labels, ints_depth, ints_confidence
             torch.cuda.empty_cache()
 
         if len(labels_list) == 0:
@@ -591,20 +590,37 @@ if __name__ == '__main__':
 
         if labels is not None:
             num_valid_samples += 1
+            depth = depth.cpu().numpy()
+            depth_fp16 = depth.astype(np.float16)
+            labels = labels.cpu().numpy()
+            labels_uint8 = labels.astype(np.uint8)
+            confidence = confidence.cpu().numpy()
+            confidence_fp16 = confidence.astype(np.float16)
+            query_rays_idx = query_rays_idx.cpu().numpy()
+            query_rays_idx_uint16 = query_rays_idx.astype(np.uint16)
+            key_rays_idx = key_rays_idx.cpu().numpy()
+            key_rays_idx_uint16 = key_rays_idx.astype(np.uint16)
+
             labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
             os.makedirs(labels_folder, exist_ok=True)
-            torch.save(depth.clone(), os.path.join(labels_folder, query_sd_tok + "_depth.pt"))
-            torch.save(labels.clone(), os.path.join(labels_folder, query_sd_tok + "_labels.pt"))
-            torch.save(confidence.clone(), os.path.join(labels_folder, query_sd_tok + "_confidence.pt"))
-            torch.save(query_rays_idx.clone(), os.path.join(labels_folder, query_sd_tok + "_query_rays_idx.pt"))
+            depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
+            labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
+            confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
+            query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_query_rays_idx.bin"))
+            key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
 
-            key_rays_folder = os.path.join(nusc.dataroot, 'labels_key_rays_cuda', nusc.version)
-            os.makedirs(key_rays_folder, exist_ok=True)
-            torch.save(key_rays_idx.clone(), os.path.join(key_rays_folder, query_sd_tok + "_key_rays_idx.pt"))
-            torch.save(key_meta_info.clone(), os.path.join(key_rays_folder, query_sd_tok + "_key_meta_info.pt"))
-
-            # test load
-            # a = torch.load(bg_samples_path, map_location=torch.device('cpu'))
+            # torch save
+            # labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
+            # os.makedirs(labels_folder, exist_ok=True)
+            # torch.save(depth.clone(), os.path.join(labels_folder, query_sd_tok + "_depth.pt"))
+            # torch.save(labels.clone(), os.path.join(labels_folder, query_sd_tok + "_labels.pt"))
+            # torch.save(confidence.clone(), os.path.join(labels_folder, query_sd_tok + "_confidence.pt"))
+            # torch.save(query_rays_idx.clone(), os.path.join(labels_folder, query_sd_tok + "_query_rays_idx.pt"))
+            #
+            # key_rays_folder = os.path.join(nusc.dataroot, 'labels_key_rays_cuda', nusc.version)
+            # os.makedirs(key_rays_folder, exist_ok=True)
+            # torch.save(key_rays_idx.clone(), os.path.join(key_rays_folder, query_sd_tok + "_key_rays_idx.pt"))
+            # torch.save(key_meta_info.clone(), os.path.join(key_rays_folder, query_sd_tok + "_key_meta_info.pt")
 
             # clear cuda memory
             del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list
