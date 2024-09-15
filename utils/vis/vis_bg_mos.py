@@ -252,24 +252,24 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         # get bg samples
         samples_mask = query_rays_idx == obj_ray_idx
         depth = depth[samples_mask]
-        pts = query_org + query_dir[samples_mask] * depth
+        pts = query_org + np.broadcast_to(query_dir[obj_ray_idx], (len(depth), 3)) * depth.reshape(-1, 1)
         gt_labels = labels[samples_mask]
         if conf_color:
             pred_bg_labels = pred_bg_labels[samples_mask]
 
         # draw bg points and rays to bg points
         lineset_key = open3d.geometry.LineSet()
-        vertex_key = np.vstack((np.stack(key_rays_org_list), bg_pts))
+        vertex_key = np.vstack((np.stack(key_rays_org_list), pts))
         lines_key = []
-        for i in range(len(bg_samples)):
+        for i in range(len(pts)):
             # bg point
             bg_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
-            bg_sphere = bg_sphere.translate(bg_pts[i], relative=False)
+            bg_sphere = bg_sphere.translate(pts[i], relative=False)
             if conf_color:
-                bg_confusion_color_indices = get_confusion_color(gt_bg_labels, pred_bg_labels)
+                bg_confusion_color_indices = get_confusion_color(gt_labels, pred_bg_labels)
                 bg_sphere.paint_uniform_color(occ_color_func(bg_confusion_color_indices[i]))
             else:
-                bg_sphere.paint_uniform_color(occ_color_func(gt_bg_labels[i]))
+                bg_sphere.paint_uniform_color(occ_color_func(gt_labels[i]))
             vis.add_geometry(bg_sphere)
             # key rays org to bg point
             key_sensor_idx = key_rays_ts_list.index(int(bg_ts[i]))

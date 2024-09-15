@@ -538,7 +538,7 @@ class QueryRays(object):
             confidence = torch.cat(confidence_list, dim=0)
             query_rays_idx = torch.cat(query_rays_idx_list, dim=0)
             key_rays_idx = torch.cat(key_rays_idx_list, dim=0)
-            key_meta_info = torch.tensor(key_meta_info_list).to(torch.int8)
+            key_meta_info = torch.tensor(key_meta_info_list).to(torch.int32)
 
             # statistics: for histogram
             self.num_samples_per_ray.append(len(labels))
@@ -600,14 +600,17 @@ if __name__ == '__main__':
             query_rays_idx_uint16 = query_rays_idx.astype(np.uint16)
             key_rays_idx = key_rays_idx.cpu().numpy()
             key_rays_idx_uint16 = key_rays_idx.astype(np.uint16)
+            key_meta_info = key_meta_info.cpu().numpy()
+            key_meta_info_uint32 = key_meta_info.astype(np.uint32)
 
             labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
             os.makedirs(labels_folder, exist_ok=True)
             depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
             labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
             confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
-            query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_query_rays_idx.bin"))
+            query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
             key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
+            key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
 
             # torch save
             # labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
