@@ -42,7 +42,7 @@ def draw_while_preprocessing(nusc, cfg, sample_tok, depth, labels, query_rays_id
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = get_key_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
+        key_sd_toks_list = get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
 
         # get query rays and key rays
         query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
@@ -339,7 +339,7 @@ def get_transformed_pcd(nusc, cfg, sd_token_ref, sd_token):
     lidar_pcd.transform(ref_from_curr)
     points_tf = torch.tensor(lidar_pcd.points[:3].T, dtype=torch.float32)  # curr point cloud, at {ref lidar} frame
 
-    # filter ego points and outside scene bbos points
+    # filter ego points and outside scene bbox points
     valid_mask = torch.squeeze(torch.full((len(points_tf), 1), True))
     if cfg['ego_mask']:
         ego_mask = get_ego_mask(points_tf)
@@ -375,7 +375,7 @@ def load_rays(nusc, cfg, query_sd_tok, key_sd_toks_list):
     return query_rays, key_rays_list
 
 
-def get_key_sd_toks_dict(nusc, sample_toks: List[str], cfg):
+def get_mutual_sd_toks_dict(nusc, sample_toks: List[str], cfg):
     key_sd_toks_dict = {}
     for ref_sample_tok in sample_toks:
         ref_sample = nusc.get("sample", ref_sample_tok)
@@ -701,8 +701,8 @@ class QueryRays(object):
             rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_rays_ints_idx), 3))  # cuda
             q = (torch.sum(torch.cross(rays_org_vec, ints_key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
             k = (torch.sum(torch.cross(rays_org_vec, ints_query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
-            valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= 2 * cfg['max_range']),
-                                                torch.logical_and(k >= 0, k <= 2 * cfg['max_range']))  # cuda
+            valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= cfg['max_range']),
+                                                torch.logical_and(k >= 0, k <= cfg['max_range']))  # cuda
             query_rays_ints_idx = query_rays_ints_idx[valid_ints_mask]  # cuda
             key_rays_ints_idx = key_rays_ints_idx[valid_ints_mask]  # cuda
             q_valid = q[valid_ints_mask]  # cuda
@@ -749,11 +749,12 @@ class QueryRays(object):
             # same_pts = torch.where(q_pts == k_pts)
             # ########################################################
 
-            valid_para_mask_1 = torch.sign(q_para) * torch.sign(k_para) > 0
-            q_para = q_para[valid_para_mask_1]
-            k_para = k_para[valid_para_mask_1]
-            query_rays_para_idx = query_rays_para_idx[valid_para_mask_1]
-            key_rays_para_idx = key_rays_para_idx[valid_para_mask_1]
+            # update
+            valid_para_mask_0 = torch.sign(q_para) * torch.sign(k_para) > 0
+            q_para = q_para[valid_para_mask_0]
+            k_para = k_para[valid_para_mask_0]
+            query_rays_para_idx = query_rays_para_idx[valid_para_mask_0]
+            key_rays_para_idx = key_rays_para_idx[valid_para_mask_0]
 
             # TODO: inverse solution, leg length threshold
             fw_mask = torch.logical_and(q_para >= 0, k_para >= 0)  # para rays intersect at forward side
@@ -979,7 +980,7 @@ if __name__ == '__main__':
 
     # get key sample data tokens
     sample_toks_all = [sample['token'] for sample in nusc.sample]
-    key_sd_toks_dict = get_key_sd_toks_dict(nusc, sample_toks_all, cfg)
+    key_sd_toks_dict = get_mutual_sd_toks_dict(nusc, sample_toks_all, cfg)
 
     # loop query rays
     num_valid_samples = 0

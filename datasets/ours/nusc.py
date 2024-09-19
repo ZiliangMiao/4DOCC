@@ -1,16 +1,13 @@
 import os
 import torch
 import numpy as np
-from collections import defaultdict
 from torch.utils.data import Dataset
-
+import torch.nn.functional as F
 from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
-from nuscenes.utils.data_classes import LidarPointCloud
-from pyquaternion import Quaternion
 from random import sample as random_sample
-from nuscenes.utils.geometry_utils import transform_matrix
 from utils.augmentation import augment_pcds
-from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sample_level_seq_input, get_ego_mask, get_outside_scene_mask, add_timestamp
+from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sample_level_seq_input
+from preprocess_rays_mutual_obs import get_mutual_sd_toks_dict, get_transformed_pcd
 
 
 class NuscBgDataset(Dataset):
@@ -42,6 +39,15 @@ class NuscBgDataset(Dataset):
             split_logs = create_splits_logs(split, self.nusc)
             sample_toks = split_logs_to_samples(self.nusc, split_logs)
 
+        # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
+        mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
+        mutual_obs_sd_tok_list = os.listdir(mutual_obs_folder)
+        label_suffix = "_labels.bin"
+        for i in range(len(mutual_obs_sd_tok_list)):
+            mutual_obs_sd_tok_list[i] = mutual_obs_sd_tok_list[i].replace(label_suffix, '')
+        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in mutual_obs_sd_tok_list]
+        ##############################################################################################################################################
+
         # sample tokens: drop the samples without full sequence length
         self.sample_to_sd_toks_dict = get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
 
@@ -54,80 +60,62 @@ class NuscBgDataset(Dataset):
         sample_tok = sample_toks_list[batch_idx]
         sample = self.nusc.get('sample', sample_tok)
         ref_sd_tok = sample['data']['LIDAR_TOP']
-        sample_data = self.nusc.get('sample_data', ref_sd_tok)
-
-        # reference pose (current timestamp)
-        ref_pose_token = sample_data['ego_pose_token']
-        ref_pose = self.nusc.get('ego_pose', ref_pose_token)
-        trans_global_to_ref_car = transform_matrix(ref_pose['translation'], Quaternion(ref_pose['rotation']), inverse=True)  # from global to ref car
-
-        # calib pose
-        calib_token = sample_data['calibrated_sensor_token']
-        calib = self.nusc.get('calibrated_sensor', calib_token)
-        trans_lidar_to_car = transform_matrix(calib['translation'], Quaternion(calib['rotation']))  # from lidar to car
-        trans_car_to_lidar = transform_matrix(calib['translation'], Quaternion(calib['rotation']), inverse=True)  # from car to lidar
 
         # sample data: concat 4d point clouds
         input_sd_toks = self.sample_to_sd_toks_dict[sample_tok]  # sequence: -1, -2 ...
         assert len(input_sd_toks) == self.cfg_model["n_input"], "Invalid input sequence length"
-        pcds_4d_list = []  # 4D Point Cloud (relative timestamp)
+        pcd_4d_list = []  # 4D Point Cloud (relative timestamp)
         time_idx = 1
-        for sd_tok in input_sd_toks:
-            assert sd_tok is not None
-            # from current scan to previous scans
-            input_sd = self.nusc.get('sample_data', sd_tok)
-            pcd_file = os.path.join(self.cfg_dataset["nuscenes"]["root"], input_sd['filename'])
-            pcd = LidarPointCloud.from_file(pcd_file).points.T[:, :3]  # [x, y, z, intensity]
-            if self.cfg_model["transform"]:
-                # transform point cloud from curr pose to ref pose
-                pose_tok = input_sd['ego_pose_token']
-                pose = self.nusc.get('ego_pose', pose_tok)
-                trans_car_to_global = transform_matrix(pose['translation'], Quaternion(pose['rotation']))  # from car to global
-
-                # transformation: lidar -> car -> global -> ref_car -> ref_lidar
-                trans_to_ref = trans_lidar_to_car @ trans_car_to_global @ trans_global_to_ref_car @ trans_car_to_lidar
-                pcd_homo = np.hstack([pcd, np.ones((pcd.shape[0], 1))]).T
-                pcd_ref = torch.from_numpy((trans_to_ref @ pcd_homo).T[:, :3])
-
-                # add timestamp (0, -1, -2, ...)
-                time_idx -= 1
-                pcd_4d_ref = add_timestamp(pcd_ref, time_idx)
-                pcds_4d_list.append(pcd_4d_ref)
-        pcds_4d = torch.cat(pcds_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
-
-        # TODO: make the ray index same to ray_intersection_cuda.py, they should have the same filter params
-        valid_mask = torch.squeeze(torch.full((len(pcds_4d), 1), True))
-        if self.cfg_model['ego_mask']:
-            ego_mask = get_ego_mask(pcds_4d)
-            valid_mask = torch.logical_and(valid_mask, ~ego_mask)
-        if self.cfg_model['outside_scene_mask']:
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"])
-            valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-        pcds_4d = pcds_4d[valid_mask]
+        ref_pts = None
+        ref_org = None
+        for i, sd_tok in enumerate(input_sd_toks):
+            lidar_org, pcd, rela_ts, valid_mask = get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)  # TODO: filter ego and outside inside func
+            if i == 0:  # reference sample data token
+                ref_org = lidar_org
+                ref_pts = pcd
+            # add timestamp (0, -1, -2, ...) to pcd -> pcd_4d
+            time_idx -= 1
+            assert time_idx == round(rela_ts / 0.5), "relative timestamp repeated"
+            pcd_4d = torch.hstack([pcd, torch.ones(len(pcd)).reshape(-1, 1) * rela_ts])
+            pcd_4d_list.append(pcd_4d)
+        pcds_4d = torch.cat(pcd_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
 
         # data augmentation: will not change the order of points
         if self.split == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
 
         # load labels
-        bg_samples_dir = os.path.join(self.cfg_dataset["nuscenes"]["root"], "bg_labels", self.cfg_dataset["nuscenes"]["version"])
-        bg_samples_file = os.path.join(bg_samples_dir, ref_sd_tok + "_bg_samples.npy")
-        ray_samples_file = os.path.join(bg_samples_dir, ref_sd_tok + "_ray_samples.npy")
-        ray_samples = np.fromfile(ray_samples_file, dtype=np.int64).reshape(-1, 2)
-        bg_samples = np.fromfile(bg_samples_file, dtype=np.float32).reshape(-1, 5)
+        mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
+        mutual_obs_meta = os.path.join(mutual_obs_folder, ref_sd_tok + "_key_meta.bin")
+        mutual_obs_rays_idx = os.path.join(mutual_obs_folder, ref_sd_tok + "_rays_idx.bin")
+        mutual_obs_depth = os.path.join(mutual_obs_folder, ref_sd_tok + "_depth.bin")
+        mutual_obs_labels = os.path.join(mutual_obs_folder, ref_sd_tok + "_labels.bin")
+        mutual_obs_confidence = os.path.join(mutual_obs_folder, ref_sd_tok + "_confidence.bin")
+        mutual_obs_meta = np.fromfile(mutual_obs_meta, dtype=np.uint32).reshape(-1, 2).astype(np.int64)
+        mutual_obs_rays_idx = torch.from_numpy(np.fromfile(mutual_obs_rays_idx, dtype=np.uint16).astype(np.int64))
+        mutual_obs_depth = torch.from_numpy(np.fromfile(mutual_obs_depth, dtype=np.float16).astype(np.float32))
+        mutual_obs_labels = torch.from_numpy(np.fromfile(mutual_obs_labels, dtype=np.uint8).astype(np.int64))
+        mutual_obs_confidence = torch.from_numpy(np.fromfile(mutual_obs_confidence, dtype=np.float16).astype(np.float32))
 
-        # merge into dict for training
-        ray_to_bg_samples_dict = defaultdict()
-        num_bg_samples_per_ray_list = []
-        for ray_sample in list(ray_samples):
-            ray_idx = ray_sample[0]
-            num_bg_samples = ray_sample[1]
-            num_bg_samples_per_ray_list.append(num_bg_samples)
-            # TODO: balanced sampling of occ and free bg points
-            ray_to_bg_samples_dict[ray_idx] = bg_samples[0:num_bg_samples, :]
-            bg_samples = bg_samples[num_bg_samples:, :]
+        # TODO: balanced sampling
+        mutual_unk_idx = torch.where(mutual_obs_labels == 0)[0]
+        mutual_free_idx = torch.where(mutual_obs_labels == 1)[0]
+        mutual_occ_idx = torch.where(mutual_obs_labels == 2)[0]
+        num_unk = len(mutual_unk_idx)
+        num_free = len(mutual_free_idx)
+        num_occ = len(mutual_occ_idx)
 
-        # number of samples
-        num_rays_all = len(ray_samples)
-        num_bg_samples_all = np.sum(ray_samples[:, -1])
-        return [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
+        ds_mutual_unk_idx = random_sample(mutual_unk_idx, 20)
+
+        # mutual sample data tokens
+        mutual_sd_toks = get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
+
+        # mutual obs timestamps
+        mutual_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
+        mutual_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] - self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
+        mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
+
+        # mutual obs points
+        mutual_rays_dir = F.normalize(ref_pts - ref_org, p=2, dim=1)  # unit vector
+        mutual_obs_pts = ref_org + mutual_obs_depth.reshape(-1, 1) * mutual_rays_dir[mutual_obs_rays_idx]
+        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]

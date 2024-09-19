@@ -27,7 +27,7 @@ class MotionPretrainNetwork(LightningModule):
         if train_flag:
             self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
-        self.n_bg_cls = 2
+        self.n_bg_cls = 3  # TODO: unk, free, occ
 
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model, self.n_bg_cls)
@@ -42,7 +42,7 @@ class MotionPretrainNetwork(LightningModule):
         self.validation_step_outputs = []
 
         # loss
-        self.loss = nn.NLLLoss(weight=torch.Tensor(self.cfg_model['bg_cls_weight']))
+        self.loss = nn.NLLLoss()
 
         # save predictions
         if not train_flag:
@@ -53,42 +53,45 @@ class MotionPretrainNetwork(LightningModule):
             # self.mov_iou_list = []
 
     def forward(self, batch):
-        # unfold batch: [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
-        meta_batch, pcds_batch, bg_samples_batch = batch
+        # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
+        meta_batch, pcds_batch, mutual_samples_batch = batch
 
         # encoder
         sparse_featmap = self.encoder(pcds_batch)
 
         # get bg samples
-        bg_labels_batch = []
-        bg_feats_batch = []
-        for batch_idx, bg_samples_dict in enumerate(bg_samples_batch):
+        mutual_labels_batch = []
+        mutual_feats_batch = []
+        mutual_confidence_batch = []
+        for batch_idx, mutual_samples in enumerate(mutual_samples_batch):
+            # ref_sd_tok = meta_batch[batch_idx][0]
+            # mutual_sd_toks = meta_batch[batch_idx][1]
+            mutual_obs_rays_idx = mutual_samples[0]
+            mutual_obs_pts = mutual_samples[1]
+            # mutual_obs_depth = mutual_samples[2]
+            mutual_obs_ts = mutual_samples[3]
+            mutual_obs_labels = mutual_samples[4]
+            mutual_obs_confidence = mutual_samples[5]
+
             # point-wise features
             coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
             feats = sparse_featmap.features_at(batch_index=batch_idx)
             ref_time_mask = coords[:, -1] == 0
-            query_points_idx = np.array(list(bg_samples_dict.keys()))
-            query_feats = feats[ref_time_mask][query_points_idx]
-            # query_points = pcds_batch[batch_idx][query_points_idx]
-            # query_points_with_quant_error = coords[ref_time_mask][query_points_idx]
+            # coords = coords[ref_time_mask]
+            query_feats = feats[ref_time_mask][mutual_obs_rays_idx]
 
-            # bg_samples
-            bg_samples = torch.from_numpy(np.concatenate(list(bg_samples_dict.values()))).cuda()
-            bg_points_4d = bg_samples[:, 0:self.cfg_model['pos_dim']]
-            bg_labels = bg_samples[:, -1] - 1  # TODO: [1:free, 2:occ] -> [0: free, 1: occ]
-
-            # bg points positional encoding
-            num_bg_samples_per_ray_list = meta_batch[batch_idx][3]
-            pe_feats = self.pe(bg_points_4d)
-            query_feats = torch.repeat_interleave(query_feats, torch.tensor(num_bg_samples_per_ray_list).cuda(), dim=0)
-            bg_feats = query_feats + pe_feats
+            # mutual obs points positional encoding
+            mutual_pts_4d = torch.hstack((mutual_obs_pts, mutual_obs_ts.reshape(-1, 1)))
+            pe_feats = self.pe(mutual_pts_4d)
+            mutual_obs_feats = query_feats + pe_feats
 
             # collate to batch
-            bg_feats_batch.append(bg_feats)
-            bg_labels_batch.append(bg_labels)
+            mutual_feats_batch.append(mutual_obs_feats)
+            mutual_labels_batch.append(mutual_obs_labels)
+            mutual_confidence_batch.append(mutual_obs_confidence)
         # decoder
-        bg_probs_batch = self.decoder(bg_feats_batch)  # logits -> softmax -> probs
-        return bg_probs_batch, bg_labels_batch
+        mutual_probs_batch = self.decoder(mutual_feats_batch)  # logits -> softmax -> probs
+        return mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
@@ -109,18 +112,18 @@ class MotionPretrainNetwork(LightningModule):
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
 
-        bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
-        bg_probs = torch.cat(bg_probs_batch, dim=0)
-        pred_labels = torch.argmax(bg_probs, axis=1)
-        bg_labels = torch.cat(bg_labels_batch, dim=0)
-        loss = self.get_loss(bg_probs, bg_labels)  # TODO: bg loss only
+        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
+        mutual_probs = torch.cat(mutual_probs_batch, dim=0)
+        pred_labels = torch.argmax(mutual_probs, axis=1)
+        mutual_labels = torch.cat(mutual_labels_batch, dim=0)
+        loss = self.get_loss(mutual_probs, mutual_labels)  # TODO: bg loss only
 
         # metrics
-        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, bg_labels)
+        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
         iou = self.ClassificationMetrics.get_iou(conf_mat)
-        free_iou, occ_iou = iou[0], iou[1]
+        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
         acc = self.ClassificationMetrics.get_acc(conf_mat)
-        free_acc, occ_acc = acc[0], acc[1]
+        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
@@ -231,7 +234,7 @@ class MotionEncoder(nn.Module):
         self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
 
         dx = dy = dz = cfg_model["quant_size"]
-        dt = 1  # TODO: should be cfg_model["time_interval"], handle different lidar frequency of kitti and nuscenes
+        dt = cfg_model["time_interval"]
         self.quant = torch.Tensor([dx, dy, dz, dt])
 
         self.scene_bbox = cfg_model["scene_bbox"]

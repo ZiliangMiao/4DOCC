@@ -36,10 +36,9 @@ bg_pretrain:
   lr_epoch: 1
   lr_decay: 0.99
   weight_decay: 0.0001
-  bg_cls_weight: [0.1, 0.9] # free: 0.1; occ: 0.9
 
   # device related
-  num_workers: 12
+  num_workers: 1
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 

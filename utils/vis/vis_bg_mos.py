@@ -10,7 +10,7 @@ import open3d
 import numpy as np
 from nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import points_in_box
-from ray_intersection_all_cuda import get_key_sd_toks_dict, get_transformed_pcd
+from preprocess_rays_mutual_obs import get_mutual_sd_toks_dict, get_transformed_pcd
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
@@ -125,7 +125,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = get_key_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
+        key_sd_toks_list = get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
 
         # get query rays and key rays
         query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
@@ -157,7 +157,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
 
         # load gt bg samples
-        samples_dir = os.path.join(nusc.dataroot, "labels_cuda", nusc.version)
+        samples_dir = os.path.join(nusc.dataroot, "mutual_obs_labels", nusc.version)
         depth = np.fromfile(os.path.join(samples_dir, sd_tok + "_depth.bin"), dtype=np.float16)
         labels = np.fromfile(os.path.join(samples_dir, sd_tok + "_labels.bin"), dtype=np.uint8)
         query_rays_idx = np.fromfile(os.path.join(samples_dir, sd_tok + "_rays_idx.bin"), dtype=np.uint16)
@@ -250,7 +250,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         # voxel down sampling for vis
         sample_pcd = open3d.geometry.PointCloud()
         sample_pcd.points = open3d.utility.Vector3dVector(sample_pts)
-        _, _, idx_list = sample_pcd.voxel_down_sample_and_trace(voxel_size=0.05, min_bound=query_org, max_bound=query_pts[obj_ray_idx] * 2)
+        _, _, idx_list = sample_pcd.voxel_down_sample_and_trace(voxel_size=0.2, min_bound=query_org, max_bound=query_pts[obj_ray_idx] * 2)
         down_idx = np.stack([i[0] for i in idx_list])
 
         # key rays
@@ -430,5 +430,5 @@ if __name__ == '__main__':
 
     # visualization
     source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'labels_cuda', nusc.version), label_suffix='_depth.bin')
+    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'mutual_obs_labels', nusc.version), label_suffix='_depth.bin')
     draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)

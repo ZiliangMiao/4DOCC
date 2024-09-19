@@ -305,8 +305,8 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['bg_pretrain', 'bg_test', 'mos_finetune'], default='mos_finetune')
-    parser.add_argument('--resume_version', type=int, default=0)  # -1: not resuming
+    parser.add_argument('--mode', choices=['bg_pretrain', 'bg_test', 'mos_finetune'], default='bg_pretrain')
+    parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     parser.add_argument('--statistics', type=bool, default=False)
     args = parser.parse_args()
