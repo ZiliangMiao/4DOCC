@@ -1,7 +1,7 @@
 import logging
 import os
 from collections import OrderedDict
-
+from random import sample as random_sample
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,22 +27,19 @@ class MotionPretrainNetwork(LightningModule):
         if train_flag:
             self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
-        self.n_bg_cls = 3  # TODO: unk, free, occ
+        self.n_mutual_cls = self.cfg_model['num_cls']
 
         # encoder and decoder
-        self.encoder = MotionEncoder(self.cfg_model, self.n_bg_cls)
+        self.encoder = MotionEncoder(self.cfg_model, self.n_mutual_cls)
         self.pe = PositionalEncoding(feat_dim=self.cfg_model["feat_dim"], pos_dim=self.cfg_model['pos_dim'])
-        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 128, 64, 32, 16, self.n_bg_cls])
+        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 128, 64, 32, 16, self.n_mutual_cls])
 
         # metrics
-        self.ClassificationMetrics = ClassificationMetrics(self.n_bg_cls, ignore_index=[])
+        self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
 
         # pytorch lightning training output
         self.training_step_outputs = []
         self.validation_step_outputs = []
-
-        # loss
-        self.loss = nn.NLLLoss()
 
         # save predictions
         if not train_flag:
@@ -50,7 +47,6 @@ class MotionPretrainNetwork(LightningModule):
             self.test_epoch = kwargs['test_epoch']
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
             os.makedirs(self.pred_dir, exist_ok=True)
-            # self.mov_iou_list = []
 
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
@@ -68,10 +64,9 @@ class MotionPretrainNetwork(LightningModule):
             # mutual_sd_toks = meta_batch[batch_idx][1]
             mutual_obs_rays_idx = mutual_samples[0]
             mutual_obs_pts = mutual_samples[1]
-            # mutual_obs_depth = mutual_samples[2]
-            mutual_obs_ts = mutual_samples[3]
-            mutual_obs_labels = mutual_samples[4]
-            mutual_obs_confidence = mutual_samples[5]
+            mutual_obs_ts = mutual_samples[2]
+            mutual_obs_labels = mutual_samples[3]
+            mutual_obs_confidence = mutual_samples[4]
 
             # point-wise features
             coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
@@ -102,11 +97,13 @@ class MotionPretrainNetwork(LightningModule):
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
         return [optimizer], [scheduler]
 
-    def get_loss(self, bg_probs, bg_labels):
-        bg_labels = bg_labels.long()
-        assert len(bg_labels) == len(bg_probs)
-        bg_prob_log = torch.log(bg_probs.clamp(min=1e-8))
-        loss = self.loss(bg_prob_log, bg_labels)  # dtype of torch.nllloss must be torch.long
+    def get_loss(self, mutual_probs, mutual_labels, mutual_confidence):
+        mutual_labels = mutual_labels.long()
+        assert len(mutual_labels) == len(mutual_probs)
+        log_prob = torch.log(mutual_probs.clamp(min=1e-8))
+        loss_func = nn.NLLLoss(reduction='none')
+        loss = loss_func(log_prob, mutual_labels)  # dtype of torch.nllloss must be torch.long
+        loss = torch.mean(loss * mutual_confidence)  # TODO: add confidence weight
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
@@ -116,7 +113,8 @@ class MotionPretrainNetwork(LightningModule):
         mutual_probs = torch.cat(mutual_probs_batch, dim=0)
         pred_labels = torch.argmax(mutual_probs, axis=1)
         mutual_labels = torch.cat(mutual_labels_batch, dim=0)
-        loss = self.get_loss(mutual_probs, mutual_labels)  # TODO: bg loss only
+        mutual_confidence = torch.cat(mutual_confidence_batch, dim=0)
+        loss = self.get_loss(mutual_probs, mutual_labels, mutual_confidence)
 
         # metrics
         conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
@@ -127,8 +125,10 @@ class MotionPretrainNetwork(LightningModule):
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("unk_iou", unk_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("free_iou", free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("occ_iou", occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("unk_acc", unk_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("free_acc", free_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("occ_acc", occ_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.training_step_outputs.append({"loss": loss.item(), "confusion_matrix": conf_mat})
@@ -137,17 +137,19 @@ class MotionPretrainNetwork(LightningModule):
 
     def on_train_epoch_end(self):
         conf_mat_list = [output["confusion_matrix"] for output in self.training_step_outputs]
-        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
+        acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
         for conf_mat in conf_mat_list:
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
         # metrics in one epoch
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        free_iou, occ_iou = iou[0], iou[1]
+        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
         acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
-        free_acc, occ_acc = acc[0], acc[1]
+        unk_acc, free_acc, occ_acc = acc[0], acc[1], iou[2]
+        self.log("epoch_unk_iou", unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_unk_acc", unk_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_acc", occ_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
@@ -156,37 +158,22 @@ class MotionPretrainNetwork(LightningModule):
         torch.cuda.empty_cache()
 
     def validation_step(self, batch: tuple, batch_idx):
-        # unfold batch data
-        _, point_clouds, mos_labels = batch
-        _, curr_feats_list = self.forward(point_clouds)
-        conf_mat = self.get_confusion_matrix(curr_feats_list, mos_labels)
-        self.validation_step_outputs.append(conf_mat.detach().cpu())
-        torch.cuda.empty_cache()
-        return {"confusion_matrix": conf_mat.detach().cpu()}
+        # TODO
+        asd = 1
 
     def on_validation_epoch_end(self):
-        conf_mat_list = self.validation_step_outputs
-        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-        iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        free_iou, occ_iou = iou[0], iou[1]
-        self.log("val_free_iou", free_iou.item() * 100, on_epoch=True, logger=True)
-        self.log("val_occ_iou", occ_iou.item() * 100, on_epoch=True, logger=True)
-
-        # clean
-        self.validation_step_outputs = []
-        torch.cuda.empty_cache()
+        # TODO
+        asd = 1
 
     def predict_step(self, batch: tuple, batch_idx):
-        # unfold batch: [(ref_sd_tok, num_rays_all, num_bg_samples_all, num_bg_samples_per_ray_list), pcds_4d, ray_to_bg_samples_dict]
+        # TODO: unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
         meta_batch, pcds_batch, bg_samples_batch = batch
 
         # network prediction
         bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
 
         # iterate each batch data for predicted label saving
-        acc_conf_mat = torch.zeros(self.n_bg_cls, self.n_bg_cls)
+        acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
         for meta, bg_probs, bg_labels in zip(meta_batch, bg_probs_batch, bg_labels_batch):
             sd_tok = meta[0]
 
@@ -234,7 +221,7 @@ class MotionEncoder(nn.Module):
         self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
 
         dx = dy = dz = cfg_model["quant_size"]
-        dt = cfg_model["time_interval"]
+        dt = 1  # TODO: cfg_model["time_interval"]
         self.quant = torch.Tensor([dx, dy, dz, dt])
 
         self.scene_bbox = cfg_model["scene_bbox"]
@@ -277,13 +264,13 @@ class PositionalEncoding(nn.Module):
         # self.dropout = nn.Dropout(p=dropout)
         # self.register_buffer('pe', pe)  # will not train this parameter -> use self.pe to call
 
-    def forward(self, bg_points_4d):
+    def forward(self, points_4d):
         pe_xyzt = []
         for i in range(self.pos_dim):
             assert self.feat_dim % self.pos_dim == 0
             i_dim = int(self.feat_dim / self.pos_dim)
-            pe_i = torch.zeros(len(bg_points_4d), i_dim).cuda()
-            position = bg_points_4d[:, i].unsqueeze(-1)
+            pe_i = torch.zeros(len(points_4d), i_dim).cuda()
+            position = points_4d[:, i].unsqueeze(-1)
             div_term = torch.exp(torch.arange(0, i_dim, 2).float() * (-math.log(10000.0) / i_dim)).cuda()
             # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样
             pe_i[:, 0::2] = torch.sin(position * div_term)

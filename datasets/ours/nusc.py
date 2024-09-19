@@ -41,11 +41,21 @@ class NuscBgDataset(Dataset):
 
         # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
         mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
-        mutual_obs_sd_tok_list = os.listdir(mutual_obs_folder)
-        label_suffix = "_labels.bin"
-        for i in range(len(mutual_obs_sd_tok_list)):
-            mutual_obs_sd_tok_list[i] = mutual_obs_sd_tok_list[i].replace(label_suffix, '')
-        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in mutual_obs_sd_tok_list]
+        mutual_obs_sd_tok_list_1 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_2 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_3 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_4 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_5 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_6 = os.listdir(mutual_obs_folder)
+        for i in range(len(mutual_obs_sd_tok_list_1)):
+            mutual_obs_sd_tok_list_1[i] = mutual_obs_sd_tok_list_1[i].replace("_depth.bin", '')
+            mutual_obs_sd_tok_list_2[i] = mutual_obs_sd_tok_list_2[i].replace("_labels.bin", '')
+            mutual_obs_sd_tok_list_3[i] = mutual_obs_sd_tok_list_3[i].replace("_confidence.bin", '')
+            mutual_obs_sd_tok_list_4[i] = mutual_obs_sd_tok_list_4[i].replace("_rays_idx.bin", '')
+            mutual_obs_sd_tok_list_5[i] = mutual_obs_sd_tok_list_5[i].replace("_key_rays_idx.bin", '')
+            mutual_obs_sd_tok_list_6[i] = mutual_obs_sd_tok_list_6[i].replace("_key_meta.bin", '')
+        valid_sample_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
+        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sample_toks]
         ##############################################################################################################################################
 
         # sample tokens: drop the samples without full sequence length
@@ -75,8 +85,8 @@ class NuscBgDataset(Dataset):
                 ref_pts = pcd
             # add timestamp (0, -1, -2, ...) to pcd -> pcd_4d
             time_idx -= 1
-            assert time_idx == round(rela_ts / 0.5), "relative timestamp repeated"
-            pcd_4d = torch.hstack([pcd, torch.ones(len(pcd)).reshape(-1, 1) * rela_ts])
+            # assert time_idx == round(rela_ts / 0.5), "relative timestamp repeated"  # TODO: corner cases
+            pcd_4d = torch.hstack([pcd, torch.ones(len(pcd)).reshape(-1, 1) * time_idx])
             pcd_4d_list.append(pcd_4d)
         pcds_4d = torch.cat(pcd_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
 
@@ -104,18 +114,28 @@ class NuscBgDataset(Dataset):
         num_unk = len(mutual_unk_idx)
         num_free = len(mutual_free_idx)
         num_occ = len(mutual_occ_idx)
-
-        ds_mutual_unk_idx = random_sample(mutual_unk_idx, 20)
-
-        # mutual sample data tokens
-        mutual_sd_toks = get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
+        num_ds_unk = np.min((num_unk, self.cfg_model['num_ds_unk_samples']))
+        num_ds_free = np.min((num_free, self.cfg_model['num_ds_free_samples']))
+        num_ds_occ = np.min((num_occ, self.cfg_model['num_ds_occ_samples']))
+        ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
+        ds_mutual_free_idx = mutual_free_idx[random_sample(range(num_free), num_ds_free)]
+        ds_mutual_occ_idx = mutual_occ_idx[random_sample(range(num_occ), num_ds_occ)]
+        ds_mutual_sample_indices = torch.cat([ds_mutual_unk_idx, ds_mutual_free_idx, ds_mutual_occ_idx])
 
         # mutual obs timestamps
+        mutual_sd_toks = get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
         mutual_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
         mutual_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] - self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
         mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
 
-        # mutual obs points
+        # update down-sampled mutual obs samples
+        mutual_obs_rays_idx = mutual_obs_rays_idx[ds_mutual_sample_indices]
+        mutual_obs_depth = mutual_obs_depth[ds_mutual_sample_indices]
+        mutual_obs_ts = mutual_obs_ts[ds_mutual_sample_indices]
+        mutual_obs_labels = mutual_obs_labels[ds_mutual_sample_indices]
+        mutual_obs_confidence = mutual_obs_confidence[ds_mutual_sample_indices]
+
+        # mutual obs points (down-sampled)
         mutual_rays_dir = F.normalize(ref_pts - ref_org, p=2, dim=1)  # unit vector
         mutual_obs_pts = ref_org + mutual_obs_depth.reshape(-1, 1) * mutual_rays_dir[mutual_obs_rays_idx]
-        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
+        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]

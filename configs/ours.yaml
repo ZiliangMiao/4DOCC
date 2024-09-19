@@ -32,6 +32,10 @@ bg_pretrain:
   num_epoch: 200
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
+  num_cls: 3 # 0-unknown, 1-free, 2-occ
+  num_ds_unk_samples: 100000
+  num_ds_free_samples: 100000
+  num_ds_occ_samples: 100000
   lr_start: 0.0001
   lr_epoch: 1
   lr_decay: 0.99
