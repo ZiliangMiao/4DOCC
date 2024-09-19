@@ -7,13 +7,6 @@ bg_pretrain:
   shuffle: False # not used, random sampler default shuffle?
   augmentation: True
 
-  # pre-processing
-  max_range: 100 # sqrt(70^2 + 70^2 + 4.5^2)
-  max_dis_error: 0.05
-  dvg_ang: 0.0030 # beam divergence angle (Velodyne HDL-32E: 0.003 (horizontal), 0.0012 (vertical))
-  occ_thrd: 0.105361  # log_e(10/9)
-  n_sd_per_sample: 1
-
   # data processing related
   n_input: 6
   n_skip: 0
@@ -28,7 +21,7 @@ bg_pretrain:
   outside_scene_mask: True
 
   # training related
-  num_epoch: 200
+  num_epoch: 50000
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
@@ -38,7 +31,8 @@ bg_pretrain:
   lr_start: 0.0001
   lr_epoch: 1
   lr_decay: 0.99
-  weight_decay: 0.0001
+  weight_decay: 0.0001  # not used
+  loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
 
   # device related
   num_workers: 1
@@ -89,5 +83,30 @@ mos_finetune:
   weight_decay: 0.0001
 
   # device related
-  num_workers: 12
+  num_workers: 1
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+
+
+
+
+mode: "pretrain"
+
+##Data
+data:
+  dataset_name: "nuscenes"  # "kitti", "argo"
+  dataset_pct: 100  # not used now; percentage of data used for training
+  voxel_size: 0.1  # voxel size
+  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
+  time_interval: 0.05
+  t_scans: 6  # number of input point cloud scan 6, 9, 6 (num of input scans = output scans)
+  n_skip: 4
+  feat_dim: 256  # feature dimension of explicit feature volume
+  n_rays_scan: 128
+  n_points_ray: 1024
+  filter_outside_bbox: True
+#  transform: True # If true, the points are pose-aligned before feeding to the model
+  ego_mask: True  # mask the points of ego-vehicle, 4docc pretraining default=True
+  shuffle: False  # shuffle the dataset
+  flip: True  # flip the x-axis in Singapore (left hand drive)
+  fgbg_label: False  # use foreground background labels to train the model
+

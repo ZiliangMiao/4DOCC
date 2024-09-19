@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.models import MinkOccupancyForecastingNetwork
+from models.occ4d.models_org import MinkOccupancyForecastingNetwork
 
 # JIT
 from torch.utils.cpp_extension import load
@@ -292,7 +292,7 @@ if __name__ == "__main__":
     torch.random.manual_seed(666)
 
     # load pretrain config
-    with open("configs/occ4d_train.yaml", "r") as f:
+    with open("configs/occ4d.yaml", "r") as f:
         cfg_pretrain = yaml.safe_load(f)
     pretrain(cfg_pretrain)
 

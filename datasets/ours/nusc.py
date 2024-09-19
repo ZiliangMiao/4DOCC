@@ -7,7 +7,7 @@ from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
 from random import sample as random_sample
 from utils.augmentation import augment_pcds
 from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sample_level_seq_input
-from preprocess_rays_mutual_obs import get_mutual_sd_toks_dict, get_transformed_pcd
+from preprocess_rays_mutual_obs_script import get_mutual_sd_toks_dict, get_transformed_pcd
 
 
 class NuscBgDataset(Dataset):

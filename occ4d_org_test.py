@@ -9,8 +9,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.models import MinkOccupancyForecastingNetwork
-from utils.vis.vis_occ import get_occupancy_as_pcd
+from models.occ4d.models_org import MinkOccupancyForecastingNetwork
+from utils.vis.vis_occ_or_esdf import get_occupancy_as_pcd
 from models.occ4d.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
 from utils.deterministic import set_deterministic
 
@@ -279,7 +279,7 @@ if __name__ == "__main__":
     set_deterministic(666)
 
     # test point cloud forecasting
-    with open("configs/occ4d_test.yaml", "r") as f:
+    with open("configs/occ4d.yaml", "r") as f:
         cfg = yaml.safe_load(f)
     test(cfg)
 
