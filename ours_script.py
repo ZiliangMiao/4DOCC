@@ -94,9 +94,6 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
                  model_cfg['time_interval'], 2)
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
-    # pretrain model
-    pretrain_model = MotionPretrainNetwork(model_cfg, True)
-
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
     train_set = NuscBgDataset(nusc, model_cfg, dataset_cfg, 'train')
@@ -105,6 +102,9 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
+
+    # pretrain model
+    pretrain_model = MotionPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")

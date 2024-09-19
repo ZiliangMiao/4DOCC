@@ -114,9 +114,10 @@ class NuscBgDataset(Dataset):
         num_unk = len(mutual_unk_idx)
         num_free = len(mutual_free_idx)
         num_occ = len(mutual_occ_idx)
-        num_ds_unk = np.min((num_unk, self.cfg_model['num_ds_unk_samples']))
-        num_ds_free = np.min((num_free, self.cfg_model['num_ds_free_samples']))
-        num_ds_occ = np.min((num_occ, self.cfg_model['num_ds_occ_samples']))
+        num_cls_min = np.min((num_unk, num_free, num_occ))
+        num_ds_unk = np.min((num_cls_min, self.cfg_model['num_ds_unk_samples']))
+        num_ds_free = np.min((num_cls_min, self.cfg_model['num_ds_free_samples']))
+        num_ds_occ = np.min((num_cls_min, self.cfg_model['num_ds_occ_samples']))
         ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
         ds_mutual_free_idx = mutual_free_idx[random_sample(range(num_free), num_ds_free)]
         ds_mutual_occ_idx = mutual_occ_idx[random_sample(range(num_occ), num_ds_occ)]

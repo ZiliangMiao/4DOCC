@@ -14,6 +14,7 @@ from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 from utils.metrics import ClassificationMetrics
 from datasets.ours.nusc import NuscBgDataset
+from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 
 
 #######################################
@@ -28,6 +29,7 @@ class MotionPretrainNetwork(LightningModule):
             self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
         self.n_mutual_cls = self.cfg_model['num_cls']
+        self.iters_per_epoch = kwargs['iters_per_epoch']
 
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model, self.n_mutual_cls)
@@ -90,12 +92,20 @@ class MotionPretrainNetwork(LightningModule):
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
-        lr_epoch = self.cfg_model["lr_epoch"]
-        lr_decay = self.cfg_model["lr_decay"]
         weight_decay = self.cfg_model["weight_decay"]
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr_start, weight_decay=weight_decay)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
-        return [optimizer], [scheduler]
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr_start, weight_decay=weight_decay)
+        lr_max = self.cfg_model["lr_max"]
+        lr_min = self.cfg_model["lr_min"]
+        scheduler = CosineAnnealingWarmupRestarts(optimizer,
+                                                  warmup_steps=0.02 * self.cfg_model['num_epoch'] * self.iters_per_epoch,
+                                                  first_cycle_steps=self.cfg_model['num_epoch'] * self.iters_per_epoch,
+                                                  cycle_mult=1.0,  # period
+                                                  max_lr=lr_max,
+                                                  min_lr=lr_min,
+                                                  gamma=1.0)  # lr_max decrease rate
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
+        # return [optimizer], [scheduler]  # TODO: default scheduler interval is 'epoch'
 
     def get_loss(self, mutual_probs, mutual_labels, mutual_confidence):
         mutual_labels = mutual_labels.long()
