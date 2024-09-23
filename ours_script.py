@@ -163,9 +163,12 @@ def load_pretrained_encoder(ckpt_path, model):
 
     # filter out unnecessary keys (generate new dict)
     pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-    pretrained_dict.pop('encoder.MinkUNet.final.kernel')
-    pretrained_dict.pop('encoder.MinkUNet.final.bias')
-    pretrained_dict.pop('loss.weight')
+    if 'encoder.MinkUNet.final.kernel' in pretrained_dict.keys():
+        pretrained_dict.pop('encoder.MinkUNet.final.kernel')
+    if 'encoder.MinkUNet.final.bias' in pretrained_dict.keys():
+        pretrained_dict.pop('encoder.MinkUNet.final.bias')
+    if 'loss.weight' in pretrained_dict.keys():
+        pretrained_dict.pop('loss.weight')
     # overwrite finetune model dict
     model_dict.update(pretrained_dict)
     # load the pretrained model dict
@@ -176,7 +179,6 @@ def load_pretrained_encoder(ckpt_path, model):
 def mos_finetune(model_cfg, dataset_cfg, resume_version):
     # pre-training checkpoint path
     pre_method = model_cfg["pretrain_method"]
-    assert pre_method == 'bg_pretrain'
     pre_dataset = model_cfg["pretrain_dataset"]
     pre_params = model_cfg["pretrain_params"]
     pre_version = model_cfg["pretrain_version"]
@@ -221,7 +223,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         save_top_k=model_cfg['num_epoch'],
         mode="max",
         filename="{epoch}",
-        every_n_epochs=5,
+        every_n_epochs=10,
         save_last=True,
     )
 
@@ -305,7 +307,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['bg_pretrain', 'bg_test', 'mos_finetune'], default='bg_pretrain')
+    parser.add_argument('--mode', choices=['mutual_obs_pretrain', 'bg_pretrain', 'mutual_obs_test', 'bg_test', 'mos_finetune'], default='mos_finetune')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     parser.add_argument('--statistics', type=bool, default=False)

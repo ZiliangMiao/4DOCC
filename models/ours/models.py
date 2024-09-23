@@ -155,7 +155,7 @@ class MotionPretrainNetwork(LightningModule):
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
         unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
         acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
-        unk_acc, free_acc, occ_acc = acc[0], acc[1], iou[2]
+        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
         self.log("epoch_unk_iou", unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)

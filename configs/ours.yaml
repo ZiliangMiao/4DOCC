@@ -41,25 +41,25 @@ bg_pretrain:
   weight_decay: 0.0001  # refer to UnO
 
   # device related
-  num_workers: 1
+  num_workers: 20
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 # Background samples test
 bg_test:
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  test_epoch: 89
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: 54
   test_dataset: 'nuscenes'
   num_devices: 1
 
 
 # Finetuning params
 mos_finetune:
-  pretrain_method: "bg_pretrain"
+  pretrain_method: "mutual_obs_pretrain"
   pretrain_dataset: "100%nuscenes"
-  pretrain_params: "vs-0.1_t-9.5_bs-4"
+  pretrain_params: "vs-0.1_t-3.0_bs-4"
   pretrain_version: 0
-  pretrain_epoch: 99
+  pretrain_epoch: 54
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
@@ -69,8 +69,8 @@ mos_finetune:
   augmentation: True
 
   # data processing related
-  n_input: 10
-  n_skip: 1
+  n_input: 6
+  n_skip: 0
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
@@ -80,7 +80,7 @@ mos_finetune:
   outside_scene_mask: True
 
   # training related
-  num_epoch: 200
+  num_epoch: 500
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
