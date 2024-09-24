@@ -118,7 +118,6 @@ class MotionPretrainNetwork(LightningModule):
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
-
         mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
         mutual_probs = torch.cat(mutual_probs_batch, dim=0)
         pred_labels = torch.argmax(mutual_probs, axis=1)
@@ -167,45 +166,36 @@ class MotionPretrainNetwork(LightningModule):
         self.training_step_outputs = []
         torch.cuda.empty_cache()
 
-    def validation_step(self, batch: tuple, batch_idx):
-        # TODO
-        asd = 1
-
-    def on_validation_epoch_end(self):
-        # TODO
-        asd = 1
 
     def predict_step(self, batch: tuple, batch_idx):
-        # TODO: unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
-        meta_batch, pcds_batch, bg_samples_batch = batch
-
-        # network prediction
-        bg_probs_batch, bg_labels_batch = self.forward(batch)  # encoder & decoder
+        # model_dict = self.state_dict()  # check state dict
+        meta_batch, _, _ = batch
+        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
 
         # iterate each batch data for predicted label saving
         acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
-        for meta, bg_probs, bg_labels in zip(meta_batch, bg_probs_batch, bg_labels_batch):
+        for meta, mutual_probs, mutual_labels in zip(meta_batch, mutual_probs_batch, mutual_labels_batch):
             sd_tok = meta[0]
+            pred_labels = torch.argmax(mutual_probs, axis=1)
 
             # metrics
-            pred_labels = torch.argmax(bg_probs, axis=1)
-            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, bg_labels)
+            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
             iou = self.ClassificationMetrics.get_iou(conf_mat)
-            free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
+            unk_iou, free_iou, occ_iou = iou[0].item()*100, iou[1].item()*100, iou[2].item()*100
             acc = self.ClassificationMetrics.get_acc(conf_mat)
-            free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
+            unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
 
             # update confusion matrix
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
-            # TODO: save predicted labels, how to vis bg predictions?
+            # save predicted labels for visualization
             pred_file = os.path.join(self.pred_dir, f"{sd_tok}_bg_pred.label")
-            pred_labels = torch.argmax(bg_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
+            pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
             pred_labels.tofile(pred_file)
 
             # logger
-            logging.info("Val sd tok: %s, Occ IoU/Acc: %.3f / %.3f, Free IoU/Acc: %.3f / %.3f", sd_tok, occ_iou, occ_acc, free_iou, free_acc)
-            # self.mov_iou_list.append(occ_iou.item())
+            logging.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
+                         sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
