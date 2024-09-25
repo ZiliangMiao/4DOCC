@@ -2,6 +2,9 @@ import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from typing import List
+from pyquaternion import Quaternion
+from nuscenes.utils.data_classes import LidarPointCloud
+from nuscenes.utils.geometry_utils import transform_matrix
 
 
 class NuscDataloader(LightningDataModule):
@@ -204,3 +207,162 @@ def add_timestamp(tensor, ts):
     ts = ts * torch.ones((n_points, 1))
     tensor_with_ts = torch.hstack([tensor, ts])
     return tensor_with_ts
+
+
+def get_global_pose(nusc, sd_token, inverse=False):
+    sd = nusc.get("sample_data", sd_token)
+    sd_ep = nusc.get("ego_pose", sd["ego_pose_token"])
+    sd_cs = nusc.get("calibrated_sensor", sd["calibrated_sensor_token"])
+
+    if inverse is False:  # transform: from lidar coord to global coord
+        global_from_ego = transform_matrix(
+            sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=False
+        )
+        ego_from_sensor = transform_matrix(
+            sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=False
+        )
+        pose = global_from_ego.dot(ego_from_sensor)
+    else:  # transform: from global coord to lidar coord
+        sensor_from_ego = transform_matrix(
+            sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=True
+        )
+        ego_from_global = transform_matrix(
+            sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=True
+        )
+        pose = sensor_from_ego.dot(ego_from_global)
+    return pose
+
+
+def get_transformed_pcd(nusc, cfg, sd_token_ref, sd_token):
+    # sample data -> pcd
+    sample_data = nusc.get("sample_data", sd_token)
+    lidar_pcd = LidarPointCloud.from_file(f"{nusc.dataroot}/{sample_data['filename']}")  # [num_pts, x, y, z, i]
+
+    # true relative timestamp
+    sample_data_ref = nusc.get("sample_data", sd_token_ref)
+    ts_ref = sample_data_ref['timestamp']  # reference timestamp
+    ts = sample_data['timestamp']  # timestamp
+    ts_rela = (ts - ts_ref) / 1e6
+
+    # poses
+    global_from_curr = get_global_pose(nusc, sd_token, inverse=False)  # from {lidar} to {global}
+    ref_from_global = get_global_pose(nusc, sd_token_ref, inverse=True)  # from {global} to {ref lidar}
+    ref_from_curr = ref_from_global.dot(global_from_curr)  # from {lidar} to {ref lidar}
+
+    # transformed sensor origin and points, at {ref lidar} frame
+    origin_tf = torch.tensor(ref_from_curr[:3, 3], dtype=torch.float32)  # curr sensor location, at {ref lidar} frame
+    lidar_pcd.transform(ref_from_curr)
+    points_tf = torch.tensor(lidar_pcd.points[:3].T, dtype=torch.float32)  # curr point cloud, at {ref lidar} frame
+
+    # filter ego points and outside scene bbox points
+    valid_mask = torch.squeeze(torch.full((len(points_tf), 1), True))
+    if cfg['ego_mask']:
+        ego_mask = get_ego_mask(points_tf)
+        valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+    if cfg['outside_scene_mask']:
+        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"])
+        valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+    points_tf = points_tf[valid_mask]
+    return origin_tf, points_tf, ts_rela, valid_mask
+
+
+def get_mutual_sd_toks_dict(nusc, sample_toks: List[str], cfg):
+    key_sd_toks_dict = {}
+    for ref_sample_tok in sample_toks:
+        ref_sample = nusc.get("sample", ref_sample_tok)
+        ref_sd_tok = ref_sample['data']['LIDAR_TOP']
+        ref_ts = ref_sample['timestamp'] / 1e6
+        sample_sd_toks_list = []
+
+        # future sample data
+        skip_cnt = 0
+        num_next_samples = 0
+        sample = ref_sample
+        while num_next_samples < cfg["n_input"]:
+            if sample['next'] != "":
+                sample = nusc.get("sample", sample['next'])
+                if skip_cnt < cfg["n_skip"]:
+                    skip_cnt += 1
+                    continue
+                # add input sample data token
+                sample_sd_toks_list.append(sample["data"]["LIDAR_TOP"])
+                skip_cnt = 0
+                num_next_samples += 1
+            else:
+                break
+        if len(sample_sd_toks_list) == cfg["n_input"]:  # TODO: add one, to get full insert sample datas
+            sample_sd_toks_list = sample_sd_toks_list[::-1]  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5
+        else:
+            continue
+
+        # history sample data
+        sample_sd_toks_list.append(ref_sample["data"]["LIDAR_TOP"])
+        skip_cnt = 0  # already skip 0 samples
+        num_prev_samples = 1  # already sample 1 lidar sample data
+        sample = ref_sample
+        while num_prev_samples < cfg["n_input"] + 1:
+            if sample['prev'] != "":
+                sample = nusc.get("sample", sample['prev'])
+                if skip_cnt < cfg["n_skip"]:
+                    skip_cnt += 1
+                    continue
+                # add input sample data token
+                sample_sd_toks_list.append(sample["data"]["LIDAR_TOP"])  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5 | 0.0, -0.5, -1.0, -1.5, -2.0, -2.5, (-3.0)
+                skip_cnt = 0
+                num_prev_samples += 1
+            else:
+                break
+
+        # full samples, add sample data and inserted sample data to dict
+        if len(sample_sd_toks_list) == cfg["n_input"] * 2 + 1:
+            key_sd_toks_list = []
+            key_ts_list = []
+            for i in range(len(sample_sd_toks_list) - 1):
+                sample_data = nusc.get('sample_data', sample_sd_toks_list[i])
+                # get all sample data between two samples
+                sd_toks_between_samples = [sample_data['token']]
+                while sample_data['prev'] != "" and sample_data['prev'] != sample_sd_toks_list[i+1]:
+                    sample_data = nusc.get("sample_data", sample_data['prev'])
+                    sd_toks_between_samples.append(sample_data['token'])
+                # select several sample data as sample data insert
+                n_idx = int(len(sd_toks_between_samples) / cfg['n_sd_per_sample'])
+                for j in range(cfg['n_sd_per_sample']):
+                    key_sd_tok = sd_toks_between_samples[n_idx * j]
+                    key_sample_data = nusc.get('sample_data', key_sd_tok)
+                    key_ts = key_sample_data['timestamp'] / 1e6
+                    key_sd_toks_list.append(key_sd_tok)
+                    key_ts_list.append(key_ts - ref_ts)
+                # add to dict
+                if len(key_sd_toks_list) == cfg['n_input'] * 2 * cfg['n_sd_per_sample']:
+                    key_sd_toks_list.remove(ref_sd_tok)
+                    key_sd_toks_dict[ref_sample_tok] = key_sd_toks_list
+    return key_sd_toks_dict
+
+
+def get_curr_future_sd_toks_dict(nusc, sample_toks: List[str], cfg):
+    future_sd_toks_dict = {}
+    for ref_sample_tok in sample_toks:
+        ref_sample = nusc.get("sample", ref_sample_tok)
+        sample_sd_toks_list = [ref_sample['data']['LIDAR_TOP']]
+
+        # future sample data
+        skip_cnt = 0
+        num_next_samples = 0
+        sample = ref_sample
+        while num_next_samples < cfg["n_input"]:
+            if sample['next'] != "":
+                sample = nusc.get("sample", sample['next'])
+                if skip_cnt < cfg["n_skip"]:
+                    skip_cnt += 1
+                    continue
+                # add input sample data token
+                sample_sd_toks_list.append(sample["data"]["LIDAR_TOP"])
+                skip_cnt = 0
+                num_next_samples += 1
+            else:
+                break
+        if len(sample_sd_toks_list) == cfg["n_input"] + 1:  # TODO: add one, to get full insert sample data
+            future_sd_toks_dict[ref_sample_tok] = sample_sd_toks_list
+        else:
+            continue
+    return future_sd_toks_dict

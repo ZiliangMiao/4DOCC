@@ -1,0 +1,91 @@
+# Pretraining params
+uno_pretrain:
+  # dataset related
+  dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
+  downsample_level: "sequence" # "sequence", "sample", "none"
+  downsample_pct: 100 # use 10% of training dataset to train the model
+  shuffle: False # not used, random sampler default shuffle?
+  augmentation: True
+
+  # data processing related
+  n_input: 6
+  n_skip: 0
+  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
+  quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
+  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  pos_dim: 4 # x, y, z, t
+  feat_dim: 128 # feature dimension of each point
+  hidden_size: 16
+  featmap_size: 1.0 # feature map resolution
+  transform: True # if true, the points are pose-aligned before feeding to the model
+  ego_mask: True
+  outside_scene_mask: True
+  occ_thrd: 0.1
+  n_sd_per_sample: 1
+  num_cls_samples: 50000  # number of uno samples per scan per class
+  num_ray_cls_samples: 10  # number of uno samples per ray per class
+
+  # training related
+  num_epoch: 100
+  batch_size: 4
+  acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
+  num_cls: 2 # 0-free, 1-occ
+  num_ds_unk_samples: 50000
+  num_ds_free_samples: 50000
+  num_ds_occ_samples: 50000
+  lr_start: 0.00008  # refer to UnO
+  lr_max: 0.0008  # refer to UnO
+  lr_min: 0  # refer to UnO
+  weight_decay: 0.0001  # refer to UnO
+
+  # device related
+  num_workers: 4
+  num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+
+
+# Background samples test
+uno_test:
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: 54
+  test_dataset: 'nuscenes'
+  num_devices: 1
+
+
+# Finetuning params
+mos_finetune:
+  pretrain_method: "mutual_obs_pretrain"
+  pretrain_dataset: "100%nuscenes"
+  pretrain_params: "vs-0.1_t-3.0_bs-4"
+  pretrain_version: 0
+  pretrain_epoch: 54
+
+  # dataset related
+  dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
+  downsample_level: "sequence" # "sequence", "sample", "none"
+  downsample_pct: 20 # use 10% of training dataset to train the model
+  shuffle: False # not used, random sampler default shuffle?
+  augmentation: True
+
+  # data processing related
+  n_input: 6
+  n_skip: 0
+  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
+  quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
+  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  pos_dim: 4 # x, y, z, t
+  transform: True # if true, the points are pose-aligned before feeding to the model
+  ego_mask: True
+  outside_scene_mask: True
+
+  # training related
+  num_epoch: 500
+  batch_size: 4
+  acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
+  lr_start: 0.0001
+  lr_epoch: 1
+  lr_decay: 0.99
+  weight_decay: 0.0001
+
+  # device related
+  num_workers: 12
+  num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]

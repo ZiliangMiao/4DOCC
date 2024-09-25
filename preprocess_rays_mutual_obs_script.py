@@ -9,11 +9,8 @@ import torch.nn.functional as F
 import yaml
 from collections import defaultdict
 from nuscenes import NuScenes
-from pyquaternion import Quaternion
-from nuscenes.utils.data_classes import LidarPointCloud
-from nuscenes.utils.geometry_utils import transform_matrix
 from tqdm import tqdm
-from datasets.nusc_utils import get_ego_mask, get_outside_scene_mask
+import datasets.nusc_utils as nusc_utils
 from nuscenes.utils.geometry_utils import points_in_box
 from utils.vis.open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
 from utils.vis.open3d_vis_utils import draw_box
@@ -42,17 +39,17 @@ def draw_while_preprocessing(nusc, cfg, sample_tok, depth, labels, query_rays_id
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
+        key_sd_toks_list = nusc_utils.get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
 
         # get query rays and key rays
-        query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
+        query_org, query_pts, query_ts, filter_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
         query_dir = F.normalize(query_pts - query_org, p=2, dim=1)  # unit vector
         key_rays_org_list = []
         key_rays_ts_list = []
         key_rays_pts_list = []
         key_mos_labels_list = []
         for key_sd_tok in key_sd_toks_list:
-            key_org, key_pts, key_ts, key_mask = get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
+            key_org, key_pts, key_ts, key_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
             key_rays_org_list.append(key_org)
             key_rays_pts_list.append(key_pts)
             key_rays_ts_list.append(key_ts)
@@ -294,73 +291,16 @@ def draw_while_preprocessing(nusc, cfg, sample_tok, depth, labels, query_rays_id
     vis.run()
 
 
-def get_global_pose(nusc, sd_token, inverse=False):
-    sd = nusc.get("sample_data", sd_token)
-    sd_ep = nusc.get("ego_pose", sd["ego_pose_token"])
-    sd_cs = nusc.get("calibrated_sensor", sd["calibrated_sensor_token"])
-
-    if inverse is False:  # transform: from lidar coord to global coord
-        global_from_ego = transform_matrix(
-            sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=False
-        )
-        ego_from_sensor = transform_matrix(
-            sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=False
-        )
-        pose = global_from_ego.dot(ego_from_sensor)
-    else:  # transform: from global coord to lidar coord
-        sensor_from_ego = transform_matrix(
-            sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=True
-        )
-        ego_from_global = transform_matrix(
-            sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=True
-        )
-        pose = sensor_from_ego.dot(ego_from_global)
-    return pose
-
-
-def get_transformed_pcd(nusc, cfg, sd_token_ref, sd_token):
-    # sample data -> pcd
-    sample_data = nusc.get("sample_data", sd_token)
-    lidar_pcd = LidarPointCloud.from_file(f"{nusc.dataroot}/{sample_data['filename']}")  # [num_pts, x, y, z, i]
-
-    # true relative timestamp
-    sample_data_ref = nusc.get("sample_data", sd_token_ref)
-    ts_ref = sample_data_ref['timestamp']  # reference timestamp
-    ts = sample_data['timestamp']  # timestamp
-    ts_rela = (ts - ts_ref) / 1e6
-
-    # poses
-    global_from_curr = get_global_pose(nusc, sd_token, inverse=False)  # from {lidar} to {global}
-    ref_from_global = get_global_pose(nusc, sd_token_ref, inverse=True)  # from {global} to {ref lidar}
-    ref_from_curr = ref_from_global.dot(global_from_curr)  # from {lidar} to {ref lidar}
-
-    # transformed sensor origin and points, at {ref lidar} frame
-    origin_tf = torch.tensor(ref_from_curr[:3, 3], dtype=torch.float32)  # curr sensor location, at {ref lidar} frame
-    lidar_pcd.transform(ref_from_curr)
-    points_tf = torch.tensor(lidar_pcd.points[:3].T, dtype=torch.float32)  # curr point cloud, at {ref lidar} frame
-
-    # filter ego points and outside scene bbox points
-    valid_mask = torch.squeeze(torch.full((len(points_tf), 1), True))
-    if cfg['ego_mask']:
-        ego_mask = get_ego_mask(points_tf)
-        valid_mask = torch.logical_and(valid_mask, ~ego_mask)
-    if cfg['outside_scene_mask']:
-        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"])
-        valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-    points_tf = points_tf[valid_mask]
-    return origin_tf, points_tf, ts_rela, valid_mask
-
-
 def load_rays(nusc, cfg, query_sd_tok, key_sd_toks_list):
     # get query rays
-    org_query, pts_query, ts_query, query_valid_mask = get_transformed_pcd(nusc, cfg, query_sd_tok, query_sd_tok)  # cpu
+    org_query, pts_query, ts_query, query_valid_mask = nusc_utils.get_transformed_pcd(nusc, cfg, query_sd_tok, query_sd_tok)  # cpu
     query_rays = QueryRays(org_query.cuda(), pts_query.cuda(), ts_query)  # cuda
 
     # get key rays
     key_rays_list = []
     # query_rays_ints_idx_list, key_rays_ints_idx_list = [], []
     for key_idx, key_sd_tok in enumerate(key_sd_toks_list):
-        org_key, pts_key, ts_key, key_valid_mask = get_transformed_pcd(nusc, cfg, query_sd_tok, key_sd_tok)  # cpu
+        org_key, pts_key, ts_key, key_valid_mask = nusc_utils.get_transformed_pcd(nusc, cfg, query_sd_tok, key_sd_tok)  # cpu
         key_rays = KeyRays(org_key.cuda(), pts_key.cuda(), ts_key)  # cuda
         key_rays_list.append(key_rays)  # cuda
         # query_rays_ints_idx, key_rays_ints_idx = key_rays.find_ints_rays(cfg, query_rays)  # cuda
@@ -980,7 +920,7 @@ if __name__ == '__main__':
 
     # get key sample data tokens
     sample_toks_all = [sample['token'] for sample in nusc.sample]
-    key_sd_toks_dict = get_mutual_sd_toks_dict(nusc, sample_toks_all, cfg)
+    key_sd_toks_dict = nusc_utils.get_mutual_sd_toks_dict(nusc, sample_toks_all, cfg)
 
     # loop query rays
     num_valid_samples = 0

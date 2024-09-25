@@ -6,8 +6,7 @@ import torch.nn.functional as F
 from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
 from random import sample as random_sample
 from utils.augmentation import augment_pcds
-from datasets.nusc_utils import split_logs_to_samples, split_scenes_to_samples, get_sample_level_seq_input
-from preprocess_rays_mutual_obs_script import get_mutual_sd_toks_dict, get_transformed_pcd
+import datasets.nusc_utils as nusc_utils
 
 
 class NuscBgDataset(Dataset):
@@ -21,23 +20,23 @@ class NuscBgDataset(Dataset):
             # dataset down-sampling: sequence level or sample level
             if self.cfg_model["downsample_level"] is None:  # for test set and validation set
                 split_logs = create_splits_logs(split, self.nusc)
-                sample_toks = split_logs_to_samples(self.nusc, split_logs)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
             elif self.cfg_model["downsample_level"] == "sequence":
                 split_scenes = create_splits_scenes(verbose=True)
                 split_scenes = split_scenes[self.split]
                 train_data_pct = self.cfg_model["downsample_pct"] / 100
                 ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
-                sample_toks = split_scenes_to_samples(self.nusc, ds_split_scenes)
+                sample_toks = nusc_utils.split_scenes_to_samples(self.nusc, ds_split_scenes)
             elif self.cfg_model["downsample_level"] == "sample":
                 split_logs = create_splits_logs(split, self.nusc)
-                sample_toks = split_logs_to_samples(self.nusc, split_logs)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
                 train_data_pct = self.cfg_model["downsample_pct"] / 100
                 sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
             else:
                 raise ValueError("Invalid dataset down-sampling strategy!")
         else:
             split_logs = create_splits_logs(split, self.nusc)
-            sample_toks = split_logs_to_samples(self.nusc, split_logs)
+            sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
         # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
         mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
@@ -59,7 +58,7 @@ class NuscBgDataset(Dataset):
         ##############################################################################################################################################
 
         # sample tokens: drop the samples without full sequence length
-        self.sample_to_sd_toks_dict = get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
+        self.sample_to_sd_toks_dict = nusc_utils.get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
 
     def __len__(self):
         return len(self.sample_to_sd_toks_dict)
@@ -79,7 +78,7 @@ class NuscBgDataset(Dataset):
         ref_pts = None
         ref_org = None
         for i, sd_tok in enumerate(input_sd_toks):
-            lidar_org, pcd, rela_ts, valid_mask = get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)  # TODO: filter ego and outside inside func
+            lidar_org, pcd, rela_ts, valid_mask = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)  # TODO: filter ego and outside inside func
             if i == 0:  # reference sample data token
                 ref_org = lidar_org
                 ref_pts = pcd
@@ -124,7 +123,7 @@ class NuscBgDataset(Dataset):
         ds_mutual_sample_indices = torch.cat([ds_mutual_unk_idx, ds_mutual_free_idx, ds_mutual_occ_idx])
 
         # mutual obs timestamps
-        mutual_sd_toks = get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
+        mutual_sd_toks = nusc_utils.get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
         mutual_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
         mutual_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] - self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
         mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]

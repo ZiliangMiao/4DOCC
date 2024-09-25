@@ -10,7 +10,7 @@ import open3d
 import numpy as np
 from nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import points_in_box
-from preprocess_rays_mutual_obs_script import get_mutual_sd_toks_dict, get_transformed_pcd
+import datasets.nusc_utils as nusc_utils
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
@@ -125,17 +125,17 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         sample_data = nusc.get('sample_data', sd_tok)
         sample_token = sample_data['sample_token']
         sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
+        key_sd_toks_list = nusc_utils.get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
 
         # get query rays and key rays
-        query_org, query_pts, query_ts, filter_mask = get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
+        query_org, query_pts, query_ts, filter_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
         query_dir = F.normalize(query_pts - query_org, p=2, dim=1)  # unit vector
         key_rays_org_list = []
         key_rays_ts_list = []
         key_rays_pts_list = []
         key_mos_labels_list = []
         for key_sd_tok in key_sd_toks_list:
-            key_org, key_pts, key_ts, key_mask = get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
+            key_org, key_pts, key_ts, key_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
             key_rays_org_list.append(key_org)
             key_rays_pts_list.append(key_pts)
             key_rays_ts_list.append(key_ts)
