@@ -77,7 +77,12 @@ class UnONetwork(LightningModule):
         uno_labels = torch.stack(uno_labels_batch)
 
         # bilinear feature interpolation
-        query_pts = torch.div((uno_pts_4d[:, :, 0:2] - self.xy_offset), self.featmap_size).unsqueeze(-2)
+        query_pts = torch.clip(torch.div((uno_pts_4d[:, :, 0:2] - self.xy_offset), self.featmap_size),
+                               min=0,
+                               max=dense_featmap.shape[-1]-1-1e-15)
+        # x_max = torch.max(query_pts[:, :, 0])
+        # y_max = torch.max(query_pts[:, :, 1])
+        query_pts = query_pts.unsqueeze(-2)
         feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         feats = torch.permute(feats.squeeze(-1), (0, 2, 1))
 
@@ -87,7 +92,10 @@ class UnONetwork(LightningModule):
         # offset features interpolation
         query_offset_pts = torch.clip(torch.div((uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2] - self.xy_offset), self.featmap_size),
                                       min=0,
-                                      max=dense_featmap.shape[-1]).unsqueeze(-2)
+                                      max=dense_featmap.shape[-1]-1-1e-15)
+        # xx_max = torch.max(query_offset_pts[:, :, 0])
+        # yy_max = torch.max(query_offset_pts[:, :, 1])
+        query_offset_pts = query_offset_pts.unsqueeze(-2)
         offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
 
