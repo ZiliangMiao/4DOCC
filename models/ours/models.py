@@ -29,7 +29,8 @@ class MotionPretrainNetwork(LightningModule):
             self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
         self.n_mutual_cls = self.cfg_model['num_cls']
-        self.iters_per_epoch = kwargs['iters_per_epoch']
+        if train_flag:
+            self.iters_per_epoch = kwargs['iters_per_epoch']
 
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model, self.n_mutual_cls)

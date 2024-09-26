@@ -193,11 +193,11 @@ def get_ego_mask(pcd):
 
 
 def get_outside_scene_mask(pcd, scene_bbox):
-    inside_scene_mask = torch.logical_and(
-        torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3]),
-        torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]),
-        # torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] <= scene_bbox[5])
-    )
+    inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] < scene_bbox[3])
+    inside_scene_mask = torch.logical_and(inside_scene_mask,
+                                          torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] < scene_bbox[4]))
+    inside_scene_mask = torch.logical_and(inside_scene_mask,
+                                          torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] < scene_bbox[5]))
     return ~inside_scene_mask
 
 

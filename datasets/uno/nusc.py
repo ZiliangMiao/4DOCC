@@ -38,16 +38,21 @@ class NuscUnODataset(Dataset):
             split_logs = create_splits_logs(split, self.nusc)
             sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
-        # sample tokens: drop the samples without full sequence length
+        # input sample data tokens: drop the samples without full sequence length
         self.sample_to_sd_toks_dict = nusc_utils.get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
 
+        # uno sample data tokens (current and future):
+        self.sample_to_uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, sample_toks, self.cfg_model)
+
+        # valid sample tokens
+        self.valid_sample_toks = list(set(self.sample_to_sd_toks_dict.keys()) & set(self.sample_to_uno_sd_toks.keys()))
+
     def __len__(self):
-        return len(self.sample_to_sd_toks_dict)
+        return len(self.valid_sample_toks)
 
     def __getitem__(self, batch_idx):
         # sample
-        sample_toks_list = list(self.sample_to_sd_toks_dict.keys())
-        sample_tok = sample_toks_list[batch_idx]
+        sample_tok = self.valid_sample_toks[batch_idx]
         sample = self.nusc.get('sample', sample_tok)
         ref_sd_tok = sample['data']['LIDAR_TOP']
 
@@ -67,6 +72,9 @@ class NuscUnODataset(Dataset):
         # data augmentation: will not change the order of points
         if self.split == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
+            from datasets.nusc_utils import get_outside_scene_mask
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'])
+            pcds_4d = pcds_4d[~outside_scene_mask]
 
         # generate uno labels
         uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
@@ -75,32 +83,38 @@ class NuscUnODataset(Dataset):
         num_cls_samples = self.cfg_model['num_cls_samples']
         num_ray_cls_samples = self.cfg_model['num_ray_cls_samples']
         num_rays_per_scan = int(num_cls_samples / num_ray_cls_samples / len(uno_sd_toks))
-        uno_points_list = []
+        uno_pts_4d_list = []
         uno_labels_list = []
         for sd_tok in uno_sd_toks:  # 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0
             org, pcd, ts, _ = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
-
             # balanced sampling of occ points and free points
             ds_ray_idx = random_sample(range(len(pcd)), num_rays_per_scan)
             ray_pts = pcd[ds_ray_idx]
             ray_dir = F.normalize(ray_pts - org, p=2, dim=1)  # unit vector
             ray_depth = torch.linalg.norm(ray_pts - org, dim=1, keepdim=False)
 
-            # uno balanced sampling
+            # uno balanced sampling (free points)
             free_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
+            free_pts_depth = (free_depth_scale * torch.broadcast_to(ray_depth.reshape(-1, 1), (len(ray_depth), num_ray_cls_samples))).reshape(-1, 1)  # [r_1, ... ray_1, ..., ray_n, ... ray_n]
+            ray_dir = ray_dir.repeat(1, num_ray_cls_samples).reshape(-1, 3)
+            free_pts = org + free_pts_depth * ray_dir
+            free_pts_4d = torch.cat((free_pts, torch.ones((len(free_pts), 1)) * ts), dim=1)
+
+            # uno balanced sampling (occupied points)
             occ_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
+            occ_pts_depth = (occ_depth_scale * torch.broadcast_to((ray_depth + self.cfg_model['occ_thrd']).reshape(-1, 1), (len(ray_depth), num_ray_cls_samples))).reshape(-1, 1)
+            occ_pts = org + occ_pts_depth * ray_dir
+            occ_pts_4d = torch.cat((occ_pts, torch.ones((len(occ_pts), 1)) * ts), dim=1)
 
-            test_a = free_depth_scale * ray_depth
-            test_b = free_depth_scale * ray_depth
-
-            free_pts = org + free_depth_scale * ray_depth * ray_dir
-            occ_pts = org + occ_depth_scale * (ray_depth + self.cfg_model['occ_thrd']) * ray_dir
+            # labels
             free_labels = torch.zeros(len(free_pts))
             occ_labels = torch.ones(len(occ_pts))
-            uno_points = torch.cat((free_pts, occ_pts), dim=0)
+
+            # concat and append to list
+            uno_pts_4d = torch.cat((free_pts_4d, occ_pts_4d), dim=0)
             uno_labels = torch.cat((free_labels, occ_labels), dim=0)
-            uno_points_list.append(uno_points)
+            uno_pts_4d_list.append(uno_pts_4d)
             uno_labels_list.append(uno_labels)
-        uno_points = torch.stack(uno_points_list)
-        uno_labels = torch.stack(uno_labels_list)
-        return [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_points, uno_labels)]
+        uno_pts_4d = torch.cat(uno_pts_4d_list, dim=0)
+        uno_labels = torch.cat(uno_labels_list, dim=0)
+        return [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_pts_4d, uno_labels)]

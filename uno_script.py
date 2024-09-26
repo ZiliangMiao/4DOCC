@@ -32,7 +32,7 @@ def uno_pretrain(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    pretrain_dir = f"./logs/ours/uno_pretrain/{downsample_pct}%{dataset_name}"
+    pretrain_dir = f"./logs/forecast_baseline/uno/{downsample_pct}%{dataset_name}"
     os.makedirs(pretrain_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -129,7 +129,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     pre_params = model_cfg["pretrain_params"]
     pre_version = model_cfg["pretrain_version"]
     pre_epoch = model_cfg["pretrain_epoch"]
-    pretrain_model_dir = f"./logs/ours/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints"
+    pretrain_model_dir = f"./logs/forecast_baseline/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints"
     pretrain_ckpt_name = f"epoch={pre_epoch}.ckpt"
     pretrain_ckpt_path = os.path.join(pretrain_model_dir, pretrain_ckpt_name)
 
@@ -137,7 +137,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    finetune_dir = f"./logs/ours/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
+    finetune_dir = f"./logs/forecast_baseline/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
     os.makedirs(finetune_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -169,7 +169,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         save_top_k=model_cfg['num_epoch'],
         mode="max",
         filename="{epoch}",
-        every_n_epochs=10,
+        every_n_epochs=5,
         save_last=True,
     )
 

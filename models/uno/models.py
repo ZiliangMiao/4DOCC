@@ -11,9 +11,8 @@ import numpy as np
 from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
-from lib.minkowski.minkunet import MinkUNetBase
+from lib.minkowski.resnet import ResNetBase
 from utils.metrics import ClassificationMetrics
-from datasets.ours.nusc import NuscBgDataset
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 
 
@@ -38,7 +37,7 @@ class UnONetwork(LightningModule):
         self.encoder = MotionEncoder(self.cfg_model, self.n_uno_cls)
 
         # uno decoder
-        self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 3)
+        self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, self.pos_dim)
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
 
         # metrics
@@ -56,42 +55,41 @@ class UnONetwork(LightningModule):
             os.makedirs(self.pred_dir, exist_ok=True)
 
     def forward(self, batch):
-        # unfold batch: [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_query_points, uno_labels)]
+        # unfold batch: [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_pts_4d, uno_labels)]
         meta_batch, pcds_batch, uno_samples_batch = batch
 
         # encoder
         dense_featmap = self.encoder(pcds_batch)
 
-        # get bg samples
+        # uno query points and occupancy labels
+        uno_points_batch = []
         uno_labels_batch = []
-        uno_feats_batch = []
-        for batch_idx, uno_samples in enumerate(uno_samples_batch):
-            # ref_sd_tok = meta_batch[batch_idx][0]
-            # uno_sd_toks = meta_batch[batch_idx][1]
-            uno_query_points_4d = uno_samples[0]  # x, y, z, ts
+        for uno_samples in uno_samples_batch:
+            uno_pts_4d = uno_samples[0]  # x, y, z, ts
             uno_labels = uno_samples[1]
-
-            # features interpolation
-            feats = dense_featmap  # (uno_query_points_4d)
-
-            # offset prediction
-            pos_offset = self.offset_predictor(uno_query_points_4d, feats)
-
-            # offset features interpolation
-            offset_feats = dense_featmap  # (uno_query_points_4d + pos_offset)
-
-            # aggregated feats
-            agg_feats = torch.cat([feats, offset_feats], dim=0)
-
-            # collate to batch
-            uno_feats_batch.append(agg_feats)
+            uno_points_batch.append(uno_pts_4d)
             uno_labels_batch.append(uno_labels)
-        # stack batch data
-        uno_feats = torch.stack(uno_feats_batch)
+        uno_pts_4d = torch.stack(uno_points_batch)
         uno_labels = torch.stack(uno_labels_batch)
 
+        # bilinear feature interpolation
+        query_pts = uno_pts_4d[:, :, 0:2].unsqueeze(-2)
+        feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
+        feats = torch.permute(feats.squeeze(-1), (0, 2, 1))
+
+        # offset prediction
+        pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
+
+        # offset features interpolation
+        query_offset = (uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2]).unsqueeze(-2)
+        offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset, mode='bilinear', padding_mode='zeros', align_corners=False)
+        offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
+
+        # aggregated feats
+        uno_feats = torch.cat([feats, offset_feats], dim=2)
+
         # decoder
-        uno_probs = self.decoder(uno_feats)
+        uno_probs = self.decoder(uno_pts_4d, uno_feats)
         return uno_probs, uno_labels
 
     def configure_optimizers(self):
@@ -111,39 +109,35 @@ class UnONetwork(LightningModule):
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
         # return [optimizer], [scheduler]  # TODO: default scheduler interval is 'epoch'
 
-    def get_loss(self, mutual_probs, mutual_labels, mutual_confidence):
-        mutual_labels = mutual_labels.long()
-        assert len(mutual_labels) == len(mutual_probs)
-        log_prob = torch.log(mutual_probs.clamp(min=1e-8))
-        loss_func = nn.NLLLoss(reduction='none')
-        loss = loss_func(log_prob, mutual_labels)  # dtype of torch.nllloss must be torch.long
-        loss = torch.mean(loss * mutual_confidence)  # TODO: add confidence weight
+    def get_loss(self, uno_probs, uno_labels):
+        uno_labels = uno_labels.long()
+        assert len(uno_labels) == len(uno_probs)
+        log_prob = torch.log(uno_probs.clamp(min=1e-8))
+        loss_func = nn.NLLLoss()
+        loss = loss_func(log_prob, uno_labels)  # dtype of torch.nllloss must be torch.long
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
-        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
-        mutual_probs = torch.cat(mutual_probs_batch, dim=0)
-        pred_labels = torch.argmax(mutual_probs, axis=1)
-        mutual_labels = torch.cat(mutual_labels_batch, dim=0)
-        mutual_confidence = torch.cat(mutual_confidence_batch, dim=0)
-        loss = self.get_loss(mutual_probs, mutual_labels, mutual_confidence)
+        uno_probs_batch, uno_labels_batch = self.forward(batch)  # encoder & decoder
+        uno_probs = uno_probs_batch.view(-1, self.n_uno_cls)
+        uno_labels = uno_labels_batch.view(-1)
+        pred_labels = torch.argmax(uno_probs, axis=1)
+        loss = self.get_loss(uno_probs, uno_labels)
 
         # metrics
-        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
+        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, uno_labels)
         iou = self.ClassificationMetrics.get_iou(conf_mat)
-        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
+        free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
         acc = self.ClassificationMetrics.get_acc(conf_mat)
-        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
+        free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
-        self.log("unk_iou", unk_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("free_iou", free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("occ_iou", occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("unk_acc", unk_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("free_acc", free_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("occ_acc", occ_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("free_iou", free_iou, on_step=True, prog_bar=True, logger=True)
+        self.log("occ_iou", occ_iou, on_step=True, prog_bar=True, logger=True)
+        self.log("free_acc", free_acc, on_step=True, prog_bar=True, logger=True)
+        self.log("occ_acc", occ_acc, on_step=True, prog_bar=True, logger=True)
         self.training_step_outputs.append({"loss": loss.item(), "confusion_matrix": conf_mat})
         torch.cuda.empty_cache()
         return loss
@@ -156,15 +150,13 @@ class UnONetwork(LightningModule):
 
         # metrics in one epoch
         iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
-        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
+        free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
         acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
-        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
-        self.log("epoch_unk_iou", unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_unk_acc", unk_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_occ_acc", occ_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
+        self.log("epoch_free_iou", free_iou, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_occ_iou", occ_iou, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_free_acc", free_acc, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_occ_acc", occ_acc, on_epoch=True, prog_bar=True, logger=True)
 
         # clean
         self.training_step_outputs = []
@@ -172,35 +164,7 @@ class UnONetwork(LightningModule):
 
     def predict_step(self, batch: tuple, batch_idx):
         # model_dict = self.state_dict()  # check state dict
-        meta_batch, _, _ = batch
-        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
-
-        # iterate each batch data for predicted label saving
-        acc_conf_mat = torch.zeros(self.n_uno_cls, self.n_uno_cls)
-        for meta, mutual_probs, mutual_labels in zip(meta_batch, mutual_probs_batch, mutual_labels_batch):
-            sd_tok = meta[0]
-            pred_labels = torch.argmax(mutual_probs, axis=1)
-
-            # metrics
-            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
-            iou = self.ClassificationMetrics.get_iou(conf_mat)
-            unk_iou, free_iou, occ_iou = iou[0].item()*100, iou[1].item()*100, iou[2].item()*100
-            acc = self.ClassificationMetrics.get_acc(conf_mat)
-            unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
-
-            # update confusion matrix
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-
-            # save predicted labels for visualization
-            pred_file = os.path.join(self.pred_dir, f"{sd_tok}_bg_pred.label")
-            pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
-            pred_labels.tofile(pred_file)
-
-            # logger
-            logging.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
-                         sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
-        torch.cuda.empty_cache()
-        return {"confusion_matrix": acc_conf_mat.detach().cpu()}
+        a = -1
 
 
 #######################################
@@ -208,12 +172,168 @@ class UnONetwork(LightningModule):
 #######################################
 
 
-class MinkUNet14(MinkUNetBase):
+class MinkUNetUno(ResNetBase):
     BLOCK = BasicBlock
-    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
     # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
     PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
+    EXTRA_PLANES = (8, 8)
+    DILATIONS = (1, 1, 1, 1, 1, 1, 1, 1)
+    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
     INIT_DIM = 8
+    OUT_TENSOR_STRIDE = 1
+
+    # To use the model, must call initialize_coords before forward pass.
+    # Once data is processed, call clear to reset the model before calling
+    # initialize_coords
+    def __init__(self, in_channels, out_channels, D=3):
+        ResNetBase.__init__(self, in_channels, out_channels, D)
+
+    def network_initialization(self, in_channels, out_channels, D):
+        # Output of the first conv concated to conv6
+        self.inplanes = self.INIT_DIM
+        self.conv0p1s1 = ME.MinkowskiConvolution(
+            in_channels, self.inplanes, kernel_size=5, dimension=D)
+
+        self.bn0 = ME.MinkowskiBatchNorm(self.inplanes)
+
+        self.conv1p1s2 = ME.MinkowskiConvolution(
+            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+        self.bn1 = ME.MinkowskiBatchNorm(self.inplanes)
+
+        self.block1 = self._make_layer(self.BLOCK, self.PLANES[0],
+                                       self.LAYERS[0])
+
+        self.conv2p2s2 = ME.MinkowskiConvolution(
+            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+        self.bn2 = ME.MinkowskiBatchNorm(self.inplanes)
+
+        self.block2 = self._make_layer(self.BLOCK, self.PLANES[1],
+                                       self.LAYERS[1])
+
+        self.conv3p4s2 = ME.MinkowskiConvolution(
+            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+
+        self.bn3 = ME.MinkowskiBatchNorm(self.inplanes)
+        self.block3 = self._make_layer(self.BLOCK, self.PLANES[2],
+                                       self.LAYERS[2])
+
+        self.conv4p8s2 = ME.MinkowskiConvolution(
+            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+        self.bn4 = ME.MinkowskiBatchNorm(self.inplanes)
+        self.block4 = self._make_layer(self.BLOCK, self.PLANES[3],
+                                       self.LAYERS[3])
+
+        self.convtr4p16s2 = ME.MinkowskiConvolutionTranspose(
+            self.inplanes, self.PLANES[4], kernel_size=2, stride=2, dimension=D)
+        self.bntr4 = ME.MinkowskiBatchNorm(self.PLANES[4])
+
+        self.inplanes = self.PLANES[4] + self.PLANES[2] * self.BLOCK.expansion
+        self.block5 = self._make_layer(self.BLOCK, self.PLANES[4],
+                                       self.LAYERS[4])
+        self.convtr5p8s2 = ME.MinkowskiConvolutionTranspose(
+            self.inplanes, self.PLANES[5], kernel_size=2, stride=2, dimension=D)
+        self.bntr5 = ME.MinkowskiBatchNorm(self.PLANES[5])
+
+        self.inplanes = self.PLANES[5] + self.PLANES[1] * self.BLOCK.expansion
+        self.block6 = self._make_layer(self.BLOCK, self.PLANES[5],
+                                       self.LAYERS[5])
+        self.convtr6p4s2 = ME.MinkowskiConvolutionTranspose(
+            self.inplanes, self.PLANES[6], kernel_size=2, stride=2, dimension=D)
+        self.bntr6 = ME.MinkowskiBatchNorm(self.PLANES[6])
+
+        self.inplanes = self.PLANES[6] + self.PLANES[0] * self.BLOCK.expansion
+        self.block7 = self._make_layer(self.BLOCK, self.PLANES[6],
+                                       self.LAYERS[6])
+        self.convtr7p2s2 = ME.MinkowskiConvolutionTranspose(
+            self.inplanes, self.PLANES[7], kernel_size=2, stride=2, dimension=D)
+        self.bntr7 = ME.MinkowskiBatchNorm(self.PLANES[7])
+
+        self.inplanes = self.PLANES[7] + self.INIT_DIM
+        self.block8 = self._make_layer(self.BLOCK, self.PLANES[7],
+                                       self.LAYERS[7])
+
+        # TODO: extra conv for correct feature map size
+        self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0], kernel_size=2, stride=2, dimension=D)
+        self.extra_bn0 = ME.MinkowskiBatchNorm(self.inplanes)
+        self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1], kernel_size=2, stride=2, dimension=D)
+        self.extra_bn1 = ME.MinkowskiBatchNorm(self.inplanes)
+
+        # final layer
+        self.final = ME.MinkowskiConvolution(
+            self.EXTRA_PLANES[1],
+            out_channels,
+            kernel_size=1,
+            bias=True,
+            dimension=D)
+        self.relu = ME.MinkowskiReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv0p1s1(x)
+        out = self.bn0(out)
+        out_p1 = self.relu(out)
+
+        out = self.conv1p1s2(out_p1)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out_b1p2 = self.block1(out)
+
+        out = self.conv2p2s2(out_b1p2)
+        out = self.bn2(out)
+        out = self.relu(out)
+        out_b2p4 = self.block2(out)
+
+        out = self.conv3p4s2(out_b2p4)
+        out = self.bn3(out)
+        out = self.relu(out)
+        out_b3p8 = self.block3(out)
+
+        # tensor_stride=16
+        out = self.conv4p8s2(out_b3p8)
+        out = self.bn4(out)
+        out = self.relu(out)
+        out = self.block4(out)
+
+        # tensor_stride=8
+        out = self.convtr4p16s2(out)
+        out = self.bntr4(out)
+        out = self.relu(out)
+
+        out = ME.cat(out, out_b3p8)
+        out = self.block5(out)
+
+        # tensor_stride=4
+        out = self.convtr5p8s2(out)
+        out = self.bntr5(out)
+        out = self.relu(out)
+
+        out = ME.cat(out, out_b2p4)
+        out = self.block6(out)
+
+        # tensor_stride=2
+        out = self.convtr6p4s2(out)
+        out = self.bntr6(out)
+        out = self.relu(out)
+
+        out = ME.cat(out, out_b1p2)
+        out = self.block7(out)
+
+        # tensor_stride=1
+        out = self.convtr7p2s2(out)
+        out = self.bntr7(out)
+        out = self.relu(out)
+
+        out = ME.cat(out, out_p1)
+        out = self.block8(out)
+
+        # extra conv
+        out = self.extra_conv0(out)
+        out = self.extra_bn0(out)
+        out = self.relu(out)
+        out = self.extra_conv1(out)
+        out = self.extra_bn1(out)
+        out = self.relu(out)
+
+        return self.final(out)
 
 
 class MotionEncoder(nn.Module):
@@ -221,24 +341,42 @@ class MotionEncoder(nn.Module):
         super().__init__()
         # backbone network
         self.feat_dim = cfg_model["feat_dim"]
-        self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
+        self.MinkUNet = MinkUNetUno(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
 
+        # input point cloud quantization
         dx = dy = dz = cfg_model["quant_size"]
         dt = 1  # TODO: cfg_model["time_interval"]
         self.quant = torch.Tensor([dx, dy, dz, dt])
 
+        # quantization offset
         self.scene_bbox = cfg_model["scene_bbox"]
-        featmap_size = cfg_model["featmap_size"]
-        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / dz)
-        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / dy)
-        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / dx)
+        self.offset = torch.nn.parameter.Parameter(
+            torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -cfg_model['n_input'] + 1])[None:],
+            requires_grad=False)
+
+        # dense feature map
+        self.featmap_size = cfg_model["featmap_size"]
+        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)
+        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.featmap_size)
+        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.featmap_size)
         b_size = cfg_model["batch_size"]
-        self.featmap_shape = [b_size, x_width, y_length, z_height, cfg_model["n_input"]]
+        t_size = cfg_model['n_input']
+        self.featmap_shape = [b_size, self.feat_dim, x_width, y_length, z_height, t_size]
+
+        # dense conv after sparse to dense feature map
+        self.dense_conv_block = nn.Sequential(OrderedDict([
+            ('conv_1', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+            ('conv_2', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+            ('conv_3', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+        ]))
 
     def forward(self, pcds_4d_batch):
         # quantized 4d pcd and initialized features
         self.quant = self.quant.type_as(pcds_4d_batch[0])
-        quant_4d_pcds = [torch.div(pcd, self.quant) for pcd in pcds_4d_batch]
+        quant_4d_pcds = [torch.div(pcd - self.offset, self.quant) for pcd in pcds_4d_batch]
         feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in pcds_4d_batch]
 
         # sparse collate, tensor field, net calculation
@@ -248,9 +386,13 @@ class MotionEncoder(nn.Module):
         sparse_input = tensor_field.sparse()
         sparse_output = self.MinkUNet(sparse_input)
 
-        # TODO: dense feature map output (with interpolation)
-        featmap_shape = torch.Size([self.featmap_shape[0], 1, self.featmap_shape[1], self.featmap_shape[2], self.featmap_shape[3], self.featmap_shape[4]])
-        dense_featmap, _, _ = sparse_output.dense(shape=featmap_shape, min_coordinate=torch.IntTensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -self.cfg_model["n_input"]+1]))
+        # dense feature map output
+        dense_featmap, _, _ = sparse_output.dense(shape=torch.Size(self.featmap_shape), min_coordinate=torch.IntTensor([0, 0, 0, 0]))
+        dense_featmap = torch.mean(dense_featmap, dim=-1, keepdim=False)
+        dense_featmap = torch.mean(dense_featmap, dim=-1, keepdim=False)
+
+        # dense conv to increase receptive field
+        dense_featmap = self.dense_conv_block(dense_featmap)
         return dense_featmap
 
 
@@ -307,9 +449,10 @@ class UnODecoder(nn.Module):
         pos_proj = self.pos_linear_proj(pos)
         feat_proj = self.feat_linear_proj(feat)
         # residual blocks
-        out_1 = self.relu(pos_proj + self.res_block_1(pos_proj + feat_proj))
+        input = pos_proj + feat_proj
+        out_1 = self.relu(input + self.res_block_1(input))
         out_2 = self.relu(out_1 + self.res_block_2(out_1 + feat_proj))
         out_3 = self.relu(out_2 + self.res_block_3(out_2 + feat_proj))
-        occ_probs = self.final(out_3)
-        return occ_probs
+        uno_probs = self.final(out_3)
+        return uno_probs
 

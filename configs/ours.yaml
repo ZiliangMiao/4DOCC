@@ -47,8 +47,8 @@ bg_pretrain:
 
 # Background samples test
 bg_test:
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: 54
+  model_dir: '/home/user/Projects/4DOCC/logs/ours/mutual_obs_pretrain/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 9]
   test_dataset: 'nuscenes'
   num_devices: 1
 

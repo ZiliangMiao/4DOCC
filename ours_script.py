@@ -252,14 +252,9 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
 
 
 def bg_test(cfg_test, cfg_dataset):
-    # test checkpoint
+    # cfg model
     model_dir = cfg_test['model_dir']
-    test_epoch = cfg_test["test_epoch"]
-    ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
-
-    # model
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
-    model = MotionPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
     # dataloader
     test_dataset = cfg_test['test_dataset']
@@ -271,34 +266,40 @@ def bg_test(cfg_test, cfg_dataset):
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
 
-    # logger
-    log_folder = os.path.join(model_dir, 'results')
-    os.makedirs(log_folder, exist_ok=True)
-    date = datetime.now().strftime('%m%d-%H%M')
-    log_file = os.path.join(log_folder, f"epoch_{test_epoch}_{date}.txt")
-    logging.basicConfig(filename=log_file, level=logging.INFO,
-                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.info(str(cfg_test))
-    logging.info(log_file)
+    for test_epoch in cfg_test["test_epoch"]:
+        # model
+        ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
+        model = MotionPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
-    # metrics
-    metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
+        # logger
+        log_folder = os.path.join(model_dir, 'results')
+        os.makedirs(log_folder, exist_ok=True)
+        date = datetime.now().strftime('%m%d-%H%M')
+        log_file = os.path.join(log_folder, f"epoch_{test_epoch}_{date}.txt")
+        logging.basicConfig(filename=log_file, level=logging.INFO,
+                            format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+        logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+        logging.info(str(cfg_test))
+        logging.info(log_file)
 
-    # predict
-    trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
-    pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+        # metrics
+        metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
 
-    # pred iou and acc
-    conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
-    acc_conf_mat = torch.zeros(2, 2)
-    for conf_mat in conf_mat_list:
-        acc_conf_mat = acc_conf_mat.add(conf_mat)
-    iou = metrics.get_iou(acc_conf_mat)
-    free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
-    acc = metrics.get_acc(acc_conf_mat)
-    free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
-    logging.info("Background Occ IoU/Acc: %.3f / %.3f, Free IoU/Acc: %.3f / %.3f", occ_iou, occ_acc, free_iou, free_acc)
+        # predict
+        trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
+        pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+
+        # pred iou and acc
+        conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
+        acc_conf_mat = torch.zeros(3, 3)
+        for conf_mat in conf_mat_list:
+            acc_conf_mat = acc_conf_mat.add(conf_mat)
+        iou = metrics.get_iou(acc_conf_mat)
+        unk_iou, free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100, iou[2].item() * 100
+        acc = metrics.get_acc(acc_conf_mat)
+        unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
+        logging.info("Mutual Observation (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
+                     unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
 
 
 if __name__ == "__main__":
