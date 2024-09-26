@@ -59,7 +59,7 @@ mos_finetune:
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-4"
   pretrain_version: 0
-  pretrain_epoch: 54
+  pretrain_epoch: 99
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"

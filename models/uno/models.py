@@ -80,9 +80,12 @@ class UnONetwork(LightningModule):
         # offset prediction
         pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
 
+
         # offset features interpolation
-        query_offset = (uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2]).unsqueeze(-2)
-        offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset, mode='bilinear', padding_mode='zeros', align_corners=False)
+        query_offset_pts = (torch.clip(uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2],
+                                       min=self.cfg_model['scene_bbox'][0]-1e-15,
+                                       max=self.cfg_model['scene_bbox'][3]-1e-15)).unsqueeze(-2)
+        offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
 
         # aggregated feats
