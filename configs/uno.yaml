@@ -14,7 +14,7 @@ uno_pretrain:
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
-  feat_dim: 64 # feature dimension of each point
+  feat_dim: 6 # feature dimension of each point
   hidden_size: 16
   featmap_size: 0.4 # feature map resolution
   transform: True # if true, the points are pose-aligned before feeding to the model
@@ -27,7 +27,7 @@ uno_pretrain:
 
   # training related
   num_epoch: 100
-  batch_size: 1
+  batch_size: 2
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 2 # 0-free, 1-occ
   lr_start: 0.00008  # refer to UnO

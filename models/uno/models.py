@@ -37,6 +37,7 @@ class UnONetwork(LightningModule):
         self.encoder = MotionEncoder(self.cfg_model, self.n_uno_cls)
 
         # uno decoder
+        self.featmap_size = self.cfg_model['featmap_size']
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, self.pos_dim)
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
 
@@ -72,19 +73,23 @@ class UnONetwork(LightningModule):
         uno_pts_4d = torch.stack(uno_points_batch)
         uno_labels = torch.stack(uno_labels_batch)
 
+        # quantize and offset
+        offset = torch.nn.parameter.Parameter(torch.Tensor([self.cfg_model["scene_bbox"][0],
+                                                            self.cfg_model["scene_bbox"][1]])[None:],
+                                              requires_grad=False)
+
         # bilinear feature interpolation
-        query_pts = uno_pts_4d[:, :, 0:2].unsqueeze(-2)
+        query_pts = torch.div((uno_pts_4d[:, :, 0:2] - offset), self.featmap_size).unsqueeze(-2)
         feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         feats = torch.permute(feats.squeeze(-1), (0, 2, 1))
 
         # offset prediction
         pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
 
-
         # offset features interpolation
-        query_offset_pts = (torch.clip(uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2],
-                                       min=self.cfg_model['scene_bbox'][0]-1e-15,
-                                       max=self.cfg_model['scene_bbox'][3]-1e-15)).unsqueeze(-2)
+        query_offset_pts = torch.clip(torch.div((uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2] - offset), self.featmap_size),
+                                      min=0,
+                                      max=dense_featmap.shape[-1]).unsqueeze(-2)
         offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
 
