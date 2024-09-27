@@ -224,14 +224,8 @@ class MotionEncoder(nn.Module):
         dx = dy = dz = cfg_model["quant_size"]
         dt = 1  # TODO: cfg_model["time_interval"]
         self.quant = torch.Tensor([dx, dy, dz, dt])
-
         self.scene_bbox = cfg_model["scene_bbox"]
-        featmap_size = cfg_model["featmap_size"]
-        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / featmap_size)
-        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / featmap_size)
-        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / featmap_size)
-        b_size = cfg_model["batch_size"]
-        self.featmap_shape = [b_size, x_width, y_length, z_height, cfg_model["n_input"]]
+
 
     def forward(self, pcds_4d_batch):
         # quantized 4d pcd and initialized features
@@ -249,10 +243,6 @@ class MotionEncoder(nn.Module):
         # TODO: point-wise sparse feature output
         sparse_featmap = sparse_output.slice(tensor_field)
         sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
-
-        # TODO: dense feature map output (with interpolation)
-        # featmap_shape = torch.Size([self.featmap_shape[0], 1, self.featmap_shape[1], self.featmap_shape[2], self.featmap_shape[3], self.featmap_shape[4]])
-        # dense_featmap, _, _ = sparse_output.dense(shape=featmap_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
         return sparse_featmap
 
 
