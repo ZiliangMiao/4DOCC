@@ -57,6 +57,9 @@ class MutualObsPretrainNetwork(LightningModule):
             os.makedirs(self.pred_dir, exist_ok=True)
             self.save_pred_labels = kwargs['save_pred_labels']
 
+            # metrics
+            self.accumulated_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)  # to calculate point-level avg. iou
+
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
         meta_batch, pcds_batch, mutual_samples_batch = batch
@@ -180,7 +183,6 @@ class MutualObsPretrainNetwork(LightningModule):
         mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
 
         # iterate each batch data for predicted label saving
-        acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
         for meta, mutual_probs, mutual_labels in zip(meta_batch, mutual_probs_batch, mutual_labels_batch):
             sd_tok = meta[0]
             pred_labels = torch.argmax(mutual_probs, axis=1)
@@ -193,7 +195,7 @@ class MutualObsPretrainNetwork(LightningModule):
             unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
 
             # update confusion matrix
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
+            self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
 
             if self.save_pred_labels:
                 # save predicted labels for visualization
@@ -205,7 +207,6 @@ class MutualObsPretrainNetwork(LightningModule):
             self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
                          sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
         torch.cuda.empty_cache()
-        return {"confusion_matrix": acc_conf_mat.detach().cpu()}
 
 
 #######################################

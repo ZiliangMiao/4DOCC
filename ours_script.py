@@ -292,16 +292,12 @@ def mutual_obs_test(cfg_test, cfg_dataset):
 
         # predict
         trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
-        pred_outputs = trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+        trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
 
         # pred iou and acc
-        conf_mat_list = [output["confusion_matrix"] for output in pred_outputs]
-        acc_conf_mat = torch.zeros(3, 3)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-        iou = metrics.get_iou(acc_conf_mat)
+        iou = metrics.get_iou(model.accumulated_conf_mat)
         unk_iou, free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100, iou[2].item() * 100
-        acc = metrics.get_acc(acc_conf_mat)
+        acc = metrics.get_acc(model.accumulated_conf_mat)
         unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
         logger.info("Mutual Observation (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
                      unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
