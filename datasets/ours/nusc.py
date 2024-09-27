@@ -38,24 +38,24 @@ class NuscMopDataset(Dataset):
             split_logs = create_splits_logs(split, self.nusc)
             sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
-        # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
-        mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
-        mutual_obs_sd_tok_list_1 = os.listdir(mutual_obs_folder)
-        mutual_obs_sd_tok_list_2 = os.listdir(mutual_obs_folder)
-        mutual_obs_sd_tok_list_3 = os.listdir(mutual_obs_folder)
-        mutual_obs_sd_tok_list_4 = os.listdir(mutual_obs_folder)
-        mutual_obs_sd_tok_list_5 = os.listdir(mutual_obs_folder)
-        mutual_obs_sd_tok_list_6 = os.listdir(mutual_obs_folder)
-        for i in range(len(mutual_obs_sd_tok_list_1)):
-            mutual_obs_sd_tok_list_1[i] = mutual_obs_sd_tok_list_1[i].replace("_depth.bin", '')
-            mutual_obs_sd_tok_list_2[i] = mutual_obs_sd_tok_list_2[i].replace("_labels.bin", '')
-            mutual_obs_sd_tok_list_3[i] = mutual_obs_sd_tok_list_3[i].replace("_confidence.bin", '')
-            mutual_obs_sd_tok_list_4[i] = mutual_obs_sd_tok_list_4[i].replace("_rays_idx.bin", '')
-            mutual_obs_sd_tok_list_5[i] = mutual_obs_sd_tok_list_5[i].replace("_key_rays_idx.bin", '')
-            mutual_obs_sd_tok_list_6[i] = mutual_obs_sd_tok_list_6[i].replace("_key_meta.bin", '')
-        valid_sd_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
-        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sd_toks]
-        ##############################################################################################################################################
+        # # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
+        # mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
+        # mutual_obs_sd_tok_list_1 = os.listdir(mutual_obs_folder)
+        # mutual_obs_sd_tok_list_2 = os.listdir(mutual_obs_folder)
+        # mutual_obs_sd_tok_list_3 = os.listdir(mutual_obs_folder)
+        # mutual_obs_sd_tok_list_4 = os.listdir(mutual_obs_folder)
+        # mutual_obs_sd_tok_list_5 = os.listdir(mutual_obs_folder)
+        # mutual_obs_sd_tok_list_6 = os.listdir(mutual_obs_folder)
+        # for i in range(len(mutual_obs_sd_tok_list_1)):
+        #     mutual_obs_sd_tok_list_1[i] = mutual_obs_sd_tok_list_1[i].replace("_depth.bin", '')
+        #     mutual_obs_sd_tok_list_2[i] = mutual_obs_sd_tok_list_2[i].replace("_labels.bin", '')
+        #     mutual_obs_sd_tok_list_3[i] = mutual_obs_sd_tok_list_3[i].replace("_confidence.bin", '')
+        #     mutual_obs_sd_tok_list_4[i] = mutual_obs_sd_tok_list_4[i].replace("_rays_idx.bin", '')
+        #     mutual_obs_sd_tok_list_5[i] = mutual_obs_sd_tok_list_5[i].replace("_key_rays_idx.bin", '')
+        #     mutual_obs_sd_tok_list_6[i] = mutual_obs_sd_tok_list_6[i].replace("_key_meta.bin", '')
+        # valid_sd_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
+        # sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sd_toks]
+        # ##############################################################################################################################################
 
         # sample tokens: drop the samples without full sequence length
         self.sample_to_sd_toks_dict = nusc_utils.get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
