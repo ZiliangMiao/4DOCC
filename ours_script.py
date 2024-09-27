@@ -15,12 +15,12 @@ from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # models
-from models.ours.models import MotionPretrainNetwork
+from models.ours.models import MutualObsPretrainNetwork
 from models.mos4d.models import MosNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
 from datasets.nusc_utils import NuscDataloader
-from datasets.ours.nusc import NuscBgDataset
+from datasets.ours.nusc import NuscMopDataset
 from datasets.mos4d.nusc import NuscMosDataset
 # lib
 from utils.deterministic import set_deterministic
@@ -29,7 +29,7 @@ from utils.metrics import ClassificationMetrics
 
 def statistics(cfg_model, cfg_dataset):
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    nuscenes = NuscBgDataset(nusc, cfg_model, cfg_dataset, "train")
+    nuscenes = NuscMopDataset(nusc, cfg_model, cfg_dataset, "train")
     num_occ_percentage_per_ray = []
     num_occ_total = 0
     num_free_total = 0
@@ -81,12 +81,12 @@ def statistics(cfg_model, cfg_dataset):
     plt.show()
 
 
-def background_pretrain(model_cfg, dataset_cfg, resume_version):
+def mutual_observation_pretrain(model_cfg, dataset_cfg, resume_version):
     # model params
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    pretrain_dir = f"./logs/ours/bg_pretrain/{downsample_pct}%{dataset_name}"
+    pretrain_dir = f"./logs/ours/mop/{downsample_pct}%{dataset_name}"
     os.makedirs(pretrain_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -96,15 +96,15 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscBgDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscBgDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
     # pretrain model
-    pretrain_model = MotionPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
+    pretrain_model = MutualObsPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -251,7 +251,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         trainer.fit(finetune_model, train_dataloader)
 
 
-def bg_test(cfg_test, cfg_dataset):
+def mutual_obs_test(cfg_test, cfg_dataset):
     # cfg model
     model_dir = cfg_test['model_dir']
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
@@ -260,8 +260,8 @@ def bg_test(cfg_test, cfg_dataset):
     test_dataset = cfg_test['test_dataset']
     assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'val')
+    train_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'val')
     dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
@@ -269,7 +269,7 @@ def bg_test(cfg_test, cfg_dataset):
     for test_epoch in cfg_test["test_epoch"]:
         # model
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
-        model = MotionPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
+        model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
         # logger
         log_folder = os.path.join(model_dir, 'results')
@@ -308,7 +308,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['mutual_obs_pretrain', 'bg_pretrain', 'mutual_obs_test', 'bg_test', 'mos_finetune'], default='mos_finetune')
+    parser.add_argument('--mode', choices=['mop', 'mop_test', 'mos_finetune'], default='mop')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     parser.add_argument('--statistics', type=bool, default=False)
@@ -322,7 +322,7 @@ if __name__ == "__main__":
 
     # statistics of background samples
     if args.statistics:
-        statistics(cfg['bg_pretrain'], dataset_cfg)
+        statistics(cfg['mop'], dataset_cfg)
 
     # dataset root path at different platform
     if args.autodl:
@@ -331,13 +331,13 @@ if __name__ == "__main__":
         dataset_cfg['nuscenes']['root'] = '/home/user' + dataset_cfg['nuscenes']['root']
 
     # pre-training on background for motion segmentation task
-    if args.mode == 'bg_pretrain':
-        background_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
+    if args.mode == 'mop':
+        mutual_observation_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
 
     # fine-tuning on moving object segmentation benchmark
     elif args.mode == 'mos_finetune':
         mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
 
     # background test
-    elif args.mode == 'bg_test':
-        bg_test(cfg[args.mode], dataset_cfg)
+    elif args.mode == 'mop_test':
+        mutual_obs_test(cfg[args.mode], dataset_cfg)

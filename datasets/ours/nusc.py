@@ -9,7 +9,7 @@ from utils.augmentation import augment_pcds
 import datasets.nusc_utils as nusc_utils
 
 
-class NuscBgDataset(Dataset):
+class NuscMopDataset(Dataset):
     def __init__(self, nusc, cfg_model, cfg_dataset, split):
         self.nusc = nusc
         self.cfg_model = cfg_model
@@ -53,8 +53,8 @@ class NuscBgDataset(Dataset):
             mutual_obs_sd_tok_list_4[i] = mutual_obs_sd_tok_list_4[i].replace("_rays_idx.bin", '')
             mutual_obs_sd_tok_list_5[i] = mutual_obs_sd_tok_list_5[i].replace("_key_rays_idx.bin", '')
             mutual_obs_sd_tok_list_6[i] = mutual_obs_sd_tok_list_6[i].replace("_key_meta.bin", '')
-        valid_sample_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
-        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sample_toks]
+        valid_sd_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
+        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sd_toks]
         ##############################################################################################################################################
 
         # sample tokens: drop the samples without full sequence length

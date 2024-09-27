@@ -1,5 +1,5 @@
 # Pretraining params
-bg_pretrain:
+mop:  # mutual observation pretraining
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
@@ -22,7 +22,6 @@ bg_pretrain:
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
   feat_dim: 128 # feature dimension of each point
-  featmap_size: 1.0 # feature map resolution
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
   outside_scene_mask: True
@@ -32,7 +31,7 @@ bg_pretrain:
   batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
-  num_ds_unk_samples: 50000
+  num_ds_unk_samples: 10000
   num_ds_free_samples: 50000
   num_ds_occ_samples: 50000
   lr_start: 0.00008  # refer to UnO
@@ -46,8 +45,8 @@ bg_pretrain:
 
 
 # Background samples test
-bg_test:
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/mutual_obs_pretrain/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+mop_test:
+  model_dir: './logs/ours/mop/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
   test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 9]
   test_dataset: 'nuscenes'
   num_devices: 1
@@ -55,7 +54,7 @@ bg_test:
 
 # Finetuning params
 mos_finetune:
-  pretrain_method: "mutual_obs_pretrain"
+  pretrain_method: "mop"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-4"
   pretrain_version: 0

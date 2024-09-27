@@ -13,7 +13,7 @@ import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 from utils.metrics import ClassificationMetrics
-from datasets.ours.nusc import NuscBgDataset
+from datasets.ours.nusc import NuscMopDataset
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 
 
@@ -22,7 +22,7 @@ from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 #######################################
 
 
-class MotionPretrainNetwork(LightningModule):
+class MutualObsPretrainNetwork(LightningModule):
     def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
         super().__init__()
         if train_flag:
@@ -58,7 +58,7 @@ class MotionPretrainNetwork(LightningModule):
         # encoder
         sparse_featmap = self.encoder(pcds_batch)
 
-        # get bg samples
+        # get mop samples
         mutual_labels_batch = []
         mutual_feats_batch = []
         mutual_confidence_batch = []
@@ -190,7 +190,7 @@ class MotionPretrainNetwork(LightningModule):
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
             # save predicted labels for visualization
-            pred_file = os.path.join(self.pred_dir, f"{sd_tok}_bg_pred.label")
+            pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
             pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
             pred_labels.tofile(pred_file)
 

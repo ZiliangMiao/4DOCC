@@ -77,7 +77,8 @@ class UnONetwork(LightningModule):
         uno_labels = torch.stack(uno_labels_batch)
 
         # bilinear feature interpolation
-        query_pts = torch.clip(uno_pts_4d[:, :, 0:2] / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
+        uno_pts_yx = torch.stack([uno_pts_4d[:, :, 1], uno_pts_4d[:, :, 0]], dim=2)
+        query_pts = torch.clip(uno_pts_yx / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
         # x_max = torch.max(query_pts[:, :, 0])
         # y_max = torch.max(query_pts[:, :, 1])
         # query_pts = query_pts.unsqueeze(-2)
@@ -88,7 +89,8 @@ class UnONetwork(LightningModule):
         pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
 
         # offset features interpolation
-        query_offset_pts = torch.clip((uno_pts_4d[:, :, 0:2] + pos_offset_4d[:, :, 0:2]) / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
+        pos_offset_yx = torch.stack([pos_offset_4d[:, :, 1], pos_offset_4d[:, :, 0]], dim=2)
+        query_offset_pts = torch.clip((uno_pts_yx + pos_offset_yx) / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
         # xx_max = torch.max(query_offset_pts[:, :, 0])
         # yy_max = torch.max(query_offset_pts[:, :, 1])
         # query_offset_pts = query_offset_pts.unsqueeze(-2)
@@ -263,45 +265,65 @@ class MinkUNetUno(ResNetBase):
                                        self.LAYERS[7])
 
         # TODO: extra conv for correct feature map size
-        self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0], kernel_size=2, stride=2, dimension=D)
+        self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.extra_bn0 = ME.MinkowskiBatchNorm(self.inplanes)
-        self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1], kernel_size=2, stride=2, dimension=D)
+        self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.extra_bn1 = ME.MinkowskiBatchNorm(self.inplanes)
+
+        self.pooling = ME.MinkowskiAvgPooling(kernel_size=[5, 5, 5, 5], stride=[2, 2, 2, 2], dimension=D)
 
         # final layer
         self.final = ME.MinkowskiConvolution(
-            self.EXTRA_PLANES[1],
+            self.PLANES[7] * self.BLOCK.expansion,
             out_channels,
             kernel_size=1,
             bias=True,
             dimension=D)
         self.relu = ME.MinkowskiReLU(inplace=True)
 
+    def get_max_coords(self, sparse_output):
+        feat_coords = torch.cat(sparse_output.decomposed_coordinates, dim=0)
+        x_quant_max = torch.max(feat_coords[:, 0])
+        y_quant_max = torch.max(feat_coords[:, 1])
+        z_quant_max = torch.max(feat_coords[:, 2])
+        t_quant_max = torch.max(feat_coords[:, 3])
+        return x_quant_max, y_quant_max, z_quant_max, t_quant_max
+
     def forward(self, x):
         out = self.conv0p1s1(x)
         out = self.bn0(out)
         out_p1 = self.relu(out)
+
+        x_quant_max, y_quant_max, z_quant_max, t_quant_max = self.get_max_coords(out_p1)
 
         out = self.conv1p1s2(out_p1)
         out = self.bn1(out)
         out = self.relu(out)
         out_b1p2 = self.block1(out)
 
+        x_quant_max, y_quant_max, z_quant_max, t_quant_max = self.get_max_coords(out_b1p2)
+
         out = self.conv2p2s2(out_b1p2)
         out = self.bn2(out)
         out = self.relu(out)
         out_b2p4 = self.block2(out)
+
+        x_quant_max, y_quant_max, z_quant_max, t_quant_max = self.get_max_coords(out_b2p4)
 
         out = self.conv3p4s2(out_b2p4)
         out = self.bn3(out)
         out = self.relu(out)
         out_b3p8 = self.block3(out)
 
+        x_quant_max, y_quant_max, z_quant_max, t_quant_max = self.get_max_coords(out_b3p8)
+
         # tensor_stride=16
         out = self.conv4p8s2(out_b3p8)
         out = self.bn4(out)
         out = self.relu(out)
         out = self.block4(out)
+
+        x_quant_max, y_quant_max, z_quant_max, t_quant_max = self.get_max_coords(out)
 
         # tensor_stride=8
         out = self.convtr4p16s2(out)
@@ -335,13 +357,17 @@ class MinkUNetUno(ResNetBase):
         out = ME.cat(out, out_p1)
         out = self.block8(out)
 
-        # extra conv
-        out = self.extra_conv0(out)
-        out = self.extra_bn0(out)
-        out = self.relu(out)
-        out = self.extra_conv1(out)
-        out = self.extra_bn1(out)
-        out = self.relu(out)
+        # # extra conv
+        # out = self.extra_conv0(out)
+        # out = self.extra_bn0(out)
+        # out = self.relu(out)
+        # out = self.extra_conv1(out)
+        # out = self.extra_bn1(out)
+        # out = self.relu(out)
+
+        # pooling
+        out = self.pooling(out)
+        out = self.pooling(out)
 
         return self.final(out)
 
@@ -387,6 +413,13 @@ class MotionEncoder(nn.Module):
         # quantized 4d pcd and initialized features
         self.quant = self.quant.type_as(pcds_4d_batch[0])
         quant_4d_pcds = [torch.div(pcd - self.offset, self.quant) for pcd in pcds_4d_batch]
+
+        # for quant_pcd in quant_4d_pcds:
+        #     x_max = torch.max(quant_pcd[:, 0])
+        #     y_max = torch.max(quant_pcd[:, 1])
+        #     z_max = torch.max(quant_pcd[:, 2])
+        #     t_max = torch.max(quant_pcd[:, 3])
+
         feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in pcds_4d_batch]
 
         # sparse collate, tensor field, net calculation
@@ -395,6 +428,9 @@ class MotionEncoder(nn.Module):
                                       quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
         sparse_input = tensor_field.sparse()
         sparse_output = self.MinkUNet(sparse_input)
+
+        # sparse_featmap = sparse_output.slice(tensor_field)
+        # sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
 
         # dense feature map output
         dense_featmap, _, _ = sparse_output.dense(shape=torch.Size(self.featmap_shape), min_coordinate=torch.IntTensor([0, 0, 0, 0]))
