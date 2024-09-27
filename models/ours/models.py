@@ -58,7 +58,7 @@ class MutualObsPretrainNetwork(LightningModule):
             self.save_pred_labels = kwargs['save_pred_labels']
 
             # metrics
-            self.accumulated_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)  # to calculate point-level avg. iou
+            self.accumulated_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)  # to calculate point-level avg. iou
 
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
