@@ -51,6 +51,9 @@ class MutualObsPretrainNetwork(LightningModule):
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
             os.makedirs(self.pred_dir, exist_ok=True)
 
+            # logger
+            self.test_logger = kwargs['test_logger']
+
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
         meta_batch, pcds_batch, mutual_samples_batch = batch
@@ -195,7 +198,7 @@ class MutualObsPretrainNetwork(LightningModule):
             pred_labels.tofile(pred_file)
 
             # logger
-            logging.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
+            self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
                          sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
         torch.cuda.empty_cache()
         return {"confusion_matrix": acc_conf_mat.detach().cpu()}

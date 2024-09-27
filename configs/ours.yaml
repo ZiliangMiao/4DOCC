@@ -47,7 +47,7 @@ mop:  # mutual observation pretraining
 # Background samples test
 mop_test:
   model_dir: './logs/ours/mop/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 9]
+  test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 09]
   test_dataset: 'nuscenes'
   num_devices: 1
 
