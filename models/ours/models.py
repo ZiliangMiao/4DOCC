@@ -48,11 +48,14 @@ class MutualObsPretrainNetwork(LightningModule):
         if not train_flag:
             self.model_dir = kwargs['model_dir']
             self.test_epoch = kwargs['test_epoch']
-            self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
-            os.makedirs(self.pred_dir, exist_ok=True)
 
             # logger
             self.test_logger = kwargs['test_logger']
+
+            # save pred labels
+            self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
+            os.makedirs(self.pred_dir, exist_ok=True)
+            self.save_pred_labels = kwargs['save_pred_labels']
 
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
@@ -192,10 +195,11 @@ class MutualObsPretrainNetwork(LightningModule):
             # update confusion matrix
             acc_conf_mat = acc_conf_mat.add(conf_mat)
 
-            # save predicted labels for visualization
-            pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
-            pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
-            pred_labels.tofile(pred_file)
+            if self.save_pred_labels:
+                # save predicted labels for visualization
+                pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
+                pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
+                pred_labels.tofile(pred_file)
 
             # logger
             self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",

@@ -285,7 +285,7 @@ def mutual_obs_test(cfg_test, cfg_dataset):
 
         # model
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
-        model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger)
+        model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, save_pred_labels=cfg_test['save_pred_labels'])
 
         # metrics
         metrics = ClassificationMetrics(n_classes=3, ignore_index=0)

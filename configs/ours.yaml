@@ -50,6 +50,7 @@ mop_test:
   test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 09]
   test_dataset: 'nuscenes'
   num_devices: 1
+  save_pred_labels: False
 
 
 # Finetuning params
