@@ -204,7 +204,7 @@ class MutualObsPretrainNetwork(LightningModule):
                 pred_labels.tofile(pred_file)
 
             # logger
-            self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
+            self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
                          sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
         torch.cuda.empty_cache()
 

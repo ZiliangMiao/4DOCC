@@ -299,7 +299,7 @@ def mutual_obs_test(cfg_test, cfg_dataset):
         unk_iou, free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100, iou[2].item() * 100
         acc = metrics.get_acc(model.accumulated_conf_mat)
         unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
-        logger.info("Mutual Observation (IoU/Acc): [Unk %.3f/%.3f], [Occ %.3f/%.3f], [Free %.3f/%.3f]",
+        logger.info("Mutual Observation (IoU/Acc): [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
                      unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
 
 

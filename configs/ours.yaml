@@ -55,11 +55,11 @@ mop_test:
 
 # Finetuning params
 mos_finetune:
-  pretrain_method: "mop"
+  pretrain_method: "mop (1:4:5)"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-4"
   pretrain_version: 0
-  pretrain_epoch: 99
+  pretrain_epoch: 49
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"

@@ -113,7 +113,7 @@ class NuscMopDataset(Dataset):
                                       self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
         mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
 
-        if self.split == 'train':
+        if self.split == 'train' or 'val':
             # TODO: balanced sampling
             mutual_unk_idx = torch.where(mutual_obs_labels == 0)[0]
             mutual_free_idx = torch.where(mutual_obs_labels == 1)[0]
