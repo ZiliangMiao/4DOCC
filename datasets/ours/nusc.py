@@ -106,31 +106,43 @@ class NuscMopDataset(Dataset):
         mutual_obs_depth = torch.from_numpy(np.fromfile(mutual_obs_depth, dtype=np.float16).astype(np.float32))
         mutual_obs_labels = torch.from_numpy(np.fromfile(mutual_obs_labels, dtype=np.uint8).astype(np.int64))
         mutual_obs_confidence = torch.from_numpy(np.fromfile(mutual_obs_confidence, dtype=np.float16).astype(np.float32))
-
-        # mutual obs timestamps
         mutual_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
         mutual_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] -
                                       self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
         mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
 
-        if self.split == 'train' or 'val':
-            # TODO: balanced sampling
+        # mask mutual obs points which depth less than ray depth
+        ray_depth = torch.linalg.norm(ref_pts - ref_org, dim=1, keepdim=False)[mutual_obs_rays_idx]
+        bg_mask = mutual_obs_depth >= ray_depth
+        # update valid samples with bg mask
+        mutual_obs_rays_idx = mutual_obs_rays_idx[bg_mask]
+        mutual_obs_depth = mutual_obs_depth[bg_mask]
+        mutual_obs_ts = mutual_obs_ts[bg_mask]
+        mutual_obs_labels = mutual_obs_labels[bg_mask]
+        mutual_obs_confidence = mutual_obs_confidence[bg_mask]
+
+        # balanced sampling
+        if self.split == 'train':  # TODO: do not balance sampling when testing
             mutual_unk_idx = torch.where(mutual_obs_labels == 0)[0]
             mutual_free_idx = torch.where(mutual_obs_labels == 1)[0]
             mutual_occ_idx = torch.where(mutual_obs_labels == 2)[0]
+
+            # downsample unk
             num_unk = len(mutual_unk_idx)
+            num_ds_unk = np.min((num_unk, self.cfg_model['num_ds_unk_samples']))
+            ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
+
+            # downsample occ and free class
             num_free = len(mutual_free_idx)
             num_occ = len(mutual_occ_idx)
-            num_cls_min = np.min((num_unk, num_free, num_occ))
-            num_ds_unk = np.min((num_cls_min, self.cfg_model['num_ds_unk_samples']))
+            num_cls_min = np.min((num_free, num_occ))
             num_ds_free = np.min((num_cls_min, self.cfg_model['num_ds_free_samples']))
             num_ds_occ = np.min((num_cls_min, self.cfg_model['num_ds_occ_samples']))
-            ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
             ds_mutual_free_idx = mutual_free_idx[random_sample(range(num_free), num_ds_free)]
             ds_mutual_occ_idx = mutual_occ_idx[random_sample(range(num_occ), num_ds_occ)]
-            ds_mutual_sample_indices = torch.cat([ds_mutual_unk_idx, ds_mutual_free_idx, ds_mutual_occ_idx])
 
             # update down-sampled mutual obs samples
+            ds_mutual_sample_indices = torch.cat([ds_mutual_unk_idx, ds_mutual_free_idx, ds_mutual_occ_idx])
             mutual_obs_rays_idx = mutual_obs_rays_idx[ds_mutual_sample_indices]
             mutual_obs_depth = mutual_obs_depth[ds_mutual_sample_indices]
             mutual_obs_ts = mutual_obs_ts[ds_mutual_sample_indices]

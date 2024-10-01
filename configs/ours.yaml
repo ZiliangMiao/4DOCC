@@ -27,27 +27,27 @@ mop:  # mutual observation pretraining
   outside_scene_mask: True
 
   # training related
-  num_epoch: 100
+  num_epoch: 50
   batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
-  num_ds_unk_samples: 10000
-  num_ds_free_samples: 50000
-  num_ds_occ_samples: 50000
+  num_ds_unk_samples: 1000
+  num_ds_free_samples: 100000
+  num_ds_occ_samples: 100000
   lr_start: 0.00008  # refer to UnO
   lr_max: 0.0008  # refer to UnO
   lr_min: 0  # refer to UnO
   weight_decay: 0.0001  # refer to UnO
 
   # device related
-  num_workers: 20
-  num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+  num_workers: 80
+  num_devices: 4 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 # Background samples test
 mop_test:
-  model_dir: './logs/ours/mop/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [99, 89, 79, 69, 59, 49, 39, 29, 19, 09]
+  model_dir: './logs/ours/mop(1:4:5)/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [49, 39, 29, 19, 09]
   test_dataset: 'nuscenes'
   num_devices: 1
   save_pred_labels: False
@@ -55,7 +55,7 @@ mop_test:
 
 # Finetuning params
 mos_finetune:
-  pretrain_method: "mop (1:4:5)"
+  pretrain_method: "mop(1:4:5)"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-4"
   pretrain_version: 0

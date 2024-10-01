@@ -16,6 +16,10 @@ def to_sparse_coo(data):
 
 
 if __name__ == "__main__":
+    from utils.deterministic import set_deterministic
+    set_deterministic(666)
+
+    # input
     dense_input = torch.tensor([[0, 0, 0, 0, 0, 0, 0],
                                 [0, 1, 0, 1, 0, 0, 0],
                                 [0, 0, 0, 0, 0, 0, 0],
@@ -28,21 +32,24 @@ if __name__ == "__main__":
     sparse_coords, sparse_feats = ME.utils.sparse_collate(coords=[sparse_coords], feats=[sparse_feats])
 
     # tensor field and sparse tensor input
-    tensor_field = ME.TensorField(features=sparse_feats, coordinates=sparse_coords,
-                                  quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
-    sparse_input = tensor_field.sparse()
+    org_tensor_field = ME.TensorField(features=sparse_feats, coordinates=sparse_coords,
+                                      quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
+    sparse_input = org_tensor_field.sparse()
 
     # sparse convolution (k=3, p=infinite, s=1)
     convk3p1s1 = ME.MinkowskiConvolution(1, 1, kernel_size=3, stride=1, dimension=2, expand_coordinates=True)
     k3s1_sparse_output = convk3p1s1(sparse_input)
-    k3s1_out_slice = k3s1_sparse_output.slice(tensor_field)
+    k3s1_out_slice = k3s1_sparse_output.slice(org_tensor_field)
 
     # sparse convlution (k=3, p=infinite, s=2)
     convk3p1s2 = ME.MinkowskiConvolution(1, 1, kernel_size=3, stride=2, dimension=2)
-    k3s2_sparse_output = convk3p1s2(sparse_input)
+    k3s2_out = convk3p1s2(sparse_input)
+    k3s2_slice_out = k3s2_out.slice(org_tensor_field)
 
-    # TODO: .slice() with stride=2 conv has bug
-    k3s2_out_slice = k3s2_sparse_output.slice(tensor_field)
+    # transpose convolution TODO: .slice() with stride=2 conv has bug
+    convtrk3s2 = ME.MinkowskiConvolutionTranspose(1, 1, kernel_size=3, stride=2, dimension=2)
+    trk3s3_out = convtrk3s2(k3s2_out)
+    trk3s3_slice_out = trk3s3_out.slice(org_tensor_field)
 
     # dense
     k3s2_dense_out = k3s2_sparse_output.dense(shape=torch.Size([1, 1, 4, 4]), min_coordinate=torch.IntTensor([0, 0]))

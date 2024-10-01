@@ -135,26 +135,10 @@ class MosNetwork(LightningModule):
         torch.cuda.empty_cache()
 
     def validation_step(self, batch: tuple, batch_idx):
-        # unfold batch data
-        _, point_clouds, mos_labels = batch
-        probs = self.forward(point_clouds)
-        conf_mat = self.get_confusion_matrix(curr_feats_list, mos_labels)
-        self.validation_step_outputs.append(conf_mat.detach().cpu())
-        torch.cuda.empty_cache()
-        return {"confusion_matrix": conf_mat.detach().cpu()}
+        a = 1
 
     def on_validation_epoch_end(self):
-        conf_mat_list = self.validation_step_outputs
-        acc_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-        tp, fp, fn = self.ClassificationMetrics.getStats(acc_conf_mat)  # stat of current sample
-        iou = self.ClassificationMetrics.getIoU(tp, fp, fn)[self.mov_class_idx]
-        self.log("val_iou", iou.item() * 100,  on_epoch=True, logger=True)
-
-        # clean
-        self.validation_step_outputs = []
-        torch.cuda.empty_cache()
+        a = 1
 
     def predict_step(self, batch: tuple, batch_idx):
         # unfold batch data and model forward
