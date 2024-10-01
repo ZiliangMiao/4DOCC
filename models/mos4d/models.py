@@ -273,7 +273,7 @@ class MOSModel(nn.Module):
         sparse_input = tensor_field.sparse()
         sparse_output = self.MinkUNet(sparse_input)
 
-        # point-wise sparse feature output
+        # TODO: point-wise sparse feature output
         sparse_featmap = sparse_output.slice(tensor_field)
         sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
         return sparse_featmap
