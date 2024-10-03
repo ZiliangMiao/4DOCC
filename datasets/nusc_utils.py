@@ -44,7 +44,7 @@ class NuscDataloader(LightningDataModule):
                     num_workers=self.cfg_model["num_workers"],  # num of multi-processing
                     shuffle=self.cfg_model["shuffle"],
                     pin_memory=True,
-                    drop_last=False,  # drop the samples left from full batch
+                    drop_last=True,  # drop the samples left from full batch
                     timeout=0,
                     # sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
                     #                                       num_samples=int(train_data_pct * len(train_set))),
@@ -192,13 +192,20 @@ def get_ego_mask(pcd):
     return ego_mask
 
 
-def get_outside_scene_mask(pcd, scene_bbox):
-    inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3])
+def get_outside_scene_mask(pcd, scene_bbox, mask_z: bool):  # TODO: note, preprocessing use both <=
+    inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] < scene_bbox[3])
     inside_scene_mask = torch.logical_and(inside_scene_mask,
-                                          torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]))
-    # inside_scene_mask = torch.logical_and(inside_scene_mask,
-    #                                       torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] <= scene_bbox[5]))
+                                          torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] < scene_bbox[4]))
+    if mask_z:
+        inside_scene_mask = torch.logical_and(inside_scene_mask,
+                                              torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] < scene_bbox[5]))
     return ~inside_scene_mask
+
+# def get_outside_scene_mask(pcd, scene_bbox):  # TODO: for ours mutual observation preprocessing, preprocessing use both <=
+#     inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3])
+#     inside_scene_mask = torch.logical_and(inside_scene_mask,
+#                                           torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]))
+#     return ~inside_scene_mask
 
 
 def add_timestamp(tensor, ts):
@@ -260,7 +267,7 @@ def get_transformed_pcd(nusc, cfg, sd_token_ref, sd_token):
         ego_mask = get_ego_mask(points_tf)
         valid_mask = torch.logical_and(valid_mask, ~ego_mask)
     if cfg['outside_scene_mask']:
-        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"])
+        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"], cfg['outside_scene_mask_z'])
         valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
     points_tf = points_tf[valid_mask]
     return origin_tf, points_tf, ts_rela, valid_mask

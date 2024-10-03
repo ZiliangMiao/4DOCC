@@ -78,10 +78,9 @@ class UnONetwork(LightningModule):
 
         # bilinear feature interpolation
         uno_pts_yx = torch.stack([uno_pts_4d[:, :, 1], uno_pts_4d[:, :, 0]], dim=2)
-        query_pts = torch.clip(uno_pts_yx / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
-        # x_max = torch.max(query_pts[:, :, 0])
-        # y_max = torch.max(query_pts[:, :, 1])
-        # query_pts = query_pts.unsqueeze(-2)
+        pts_min = self.cfg_model["scene_bbox"][0]
+        pts_max = self.cfg_model["scene_bbox"][3]
+        query_pts = ((uno_pts_yx - pts_min) / pts_max * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
         feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         feats = torch.permute(feats.squeeze(-1), (0, 2, 1))
 
@@ -89,11 +88,8 @@ class UnONetwork(LightningModule):
         pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
 
         # offset features interpolation
-        pos_offset_yx = torch.stack([pos_offset_4d[:, :, 1], pos_offset_4d[:, :, 0]], dim=2)
-        query_offset_pts = torch.clip((uno_pts_yx + pos_offset_yx) / self.cfg_model["scene_bbox"][3], min=-1, max=1).unsqueeze(-2)
-        # xx_max = torch.max(query_offset_pts[:, :, 0])
-        # yy_max = torch.max(query_offset_pts[:, :, 1])
-        # query_offset_pts = query_offset_pts.unsqueeze(-2)
+        pts_offset_yx = uno_pts_yx + torch.stack([pos_offset_4d[:, :, 1], pos_offset_4d[:, :, 0]], dim=2)
+        query_offset_pts = ((pts_offset_yx - pts_min) / pts_max * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
         offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
         offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
 
@@ -188,7 +184,7 @@ class MinkUNetUno(ResNetBase):
     BLOCK = BasicBlock
     # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
     PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
-    EXTRA_PLANES = (8, 8)
+    EXTRA_PLANES = (32, 64)
     DILATIONS = (1, 1, 1, 1, 1, 1, 1, 1)
     LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
     INIT_DIM = 8
@@ -209,82 +205,81 @@ class MinkUNetUno(ResNetBase):
         self.bn0 = ME.MinkowskiBatchNorm(self.inplanes)
 
         self.conv1p1s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bn1 = ME.MinkowskiBatchNorm(self.inplanes)
 
         self.block1 = self._make_layer(self.BLOCK, self.PLANES[0],
                                        self.LAYERS[0])
 
         self.conv2p2s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bn2 = ME.MinkowskiBatchNorm(self.inplanes)
 
         self.block2 = self._make_layer(self.BLOCK, self.PLANES[1],
                                        self.LAYERS[1])
 
         self.conv3p4s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
 
         self.bn3 = ME.MinkowskiBatchNorm(self.inplanes)
         self.block3 = self._make_layer(self.BLOCK, self.PLANES[2],
                                        self.LAYERS[2])
 
         self.conv4p8s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bn4 = ME.MinkowskiBatchNorm(self.inplanes)
         self.block4 = self._make_layer(self.BLOCK, self.PLANES[3],
                                        self.LAYERS[3])
 
         self.convtr4p16s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[4], kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.PLANES[4], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bntr4 = ME.MinkowskiBatchNorm(self.PLANES[4])
 
         self.inplanes = self.PLANES[4] + self.PLANES[2] * self.BLOCK.expansion
         self.block5 = self._make_layer(self.BLOCK, self.PLANES[4],
                                        self.LAYERS[4])
         self.convtr5p8s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[5], kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.PLANES[5], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bntr5 = ME.MinkowskiBatchNorm(self.PLANES[5])
 
         self.inplanes = self.PLANES[5] + self.PLANES[1] * self.BLOCK.expansion
         self.block6 = self._make_layer(self.BLOCK, self.PLANES[5],
                                        self.LAYERS[5])
         self.convtr6p4s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[6], kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.PLANES[6], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bntr6 = ME.MinkowskiBatchNorm(self.PLANES[6])
 
         self.inplanes = self.PLANES[6] + self.PLANES[0] * self.BLOCK.expansion
         self.block7 = self._make_layer(self.BLOCK, self.PLANES[6],
                                        self.LAYERS[6])
         self.convtr7p2s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[7], kernel_size=2, stride=2, dimension=D)
+            self.inplanes, self.PLANES[7], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
         self.bntr7 = ME.MinkowskiBatchNorm(self.PLANES[7])
 
         self.inplanes = self.PLANES[7] + self.INIT_DIM
         self.block8 = self._make_layer(self.BLOCK, self.PLANES[7],
                                        self.LAYERS[7])
 
+        # TODO: extra conv for feature map size correction
+        self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0],
+                                                   kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+        self.extra_bn0 = ME.MinkowskiBatchNorm(self.EXTRA_PLANES[0])
+        self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1],
+                                                   kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+        self.extra_bn1 = ME.MinkowskiBatchNorm(self.EXTRA_PLANES[1])
+
+        # TODO: pooling block (for z and t dimension)
+        self.pooling_t = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 1, 6], stride=[1, 1, 1, 6], dimension=D)
+        self.pooling_z = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 100, 1], stride=[1, 1, 100, 1], dimension=D)
+
         # final layer
         self.final = ME.MinkowskiConvolution(
-            self.PLANES[7] * self.BLOCK.expansion,
+            self.EXTRA_PLANES[1],
             out_channels,
             kernel_size=1,
             bias=True,
             dimension=D)
         self.relu = ME.MinkowskiReLU(inplace=True)
-
-        # # TODO: extra conv for correct feature map size
-        # self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0],
-        #                                            kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        # self.extra_bn0 = ME.MinkowskiBatchNorm(self.inplanes)
-        # self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1], kernel_size=2,
-        #                                            stride=[2, 2, 2, 1], dimension=D)
-        # self.extra_bn1 = ME.MinkowskiBatchNorm(self.inplanes)
-        # self.pooling = ME.MinkowskiAvgPooling(kernel_size=[5, 5, 5, 5], stride=[2, 2, 2, 2], dimension=D)
-        # self.dense = ME.MinkowskiToDenseTensor([2, 128, 350, 350, 25, 6])
-
-        # TODO: pooling block (for z and t dimension)
-        self.pooling_zt = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 90, 6], stride=[1, 1, 90, 6], dimension=D)
 
     def get_max_coords(self, sparse_output):
         feat_coords = torch.cat(sparse_output.decomposed_coordinates, dim=0)
@@ -352,11 +347,18 @@ class MinkUNetUno(ResNetBase):
         out = ME.cat(out, out_p1)
         out = self.block8(out)
 
-        # final layer
-        out = self.final(out)
+        # TODO: extra conv layer (feature map size correction)
+        out = self.extra_conv0(out)
+        out = self.extra_bn0(out)
+        out = self.extra_conv1(out)
+        out = self.extra_bn1(out)
 
-        # TODO: pooling for z and t dimension
-        # out = self.pooling_zt(out)
+        # TODO: avg pooling (for z and t dimension)
+        out_xyz = self.pooling_t(out)
+        out_xy = self.pooling_z(out_xyz)
+
+        # TODO: feature head (feature dim from 64 -> 128)
+        out = self.final(out_xy)
         return out
 
 
@@ -368,9 +370,9 @@ class MotionEncoder(nn.Module):
         self.MinkUNet = MinkUNetUno(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
 
         # input point cloud quantization
-        dx = dy = dz = cfg_model["quant_size"]
-        dt = 1  # TODO: cfg_model["time_interval"]
-        self.quant = torch.Tensor([dx, dy, dz, dt])
+        self.quant_size_s = cfg_model["quant_size"]
+        self.quant_size_t = 1  # TODO: cfg_model["time_interval"]
+        self.quant = torch.Tensor([self.quant_size_s, self.quant_size_s, self.quant_size_s, self.quant_size_t])
 
         # quantization offset
         self.scene_bbox = cfg_model["scene_bbox"]
@@ -380,11 +382,11 @@ class MotionEncoder(nn.Module):
 
         # dense feature map
         self.featmap_size = cfg_model["featmap_size"]
-        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)
+        # z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)
         y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.featmap_size)
         x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.featmap_size)
         b_size = cfg_model["batch_size"]
-        t_size = cfg_model['n_input']
+        # t_size = cfg_model['n_input']
         self.featmap_shape = [b_size, self.feat_dim, x_width, y_length, 1, 1]
 
         # dense conv after sparse to dense feature map
@@ -400,29 +402,44 @@ class MotionEncoder(nn.Module):
     def forward(self, pcds_4d_batch):
         # quantized 4d pcd and initialized features
         self.quant = self.quant.type_as(pcds_4d_batch[0])
-        quant_4d_pcds = [torch.div(pcd - self.offset, self.quant) for pcd in pcds_4d_batch]
-
-        # for quant_pcd in quant_4d_pcds:
-        #     x_max = torch.max(quant_pcd[:, 0])
-        #     y_max = torch.max(quant_pcd[:, 1])
-        #     z_max = torch.max(quant_pcd[:, 2])
-        #     t_max = torch.max(quant_pcd[:, 3])
-
+        quant_4d_pcds = [torch.div(pcd - self.offset, self.quant, rounding_mode=None) for pcd in pcds_4d_batch]
         feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in pcds_4d_batch]
 
         # sparse collate, tensor field, net calculation
         coords, feats = ME.utils.sparse_collate(quant_4d_pcds, feats)
-        tensor_field = ME.TensorField(features=feats, coordinates=coords,
+        sparse_input = ME.SparseTensor(features=feats, coordinates=coords,
                                       quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
-        sparse_input = tensor_field.sparse()
+
+        # TODO: filter quantized input which outside quantized scene bbox ##############################################
+        quant_coords = sparse_input.coordinates
+        quant_feats = sparse_input.features
+
+        # filter index out of bound
+        x_max = torch.max(quant_coords[:, 1])
+        y_max = torch.max(quant_coords[:, 2])
+        z_max = torch.max(quant_coords[:, 3])
+        quant_x_max = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.quant_size_s)
+        quant_y_max = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.quant_size_s)
+        quant_z_max = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.quant_size_s)
+        if x_max >= quant_x_max or y_max >= quant_y_max or z_max >= quant_z_max:
+            print(f"\nin max coords out of bound, filter and generate new sparse tensor: {x_max}, {y_max}, {z_max}")
+            quant_valid_mask = torch.logical_and(quant_coords[:, 1] >= 0, quant_coords[:, 1] < quant_x_max)
+            quant_valid_mask = torch.logical_and(quant_valid_mask,
+                               torch.logical_and(quant_coords[:, 2] >= 0, quant_coords[:, 2] < quant_y_max))
+            quant_valid_mask = torch.logical_and(quant_valid_mask,
+                               torch.logical_and(quant_coords[:, 3] >= 0, quant_coords[:, 3] < quant_z_max))
+            # update valid sparse input
+            sparse_input = ME.SparseTensor(features=quant_feats[quant_valid_mask].reshape(-1, 1),
+                                           coordinates=quant_coords[quant_valid_mask],
+                                           quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
+        ################################################################################################################
+
+        # forward
         sparse_output = self.MinkUNet(sparse_input)
 
         # dense feature map output
-        dense_featmap, _, _ = sparse_output.dense(shape=torch.Size([1, 2, 350, 350, 90, 6]), min_coordinate=torch.IntTensor([0, 0, 0, 0]))
-        dense_featmap = torch.squeeze(torch.squeeze(dense_featmap, -1), -1)  # B, F, X, Y, (Z, T)
-
-        # dense_featmap = torch.mean(dense_featmap, dim=-1, keepdim=False)
-        # dense_featmap = torch.mean(dense_featmap, dim=-1, keepdim=False)
+        dense_featmap, _, _ = sparse_output.dense(shape=torch.Size(self.featmap_shape), min_coordinate=torch.IntTensor([0, 0, 0, 0]))  # [B, F, 350, 350, 1, 1]
+        dense_featmap = torch.squeeze(torch.squeeze(dense_featmap, -1), -1)  # B, F, X, Y
 
         # dense conv to increase receptive field
         dense_featmap = self.dense_conv_block(dense_featmap)

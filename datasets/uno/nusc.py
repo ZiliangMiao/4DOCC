@@ -7,6 +7,7 @@ from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
 from random import sample as random_sample
 from utils.augmentation import augment_pcds
 import datasets.nusc_utils as nusc_utils
+from datasets.nusc_utils import get_outside_scene_mask
 
 
 class NuscUnODataset(Dataset):
@@ -71,9 +72,9 @@ class NuscUnODataset(Dataset):
 
         # data augmentation: will not change the order of points
         if self.split == 'train' and self.cfg_model["augmentation"]:
+            # TODO: augmentation may cause outside scene bbox
             pcds_4d = augment_pcds(pcds_4d)
-            from datasets.nusc_utils import get_outside_scene_mask
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'])
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'], self.cfg_model['outside_scene_mask_z'])
             pcds_4d = pcds_4d[~outside_scene_mask]
 
         # generate uno labels
