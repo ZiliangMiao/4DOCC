@@ -26,15 +26,16 @@ mop:  # mutual observation pretraining
   ego_mask: True
   outside_scene_mask: True
   outside_scene_mask_z: False
+  outside_scene_mask_ub: True # upper bound, if true, x <= x_max, else x < x_max
+  train_bg_mop_samples: False # if True, only use background mutual observation samples for pre-training
 
   # training related
   num_epoch: 50
   batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
-  num_ds_unk_samples: 1000
-  num_ds_free_samples: 100000
-  num_ds_occ_samples: 100000
+  num_cls_samples_max: 100000 # max number of mop samples for each class
+  unk_samples_pct: 1 # 1% unknown mop samples
   lr_start: 0.00008  # refer to UnO
   lr_max: 0.0008  # refer to UnO
   lr_min: 0  # refer to UnO

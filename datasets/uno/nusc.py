@@ -74,7 +74,9 @@ class NuscUnODataset(Dataset):
         if self.split == 'train' and self.cfg_model["augmentation"]:
             # TODO: augmentation may cause outside scene bbox
             pcds_4d = augment_pcds(pcds_4d)
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'], self.cfg_model['outside_scene_mask_z'])
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'],
+                                                        self.cfg_model['outside_scene_mask_z'],
+                                                        self.cfg_model['outside_scene_mask_ub'])
             pcds_4d = pcds_4d[~outside_scene_mask]
 
         # generate uno labels

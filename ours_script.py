@@ -78,11 +78,14 @@ def statistics(cfg_model, cfg_dataset):
 
 
 def mutual_observation_pretrain(model_cfg, dataset_cfg, resume_version):
-    # model params
+    # pretrain params
     dataset_name = model_cfg['dataset_name']
-    assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
+    assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    pretrain_dir = f"./logs/ours/mop/{downsample_pct}%{dataset_name}"
+    unk_pct = model_cfg['unk_samples_pct']
+    train_bg_mop = model_cfg['train_bg_mop_samples']
+    pretrain_method = f"mop_bg_{unk_pct}%unk" if train_bg_mop else f"mop_all_{unk_pct}%unk"
+    pretrain_dir = f"./logs/ours/{pretrain_method}/{downsample_pct}%{dataset_name}"
     os.makedirs(pretrain_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']

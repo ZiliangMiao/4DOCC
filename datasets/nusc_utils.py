@@ -192,20 +192,19 @@ def get_ego_mask(pcd):
     return ego_mask
 
 
-def get_outside_scene_mask(pcd, scene_bbox, mask_z: bool):  # TODO: note, preprocessing use both <=
-    inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] < scene_bbox[3])
-    inside_scene_mask = torch.logical_and(inside_scene_mask,
-                                          torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] < scene_bbox[4]))
+def get_outside_scene_mask(pcd, scene_bbox, mask_z: bool, upper_bound: bool):  # TODO: note, preprocessing use both <=
+    if upper_bound: # TODO: for mop pre-processing, keep ray index unchanged
+        inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3])
+        inside_scene_mask = torch.logical_and(inside_scene_mask,
+                                              torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]))
+    else: # TODO: for uno, avoid index out of bound
+        inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] < scene_bbox[3])
+        inside_scene_mask = torch.logical_and(inside_scene_mask,
+                                              torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] < scene_bbox[4]))
     if mask_z:
         inside_scene_mask = torch.logical_and(inside_scene_mask,
                                               torch.logical_and(scene_bbox[2] <= pcd[:, 2], pcd[:, 2] < scene_bbox[5]))
     return ~inside_scene_mask
-
-# def get_outside_scene_mask(pcd, scene_bbox):  # TODO: for ours mutual observation preprocessing, preprocessing use both <=
-#     inside_scene_mask = torch.logical_and(scene_bbox[0] <= pcd[:, 0], pcd[:, 0] <= scene_bbox[3])
-#     inside_scene_mask = torch.logical_and(inside_scene_mask,
-#                                           torch.logical_and(scene_bbox[1] <= pcd[:, 1], pcd[:, 1] <= scene_bbox[4]))
-#     return ~inside_scene_mask
 
 
 def add_timestamp(tensor, ts):
@@ -267,7 +266,7 @@ def get_transformed_pcd(nusc, cfg, sd_token_ref, sd_token):
         ego_mask = get_ego_mask(points_tf)
         valid_mask = torch.logical_and(valid_mask, ~ego_mask)
     if cfg['outside_scene_mask']:
-        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"], cfg['outside_scene_mask_z'])
+        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"], cfg['outside_scene_mask_z'], cfg['outside_scene_mask_ub'])
         valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
     points_tf = points_tf[valid_mask]
     return origin_tf, points_tf, ts_rela, valid_mask
