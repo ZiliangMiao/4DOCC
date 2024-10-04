@@ -138,7 +138,7 @@ class NuscMopDataset(Dataset):
 
             # downsample unk
             num_unk = len(mutual_unk_idx)
-            num_ds_unk = int(num_ds_cls * self.cfg_model['unk_samples_pct'] / 100)
+            num_ds_unk = np.min(num_unk, int(num_ds_cls * self.cfg_model['unk_samples_pct'] / 100))
             ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
 
             # update down-sampled mutual obs samples
