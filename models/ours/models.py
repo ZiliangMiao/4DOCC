@@ -258,6 +258,7 @@ class PositionalEncoding(nn.Module):
         for i in range(self.pos_dim):
             assert self.feat_dim % self.pos_dim == 0
             i_dim = int(self.feat_dim / self.pos_dim)
+            assert i_dim % 2 == 0, "dimension should be even"
             pe_i = torch.zeros(len(points_4d), i_dim).cuda()
             position = points_4d[:, i].unsqueeze(-1)
             div_term = torch.exp(torch.arange(0, i_dim, 2).float() * (-math.log(10000.0) / i_dim)).cuda()

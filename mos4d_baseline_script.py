@@ -125,15 +125,15 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     pre_params = model_cfg["pretrain_params"]
     pre_version = model_cfg["pretrain_version"]
     pre_epoch = model_cfg["pretrain_epoch"]
-    pretrain_model_dir = f"./logs/forecast_baseline/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints"
+    pretrain_model_dir = f"./logs/ours/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints" # TODO: rename
     pretrain_ckpt_name = f"epoch={pre_epoch}.ckpt"
     pretrain_ckpt_path = os.path.join(pretrain_model_dir, pretrain_ckpt_name)
 
     # fine-tuning params
     dataset_name = model_cfg['dataset_name']
-    assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
+    assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    finetune_dir = f"./logs/forecast_baseline/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
+    finetune_dir = f"./logs/ours/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"  # TODO: rename
     os.makedirs(finetune_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
