@@ -1,16 +1,12 @@
 import os
-
 import numpy as np
 import torch
 import torch.nn as nn
-import sys
-import logging
-from datetime import datetime
 from nuscenes.utils.geometry_utils import points_in_box
 from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
 from MinkowskiEngine.modules.resnet_block import BasicBlock
-from lib.minkowski.minkunet import MinkUNetBase
+from models.backbone import MinkUNetBackbone
 from utils.metrics import ClassificationMetrics
 
 
@@ -223,21 +219,13 @@ class MosNetwork(LightningModule):
 #######################################
 
 
-class MinkUNet14(MinkUNetBase):
-    BLOCK = BasicBlock
-    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
-    # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
-    PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
-    INIT_DIM = 8
-
-
 class MOSModel(nn.Module):
     def __init__(self, cfg_model: dict, n_classes: int):
         super().__init__()
 
         # backbone network
         self.n_mos_cls = 3  # 0: static, 1: moving
-        self.MinkUNet = MinkUNet14(in_channels=1, out_channels=self.n_mos_cls, D=cfg_model['pos_dim'])
+        self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=self.n_mos_cls, D=cfg_model['pos_dim'])
 
         dx = dy = dz = cfg_model["quant_size"]
         dt = 1  # TODO: should be cfg_model["time_interval"], handle different lidar frequency of kitti and nuscenes

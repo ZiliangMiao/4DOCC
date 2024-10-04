@@ -7,13 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
-
 from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
-from MinkowskiEngine.modules.resnet_block import BasicBlock
-from lib.minkowski.resnet import ResNetBase
 from utils.metrics import ClassificationMetrics
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
+from models.backbone import MinkUNetBackbone
 
 
 #######################################
@@ -40,7 +38,6 @@ class UnONetwork(LightningModule):
         self.xy_offset = torch.nn.parameter.Parameter(torch.Tensor([self.cfg_model["scene_bbox"][0],
                                                             self.cfg_model["scene_bbox"][1]])[None:],
                                                       requires_grad=False)
-        self.featmap_size = self.cfg_model['featmap_size']
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, self.pos_dim)
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
 
@@ -49,7 +46,6 @@ class UnONetwork(LightningModule):
 
         # pytorch lightning training output
         self.training_step_outputs = []
-        self.validation_step_outputs = []
 
         # save predictions
         if not train_flag:
@@ -180,224 +176,86 @@ class UnONetwork(LightningModule):
 #######################################
 
 
-class MinkUNetUno(ResNetBase):
-    BLOCK = BasicBlock
-    # PLANES = (8, 16, 32, 64, 64, 32, 16, 8)
-    PLANES = (8, 32, 128, 256, 256, 128, 32, 8)
-    EXTRA_PLANES = (32, 64)
-    DILATIONS = (1, 1, 1, 1, 1, 1, 1, 1)
-    LAYERS = (1, 1, 1, 1, 1, 1, 1, 1)
-    INIT_DIM = 8
-    OUT_TENSOR_STRIDE = 1
+class DenseFeatHead(nn.Module):
+    def __init__(self, in_channels, out_channels, featmap_shape, D):
+        super().__init__()
+        # extra conv for feature map size correction
+        self.conv0k2s2 = ME.MinkowskiConvolution(in_channels, out_channels,
+                                                 kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+        self.bn0 = ME.MinkowskiBatchNorm(out_channels)
+        self.conv1k2s2 = ME.MinkowskiConvolution(out_channels, out_channels,
+                                                 kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+        self.bn1 = ME.MinkowskiBatchNorm(out_channels)
 
-    # To use the model, must call initialize_coords before forward pass.
-    # Once data is processed, call clear to reset the model before calling
-    # initialize_coords
-    def __init__(self, in_channels, out_channels, D=3):
-        ResNetBase.__init__(self, in_channels, out_channels, D)
+        # pooling block (for z and t dimension)
+        self.avg_pool_t = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 1, featmap_shape[5]],
+                                                 stride=[1, 1, 1, featmap_shape[5]], dimension=D)
+        self.avg_pool_z = ME.MinkowskiAvgPooling(kernel_size=[1, 1, featmap_shape[4], 1],
+                                                 stride=[1, 1, featmap_shape[4], 1], dimension=D)
 
-    def network_initialization(self, in_channels, out_channels, D):
-        # Output of the first conv concated to conv6
-        self.inplanes = self.INIT_DIM
-        self.conv0p1s1 = ME.MinkowskiConvolution(
-            in_channels, self.inplanes, kernel_size=5, dimension=D)
+        # to dense, dense featmap shape
+        self.dense_featmap_shape = [featmap_shape[0], featmap_shape[1], featmap_shape[2], featmap_shape[3], 1, 1]
 
-        self.bn0 = ME.MinkowskiBatchNorm(self.inplanes)
+        # dense block, for denser feature map
+        self.dense_conv_block = nn.Sequential(OrderedDict([
+            ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+            ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+            ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('relu', nn.ReLU(inplace=False)),
+        ]))
 
-        self.conv1p1s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bn1 = ME.MinkowskiBatchNorm(self.inplanes)
+    def forward(self, sparse_input):
+        # extra conv layer (feature map size correction)
+        sparse_out = self.conv0k2s2(sparse_input)
+        sparse_out = self.bn0(sparse_out)
+        sparse_out = self.conv1k2s2(sparse_out)
+        sparse_out = self.bn1(sparse_out)
 
-        self.block1 = self._make_layer(self.BLOCK, self.PLANES[0],
-                                       self.LAYERS[0])
+        # avg pooling (for z and t dimension)
+        sparse_out_xyz = self.avg_pool_t(sparse_out)
+        sparse_out_xy = self.avg_pool_z(sparse_out_xyz)
 
-        self.conv2p2s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bn2 = ME.MinkowskiBatchNorm(self.inplanes)
+        # sparse to dense
+        dense_featmap_xy, _, _ = sparse_out_xy.dense(shape=torch.Size(self.dense_featmap_shape),
+                                                  min_coordinate=torch.IntTensor([0, 0, 0, 0]))  # [B, F, 350, 350, 1, 1]
+        dense_featmap_xy = torch.squeeze(torch.squeeze(dense_featmap_xy, -1), -1)  # B, F, X, Y
 
-        self.block2 = self._make_layer(self.BLOCK, self.PLANES[1],
-                                       self.LAYERS[1])
-
-        self.conv3p4s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-
-        self.bn3 = ME.MinkowskiBatchNorm(self.inplanes)
-        self.block3 = self._make_layer(self.BLOCK, self.PLANES[2],
-                                       self.LAYERS[2])
-
-        self.conv4p8s2 = ME.MinkowskiConvolution(
-            self.inplanes, self.inplanes, kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bn4 = ME.MinkowskiBatchNorm(self.inplanes)
-        self.block4 = self._make_layer(self.BLOCK, self.PLANES[3],
-                                       self.LAYERS[3])
-
-        self.convtr4p16s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[4], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bntr4 = ME.MinkowskiBatchNorm(self.PLANES[4])
-
-        self.inplanes = self.PLANES[4] + self.PLANES[2] * self.BLOCK.expansion
-        self.block5 = self._make_layer(self.BLOCK, self.PLANES[4],
-                                       self.LAYERS[4])
-        self.convtr5p8s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[5], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bntr5 = ME.MinkowskiBatchNorm(self.PLANES[5])
-
-        self.inplanes = self.PLANES[5] + self.PLANES[1] * self.BLOCK.expansion
-        self.block6 = self._make_layer(self.BLOCK, self.PLANES[5],
-                                       self.LAYERS[5])
-        self.convtr6p4s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[6], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bntr6 = ME.MinkowskiBatchNorm(self.PLANES[6])
-
-        self.inplanes = self.PLANES[6] + self.PLANES[0] * self.BLOCK.expansion
-        self.block7 = self._make_layer(self.BLOCK, self.PLANES[6],
-                                       self.LAYERS[6])
-        self.convtr7p2s2 = ME.MinkowskiConvolutionTranspose(
-            self.inplanes, self.PLANES[7], kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.bntr7 = ME.MinkowskiBatchNorm(self.PLANES[7])
-
-        self.inplanes = self.PLANES[7] + self.INIT_DIM
-        self.block8 = self._make_layer(self.BLOCK, self.PLANES[7],
-                                       self.LAYERS[7])
-
-        # TODO: extra conv for feature map size correction
-        self.extra_conv0 = ME.MinkowskiConvolution(self.PLANES[7] * self.BLOCK.expansion, self.EXTRA_PLANES[0],
-                                                   kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.extra_bn0 = ME.MinkowskiBatchNorm(self.EXTRA_PLANES[0])
-        self.extra_conv1 = ME.MinkowskiConvolution(self.EXTRA_PLANES[0], self.EXTRA_PLANES[1],
-                                                   kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
-        self.extra_bn1 = ME.MinkowskiBatchNorm(self.EXTRA_PLANES[1])
-
-        # TODO: pooling block (for z and t dimension)
-        self.pooling_t = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 1, 6], stride=[1, 1, 1, 6], dimension=D)
-        self.pooling_z = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 100, 1], stride=[1, 1, 100, 1], dimension=D)
-
-        # final layer
-        self.final = ME.MinkowskiConvolution(
-            self.EXTRA_PLANES[1],
-            out_channels,
-            kernel_size=1,
-            bias=True,
-            dimension=D)
-        self.relu = ME.MinkowskiReLU(inplace=True)
-
-    def get_max_coords(self, sparse_output):
-        feat_coords = torch.cat(sparse_output.decomposed_coordinates, dim=0)
-        x_quant_max = torch.max(feat_coords[:, 0])
-        y_quant_max = torch.max(feat_coords[:, 1])
-        z_quant_max = torch.max(feat_coords[:, 2])
-        t_quant_max = torch.max(feat_coords[:, 3])
-        return x_quant_max, y_quant_max, z_quant_max, t_quant_max
-
-    def forward(self, x):
-        out = self.conv0p1s1(x)
-        out = self.bn0(out)
-        out_p1 = self.relu(out)
-
-        out = self.conv1p1s2(out_p1)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out_b1p2 = self.block1(out)
-
-        out = self.conv2p2s2(out_b1p2)
-        out = self.bn2(out)
-        out = self.relu(out)
-        out_b2p4 = self.block2(out)
-
-        out = self.conv3p4s2(out_b2p4)
-        out = self.bn3(out)
-        out = self.relu(out)
-        out_b3p8 = self.block3(out)
-
-        # tensor_stride=16
-        out = self.conv4p8s2(out_b3p8)
-        out = self.bn4(out)
-        out = self.relu(out)
-        out = self.block4(out)
-
-        # tensor_stride=8
-        out = self.convtr4p16s2(out)
-        out = self.bntr4(out)
-        out = self.relu(out)
-
-        out = ME.cat(out, out_b3p8)
-        out = self.block5(out)
-
-        # tensor_stride=4
-        out = self.convtr5p8s2(out)
-        out = self.bntr5(out)
-        out = self.relu(out)
-
-        out = ME.cat(out, out_b2p4)
-        out = self.block6(out)
-
-        # tensor_stride=2
-        out = self.convtr6p4s2(out)
-        out = self.bntr6(out)
-        out = self.relu(out)
-
-        out = ME.cat(out, out_b1p2)
-        out = self.block7(out)
-
-        # tensor_stride=1
-        out = self.convtr7p2s2(out)
-        out = self.bntr7(out)
-        out = self.relu(out)
-
-        out = ME.cat(out, out_p1)
-        out = self.block8(out)
-
-        # TODO: extra conv layer (feature map size correction)
-        out = self.extra_conv0(out)
-        out = self.extra_bn0(out)
-        out = self.extra_conv1(out)
-        out = self.extra_bn1(out)
-
-        # TODO: avg pooling (for z and t dimension)
-        out_xyz = self.pooling_t(out)
-        out_xy = self.pooling_z(out_xyz)
-
-        # TODO: feature head (feature dim from 64 -> 128)
-        out = self.final(out_xy)
-        return out
+        # dense conv layers (increase receptive field)
+        dense_featmap_xy = self.dense_conv_block(dense_featmap_xy)
+        return dense_featmap_xy
 
 
 class MotionEncoder(nn.Module):
     def __init__(self, cfg_model: dict, n_classes: int):
         super().__init__()
-        # backbone network
-        self.feat_dim = cfg_model["feat_dim"]
-        self.MinkUNet = MinkUNetUno(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])  # D: UNet spatial dim
-
-        # input point cloud quantization
-        self.quant_size_s = cfg_model["quant_size"]
-        self.quant_size_t = 1  # TODO: cfg_model["time_interval"]
-        self.quant = torch.Tensor([self.quant_size_s, self.quant_size_s, self.quant_size_s, self.quant_size_t])
-
         # quantization offset
         self.scene_bbox = cfg_model["scene_bbox"]
         self.offset = torch.nn.parameter.Parameter(
             torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -cfg_model['n_input'] + 1])[None:],
             requires_grad=False)
 
-        # dense feature map
-        self.featmap_size = cfg_model["featmap_size"]
-        # z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)
-        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.featmap_size)
-        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.featmap_size)
+        # features params
+        self.feat_dim = cfg_model["feat_dim"]
+        z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / cfg_model["featmap_size"])
+        y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / cfg_model["featmap_size"])
+        x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / cfg_model["featmap_size"])
         b_size = cfg_model["batch_size"]
-        # t_size = cfg_model['n_input']
-        self.featmap_shape = [b_size, self.feat_dim, x_width, y_length, 1, 1]
+        t_size = cfg_model['n_input']
+        self.featmap_shape = [b_size, self.feat_dim, x_width, y_length, z_height, t_size]
+        self.dense_featmap_shape = [b_size, self.feat_dim, x_width, y_length, 1, 1]  # TODO: squeeze z and t dimension
 
-        # dense conv after sparse to dense feature map
-        self.dense_conv_block = nn.Sequential(OrderedDict([
-            ('conv_1', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
-            ('conv_2', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
-            ('conv_3', nn.Conv2d(self.feat_dim, self.feat_dim, kernel_size=3, padding=1, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
-        ]))
+        # backbone network
+        self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])
+        self.DenseFeatHead = DenseFeatHead(in_channels=self.feat_dim, out_channels=self.feat_dim,
+                                           featmap_shape=self.featmap_shape, D=cfg_model['pos_dim'])
+
+        # input point cloud quantization
+        self.quant_size_s = cfg_model["quant_size"]
+        self.quant_size_t = 1  # TODO: cfg_model["time_interval"]
+        self.quant = torch.Tensor([self.quant_size_s, self.quant_size_s, self.quant_size_s, self.quant_size_t])
+
 
     def forward(self, pcds_4d_batch):
         # quantized 4d pcd and initialized features
@@ -437,12 +295,8 @@ class MotionEncoder(nn.Module):
         # forward
         sparse_output = self.MinkUNet(sparse_input)
 
-        # dense feature map output
-        dense_featmap, _, _ = sparse_output.dense(shape=torch.Size(self.featmap_shape), min_coordinate=torch.IntTensor([0, 0, 0, 0]))  # [B, F, 350, 350, 1, 1]
-        dense_featmap = torch.squeeze(torch.squeeze(dense_featmap, -1), -1)  # B, F, X, Y
-
-        # dense conv to increase receptive field
-        dense_featmap = self.dense_conv_block(dense_featmap)
+        # to dense featmap
+        dense_featmap = self.DenseFeatHead(sparse_output)
         return dense_featmap
 
 

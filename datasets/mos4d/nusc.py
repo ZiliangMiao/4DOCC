@@ -112,7 +112,7 @@ class NuscMosDataset(Dataset):
             ego_mask = get_ego_mask(pcds_4d)
             valid_mask = torch.logical_and(valid_mask, ~ego_mask)
         if self.cfg_model['outside_scene_mask']:
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"])
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"], self.cfg_model['outside_scene_mask_z'])
             valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
         pcds_4d = pcds_4d[valid_mask]
         mos_labels = mos_labels[valid_mask[ref_time_mask]]

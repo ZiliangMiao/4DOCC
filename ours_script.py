@@ -2,9 +2,7 @@
 import argparse
 import logging
 import os
-import sys
 from datetime import datetime
-
 import yaml
 import numpy as np
 from tqdm import tqdm
@@ -16,12 +14,10 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # models
 from models.ours.models import MutualObsPretrainNetwork
-from models.mos4d.models import MosNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
 from datasets.nusc_utils import NuscDataloader
 from datasets.ours.nusc import NuscMopDataset
-from datasets.mos4d.nusc import NuscMosDataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
@@ -309,7 +305,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['mop', 'mop_test', 'mos_finetune'], default='mop')
+    parser.add_argument('--mode', choices=['mop', 'mop_test'], default='mop')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     parser.add_argument('--statistics', type=bool, default=False)
@@ -334,11 +330,6 @@ if __name__ == "__main__":
     # pre-training on background for motion segmentation task
     if args.mode == 'mop':
         mutual_observation_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
-
-    # fine-tuning on moving object segmentation benchmark
-    elif args.mode == 'mos_finetune':
-        mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
-
     # background test
     elif args.mode == 'mop_test':
         mutual_obs_test(cfg[args.mode], dataset_cfg)
