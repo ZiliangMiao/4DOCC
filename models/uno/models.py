@@ -38,7 +38,7 @@ class UnONetwork(LightningModule):
         self.xy_offset = torch.nn.parameter.Parameter(torch.Tensor([self.cfg_model["scene_bbox"][0],
                                                             self.cfg_model["scene_bbox"][1]])[None:],
                                                       requires_grad=False)
-        self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, self.pos_dim)
+        self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 2)  # TODO: only output x and y pos
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
 
         # metrics
@@ -76,18 +76,22 @@ class UnONetwork(LightningModule):
         uno_pts_yx = torch.stack([uno_pts_4d[:, :, 1], uno_pts_4d[:, :, 0]], dim=2)
         pts_min = self.cfg_model["scene_bbox"][0]
         pts_max = self.cfg_model["scene_bbox"][3]
-        query_pts = ((uno_pts_yx - pts_min) / pts_max * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
-        feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
-        feats = torch.permute(feats.squeeze(-1), (0, 2, 1))
+        query_pts = ((uno_pts_yx - pts_min) / (pts_max - pts_min) * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
+        query_pts = torch.clip(query_pts, min=-1, max=1)
+        feats = F.grid_sample(input=dense_featmap, grid=query_pts, mode='bilinear', padding_mode='zeros',
+                              align_corners=False).squeeze(-1)
+        feats = torch.permute(feats, (0, 2, 1)).contiguous()
 
         # offset prediction
-        pos_offset_4d = self.offset_predictor(uno_pts_4d, feats)
+        pos_offset_xy = self.offset_predictor(uno_pts_4d, feats)
+        pos_offset_yx = torch.stack([pos_offset_xy[:, :, 1], pos_offset_xy[:, :, 0]], dim=2)
 
         # offset features interpolation
-        pts_offset_yx = uno_pts_yx + torch.stack([pos_offset_4d[:, :, 1], pos_offset_4d[:, :, 0]], dim=2)
-        query_offset_pts = ((pts_offset_yx - pts_min) / pts_max * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
-        offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros', align_corners=False)
-        offset_feats = torch.permute(offset_feats.squeeze(-1), (0, 2, 1))
+        query_offset_pts = ((uno_pts_yx + pos_offset_yx - pts_min) / (pts_max - pts_min) * 2 - 1).unsqueeze(-2)  # normalize to [-1, 1]
+        query_offset_pts = torch.clip(query_offset_pts, min=-1, max=1)
+        offset_feats = F.grid_sample(input=dense_featmap, grid=query_offset_pts, mode='bilinear', padding_mode='zeros',
+                                     align_corners=False).squeeze(-1)
+        offset_feats = torch.permute(offset_feats, (0, 2, 1)).contiguous()
 
         # aggregated feats
         uno_feats = torch.cat([feats, offset_feats], dim=2)
@@ -196,13 +200,13 @@ class DenseFeatHead(nn.Module):
         # to dense, dense featmap shape
         self.dense_featmap_shape = [featmap_shape[0], featmap_shape[1], featmap_shape[2], featmap_shape[3], 1, 1]
 
-        # dense block, for denser feature map
+        # dense block, for denser feature map TODO: output feature map size o = (i - k) + 2p + 1
         self.dense_conv_block = nn.Sequential(OrderedDict([
-            ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
             ('relu', nn.ReLU(inplace=False)),
-            ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
             ('relu', nn.ReLU(inplace=False)),
-            ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
             ('relu', nn.ReLU(inplace=False)),
         ]))
 
@@ -224,6 +228,8 @@ class DenseFeatHead(nn.Module):
 
         # dense conv layers (increase receptive field)
         dense_featmap_xy = self.dense_conv_block(dense_featmap_xy)
+
+        dense_featmap_np = dense_featmap_xy.detach().cpu().numpy()[0]
         return dense_featmap_xy
 
 
