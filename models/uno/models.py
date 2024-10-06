@@ -36,7 +36,7 @@ class UnONetwork(LightningModule):
 
         # uno decoder
         self.xy_offset = torch.nn.parameter.Parameter(torch.Tensor([self.cfg_model["scene_bbox"][0],
-                                                            self.cfg_model["scene_bbox"][1]])[None:],
+                                                                    self.cfg_model["scene_bbox"][1]])[None:],
                                                       requires_grad=False)
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 2)  # TODO: only output x and y pos
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
@@ -223,13 +223,12 @@ class DenseFeatHead(nn.Module):
 
         # sparse to dense
         dense_featmap_xy, _, _ = sparse_out_xy.dense(shape=torch.Size(self.dense_featmap_shape),
-                                                  min_coordinate=torch.IntTensor([0, 0, 0, 0]))  # [B, F, 350, 350, 1, 1]
+                                                     min_coordinate=torch.IntTensor([0, 0, 0, 0]))  # [B, F, 350, 350, 1, 1]
         dense_featmap_xy = torch.squeeze(torch.squeeze(dense_featmap_xy, -1), -1)  # B, F, X, Y
 
         # dense conv layers (increase receptive field)
         dense_featmap_xy = self.dense_conv_block(dense_featmap_xy)
-
-        dense_featmap_np = dense_featmap_xy.detach().cpu().numpy()[0]
+        # dense_featmap_np = dense_featmap_xy.detach().cpu().numpy()[0]
         return dense_featmap_xy
 
 

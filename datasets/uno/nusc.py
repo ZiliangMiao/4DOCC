@@ -95,17 +95,19 @@ class NuscUnODataset(Dataset):
             ray_pts = pcd[ds_ray_idx]
             ray_dir = F.normalize(ray_pts - org, p=2, dim=1)  # unit vector
             ray_depth = torch.linalg.norm(ray_pts - org, dim=1, keepdim=False)
+            ray_depth_broadcast = ray_depth.reshape(-1, 1).repeat(1, num_ray_cls_samples)  # [num_rays_per_scan, num_ray_cls_samples]
 
             # uno balanced sampling (free points)
             free_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
-            free_pts_depth = (free_depth_scale * torch.broadcast_to(ray_depth.reshape(-1, 1), (len(ray_depth), num_ray_cls_samples))).reshape(-1, 1)  # [r_1, ... ray_1, ..., ray_n, ... ray_n]
+            free_pts_depth = (free_depth_scale * ray_depth_broadcast).reshape(-1, 1)  # [ray_1, ... ray_1, ..., ray_n, ... ray_n]
             ray_dir = ray_dir.repeat(1, num_ray_cls_samples).reshape(-1, 3)
             free_pts = org + free_pts_depth * ray_dir
             free_pts_4d = torch.cat((free_pts, torch.ones((len(free_pts), 1)) * ts), dim=1)
 
             # uno balanced sampling (occupied points)
             occ_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
-            occ_pts_depth = (occ_depth_scale * torch.broadcast_to((ray_depth + self.cfg_model['occ_thrd']).reshape(-1, 1), (len(ray_depth), num_ray_cls_samples))).reshape(-1, 1)
+            occ_thrd = torch.full((len(ray_depth), num_ray_cls_samples), self.cfg_model['occ_thrd'])
+            occ_pts_depth = (ray_depth_broadcast + occ_depth_scale * occ_thrd).reshape(-1, 1)
             occ_pts = org + occ_pts_depth * ray_dir
             occ_pts_4d = torch.cat((occ_pts, torch.ones((len(occ_pts), 1)) * ts), dim=1)
 

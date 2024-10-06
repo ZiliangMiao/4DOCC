@@ -2,8 +2,8 @@ train:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 100 # use 10% of training dataset to train the model
-  shuffle: False # not used, random sampler default shuffle?
+  downsample_pct: 10 # use 10% of training dataset to train the model
+  shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
   # data processing related
@@ -78,7 +78,8 @@ test:
   # './logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # './logs/mos_baseline/mos4d_train/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
   # './logs/ours/mutual_obs_pretrain(epoch-54)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_1'
-  model_dir: './logs/ours/mop_bg_1%unk(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99], [109, 119, 129, 139, 149, 159, 169, 179, 189, 199] [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] [309, 319, 329, 339, 349, 359, 369, 379, 389, 399], [409, 419, 429, 439, 449, 459, 469, 479, 489, 499], [509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  # './logs/ours/mop_bg_1%unk(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  model_dir: './logs/mos_baseline/mos4d_shuffle/10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99], [109, 119, 129, 139, 149, 159, 169, 179, 189, 199] [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] [309, 319, 329, 339, 349, 359, 369, 379, 389, 399], [409, 419, 429, 439, 449, 459, 469, 479, 489, 499], [509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
   test_dataset: 'nuscenes'
   num_devices: 1

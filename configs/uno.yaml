@@ -4,7 +4,7 @@ uno:
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
   downsample_pct: 100 # use 10% of training dataset to train the model
-  shuffle: True # not used, random sampler default shuffle?
+  shuffle: True # shuffle dataset, must for training set
   augmentation: True
 
   # data processing related

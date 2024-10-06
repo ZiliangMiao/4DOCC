@@ -30,7 +30,10 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    train_dir = f"./logs/mos_baseline/mos4d_train/{downsample_pct}%{dataset_name}"
+    if model_cfg['shuffle']:
+        train_dir = f"./logs/mos_baseline/mos4d_shuffle/{downsample_pct}%{dataset_name}"
+    else:
+        train_dir = f"./logs/mos_baseline/mos4d/{downsample_pct}%{dataset_name}"
     os.makedirs(train_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
