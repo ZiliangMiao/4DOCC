@@ -1,191 +1,179 @@
-import os
-import re
-import yaml
-import torch
-from torch.utils.data import DataLoader
-from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from datasets.occ4d.common import MinkCollateFn
-from models.occ4d.models_2d import MinkOccupancyForecastingNetwork
-# from models.ours_depth_rendering.models_pl_3d import MinkOccForecastNet
+
+
+
+# base
+import argparse
+import logging
+import os
+from datetime import datetime
+import yaml
+import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+# torch
+import torch
+from pytorch_lightning import Trainer
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+# models
+from models.occ4d.models import MinkOccupancyForecastingNetwork
+# dataset
+from nuscenes.nuscenes import NuScenes
+from datasets.nusc_utils import NuscDataloader
+from datasets.ours.nusc import NuscMopDataset
+# lib
 from utils.deterministic import set_deterministic
-
-def make_mink_dataloaders(cfg):
-    batch_size = cfg["model"]["batch_size"]
-    num_workers = cfg["model"]["num_workers"]
-    shuffle = cfg["data"]["shuffle"]
-    # data_pct = cfg["data"]["dataset_pct"] / 100
-    dataset_name = cfg["data"]["dataset_name"].lower()
-
-    if dataset_name == "nuscenes":
-        from datasets.occ4d.nusc_scan import nuScenesDataset
-        from nuscenes.nuscenes import NuScenes
-
-        nusc = NuScenes(cfg["dataset"][dataset_name]["version"], cfg["dataset"][dataset_name]["root"])
-        train_set = nuScenesDataset(nusc, "train", cfg)
-        train_loader = DataLoader(  # 9 parameters
-                dataset=train_set,
-                batch_size=batch_size,
-                collate_fn=MinkCollateFn,
-                num_workers=num_workers,
-                shuffle=shuffle,
-                pin_memory=False,
-                drop_last=True,
-                timeout=0,
-                # sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-                #                                       num_samples=int(data_pct * len(train_set))),
-            )
-        val_set = nuScenesDataset(nusc, "val", cfg)
-        val_loader = DataLoader(  # 8 parameters, without sampler
-                dataset=val_set,
-                batch_size=batch_size,
-                collate_fn=MinkCollateFn,
-                num_workers=num_workers,
-                shuffle=shuffle,
-                pin_memory=False,
-                drop_last=True,
-                timeout=0,
-            )
-        dataloaders = {"train": train_loader, "val": val_loader}
-    elif dataset_name == "kitti":
-        raise NotImplementedError("KITTI is not supported now, wait for data.kitti_mink.py.")
-        # from datasets.kitti import KittiDataset
-        # train_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-        #                          "trainval", cfg),
-        # train_loader = DataLoader(  # 9 parameters
-        #     dataset=train_set,
-        #     batch_size=batch_size,
-        #     collate_fn=MinkCollateFn,
-        #     num_workers=num_workers,
-        #     shuffle=shuffle,
-        #     pin_memory=False,
-        #     drop_last=True,
-        #     timeout=0,
-        #     sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-        #                                           num_samples=int(data_pct * len(train_set))),
-        # )
-        # val_set = KittiDataset(cfg["dataset"][dataset_name]["root"], cfg["dataset"][dataset_name]["config"],
-        #                        "test", cfg),
-        # val_loader = DataLoader(  # 8 parameters, without sampler
-        #     dataset=val_set,
-        #     batch_size=batch_size,
-        #     collate_fn=MinkCollateFn,
-        #     num_workers=num_workers,
-        #     shuffle=shuffle,
-        #     pin_memory=False,
-        #     drop_last=True,
-        #     timeout=0,
-        # )
-        # dataloaders = {"train": train_loader, "val": val_loader}
-    elif dataset_name == "argoverse2":
-        raise NotImplementedError("Argoverse is not supported now, wait for data.av2_mink.py.")
-        # from datasets.av2 import Argoverse2Dataset
-        # train_set = Argoverse2Dataset(cfg["dataset"][dataset_name]["root"], "train", dataset_kwargs,
-        #                   subsample=cfg["dataset"][dataset_name]["subsample"])
-    else:
-        raise NotImplementedError("Dataset " + cfg["dataset"]["name"] + "is not supported.")
-    return dataloaders
+from utils.metrics import ClassificationMetrics
 
 
-def resume_from_ckpts(ckpt_pth, model, optimizer, scheduler):
-    print(f"Resume training from checkpoint {ckpt_pth}")
-    checkpoint = torch.load(ckpt_pth)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-    start_epoch = 1 + checkpoint["epoch"]
-    n_iter = checkpoint["n_iter"]
-    return start_epoch, n_iter
-
-def load_pretrained_encoder(ckpt_dir, model):
-    if len(os.listdir(ckpt_dir)) > 0:
-        pattern = re.compile(r"model_epoch_(\d+).pth")
-        epochs = []
-        for f in os.listdir(ckpt_dir):
-            m = pattern.findall(f)
-            if len(m) > 0:
-                epochs.append(int(m[0]))
-        resume_epoch = max(epochs)
-        ckpt_path = f"{ckpt_dir}/model_epoch_{resume_epoch}.pth"
-        print(f"Load pretrained encoder from checkpoint {ckpt_path}")
-
-        checkpoint = torch.load(ckpt_path)
-        pretrained_dict = checkpoint["model_state_dict"]
-        model_dict = model.state_dict()
-
-        # filter out unnecessary keys (generate new dict)
-        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-        # overwrite finetune model dict
-        model_dict.update(pretrained_dict)
-        # load the pretrained model dict
-        model.load_state_dict(model_dict)
-    return model
-
-def pretrain(cfg):
-    ## params
-    # data params
-    voxel_size = cfg["data"]["voxel_size"]
-    time_interval = cfg["data"]["time_interval"]
-    n_input = cfg["data"]["n_input"]
-    n_skip = cfg["data"]["n_skip"]
-    time = round(n_input * time_interval + (n_input - 1) * n_skip * time_interval, 2)
-    dataset_name = cfg["data"]["dataset_name"].lower()
-    dataset_pct = cfg["data"]["dataset_pct"]
-    # model params
-    batch_size = cfg["model"]["batch_size"]
-    num_epoch = cfg["model"]["num_epoch"]
-    model_name = f"vs-{voxel_size}_t-{time}_bs-{batch_size}"
+def occ4d_pretrain(model_cfg, dataset_cfg, resume_version):
+    # pretrain params
+    dataset_name = model_cfg['dataset_name']
+    assert dataset_name == 'nuscenes'
+    downsample_pct = model_cfg['downsample_pct']
+    unk_pct = model_cfg['unk_samples_pct']
+    train_bg_mop = model_cfg['train_bg_mop_samples']
+    pretrain_method = f"mop_bg_{unk_pct}%unk" if train_bg_mop else f"mop_all_{unk_pct}%unk"
+    pretrain_dir = f"./logs/ours/{pretrain_method}/{downsample_pct}%{dataset_name}"
+    os.makedirs(pretrain_dir, exist_ok=True)
+    quant_size = model_cfg['quant_size']
+    batch_size = model_cfg['batch_size']
+    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + (model_cfg['n_input'] - 1) * model_cfg['n_skip'] *
+                 model_cfg['time_interval'], 2)
+    model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
-    data_loaders = make_mink_dataloaders(cfg)
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    train_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'val')
+    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
+    dataloader.setup()
+    train_dataloader = dataloader.train_dataloader()
+    val_dataloader = dataloader.val_dataloader()
 
-    # model
-    model = MinkOccupancyForecastingNetwork(cfg)
+    # pretrain model
+    pretrain_model = MutualObsPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
 
-    # lr monitoring
+    # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
+
+    # tensorboard logger
+    tb_logger = pl_loggers.TensorBoardLogger(pretrain_dir, name=model_params, default_hp_metric=False)
 
     # checkpoint saver
     checkpoint_saver = ModelCheckpoint(
         monitor="epoch",
         verbose=True,
-        save_top_k=num_epoch,
+        save_top_k=model_cfg['num_epoch'],
         mode="max",
-        filename=model_name + "_{epoch}",
-        every_n_epochs=1,
+        filename="{epoch}",
+        every_n_epochs=5,
         save_last=True,
     )
-
-    # logger
-    logs_dir = f"./logs/occ4d/{dataset_pct}%{dataset_name}"
-    os.makedirs(name=logs_dir, exist_ok=True)
-    tb_logger = pl_loggers.TensorBoardLogger(logs_dir, name=model_name, default_hp_metric=False)
 
     # trainer
     trainer = Trainer(
         accelerator="gpu",
         strategy="ddp",
-        devices=cfg["model"]["num_devices"],
+        devices=model_cfg["num_devices"],
         logger=tb_logger,
         log_every_n_steps=1,
-        max_epochs=num_epoch,
-        accumulate_grad_batches=cfg["model"]["acc_batches"],  # accumulate batches, default=1
+        max_epochs=model_cfg['num_epoch'],
+        accumulate_grad_batches=model_cfg["acc_batches"],  # accumulate batches, default=1
         callbacks=[lr_monitor, checkpoint_saver],
-        # check_val_every_n_epoch=5,
-        # val_check_interval=100,
     )
 
     # training
-    resume_ckpt_path = cfg["model"]["resume_ckpt"]
-    trainer.fit(model, train_dataloaders=data_loaders["train"], ckpt_path=resume_ckpt_path)
+    if resume_version != -1:  # resume training
+        resume_model_cfg = yaml.safe_load(open(os.path.join(pretrain_dir, model_params, f'version_{resume_version}', "hparams.yaml")))
+        assert set(model_cfg) == set(resume_model_cfg), "resume training: cfg dict keys are not the same."
+        assert model_cfg == resume_model_cfg, f"resume training: cfg keys have different values."
+        resume_ckpt_path = os.path.join(pretrain_dir, model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
+        trainer.fit(pretrain_model, train_dataloader, ckpt_path=resume_ckpt_path)
+    else:
+        trainer.fit(pretrain_model, train_dataloader)
+
+
+def occ4d_test(cfg_test, cfg_dataset):  # TODO: need to be modified
+    # cfg model
+    model_dir = cfg_test['model_dir']
+    cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
+    log_dir = os.path.join(model_dir, 'results')
+    os.makedirs(log_dir, exist_ok=True)
+
+    # dataloader
+    test_dataset = cfg_test['test_dataset']
+    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
+    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
+    train_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'val')
+    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
+    dataloader.setup()
+    test_dataloader = dataloader.test_dataloader()
+
+    for test_epoch in cfg_test["test_epoch"]:
+        # logger
+        date = datetime.now().strftime('%m%d')  # %m%d-%H%M
+        log_file = os.path.join(log_dir, f"epoch_{test_epoch}_{date}.txt")
+        formatter = logging.Formatter(fmt='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        stream_handler = logging.StreamHandler()
+        logger = logging.getLogger(f'test epoch {test_epoch} logger')
+        logger.setLevel(logging.INFO)
+        logger.addHandler(file_handler)
+        logger.addHandler(stream_handler)
+        logger.info(str(cfg_test))
+        logger.info(log_file)
+
+        # model
+        ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
+        model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, save_pred_labels=cfg_test['save_pred_labels'])
+
+        # metrics
+        metrics = ClassificationMetrics(n_classes=3, ignore_index=0)
+
+        # predict
+        trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
+        trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
+
+        # pred iou and acc
+        iou = metrics.get_iou(model.accumulated_conf_mat)
+        unk_iou, free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100, iou[2].item() * 100
+        acc = metrics.get_acc(model.accumulated_conf_mat)
+        unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
+        logger.info("Mutual Observation (IoU/Acc): [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
+                     unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
+
 
 if __name__ == "__main__":
     # deterministic
     set_deterministic(666)
 
-    # load pretrain config
-    with open("configs/occ4d.yaml", "r") as f:
-        cfg_pretrain = yaml.safe_load(f)
-    pretrain(cfg_pretrain)
+    # mode
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['occ4d', 'occ4d_test'], default='occ4d')
+    parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
+    parser.add_argument('--autodl', type=bool, default=False)
+    args = parser.parse_args()
+
+    # load config
+    with open('configs/occ4d.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)
+    with open('configs/dataset.yaml', 'r') as f:
+        dataset_cfg = yaml.safe_load(f)
+
+    # dataset root path at different platform
+    if args.autodl:
+        dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
+    else:
+        dataset_cfg['nuscenes']['root'] = '/home/user' + dataset_cfg['nuscenes']['root']
+
+    # occ4d pretrain
+    if args.mode == 'occ4d':
+        occ4d_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
+    # background test
+    elif args.mode == 'occ4d_test':
+        occ4d_test(cfg[args.mode], dataset_cfg)

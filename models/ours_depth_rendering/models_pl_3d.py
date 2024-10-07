@@ -152,17 +152,6 @@ class SparseEncoder4D(nn.Module):
         feat_volume, min_coord, tensor_stride = s_pred.dense(shape=torch.Size([B, F, X, Y, Z, T]),
                                               min_coordinate=torch.IntTensor([0, 0, 0, 0]), contract_stride=True)
 
-        # # to dense feature volume (manually)
-        # feat_volume = torch.zeros(torch.Size([B, F, X, Y, Z, T]), dtype=torch.float32, device='cuda:0')
-        # coords = s_out_coords[:, 1:]
-        # tcoords = coords.t().long()
-        # batch_indices = s_out_coords[:, 0].long()
-        # exec(
-        #     "feat_volume[batch_indices, :, "
-        #     + ", ".join([f"tcoords[{i}]" for i in range(len(tcoords))])
-        #     + "] = s_out_feats"
-        # )
-
         # TODO: check feat volume dimension, torch conv dense tensor [B, F, T, Z, Y, X]
         feat_volume = torch.squeeze(feat_volume.permute(0, 1, 5, 4, 3, 2).contiguous()).reshape(B, F, T, Z, Y, X)
         return feat_volume

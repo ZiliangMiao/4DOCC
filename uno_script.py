@@ -86,7 +86,7 @@ def uno_pretrain(model_cfg, dataset_cfg, resume_version):
         trainer.fit(pretrain_model, train_dataloader)
 
 
-def uno_test(cfg_test, cfg_dataset):
+def uno_test(cfg_test, cfg_dataset):  # TODO: need to be modified
     # test checkpoint
     model_dir = cfg_test['model_dir']
     test_epoch = cfg_test["test_epoch"]
