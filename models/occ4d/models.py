@@ -377,13 +377,13 @@ class Occ4dNetwork(LightningModule):
         opt.zero_grad()
         self.manual_backward(dense_occ_sigma, gradient=grad_sigma)
         opt.step()
+
+        # step lr per each epoch
+        sch = self.lr_schedulers()
+        sch.step()
         torch.cuda.empty_cache()
 
     def on_train_epoch_end(self):
-        # # step lr per each epoch
-        # sch = self.lr_schedulers()
-        # sch.step()
-
         # epoch logging
         epoch_l1_loss_list = []
         epoch_l2_loss_list = []
