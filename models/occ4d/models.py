@@ -263,6 +263,9 @@ class DifferentiableVolumeRendering(nn.Module):
 class Occ4dNetwork(LightningModule):
     def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
         super().__init__()
+        # manual optimization
+        self.automatic_optimization = False
+
         # params
         self.cfg_model = cfg_model
         self.loss_type = cfg_model["loss_type"]
