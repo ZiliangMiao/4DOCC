@@ -40,10 +40,10 @@ class NuscUnODataset(Dataset):
             sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
         # input sample data tokens: drop the samples without full sequence length
-        self.sample_to_sd_toks_dict = nusc_utils.get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
+        self.sample_to_sd_toks_dict = nusc_utils.get_input_sd_toks(self.nusc, self.cfg_model, sample_toks)
 
         # uno sample data tokens (current and future):
-        self.sample_to_uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, sample_toks, self.cfg_model)
+        self.sample_to_uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, sample_toks, self.cfg_model, get_curr=True)
 
         # valid sample tokens
         self.valid_sample_toks = list(set(self.sample_to_sd_toks_dict.keys()) & set(self.sample_to_uno_sd_toks.keys()))
@@ -80,7 +80,7 @@ class NuscUnODataset(Dataset):
             pcds_4d = pcds_4d[~outside_scene_mask]
 
         # generate uno labels
-        uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, [ref_sample_tok], self.cfg_model)[ref_sample_tok]
+        uno_sd_toks = self.sample_to_uno_sd_toks[ref_sample_tok]
 
         # future pcds
         num_cls_samples = self.cfg_model['num_cls_samples']

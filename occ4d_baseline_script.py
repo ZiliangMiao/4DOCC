@@ -1,8 +1,3 @@
-
-from datasets.occ4d.common import MinkCollateFn
-
-
-
 # base
 import argparse
 import logging

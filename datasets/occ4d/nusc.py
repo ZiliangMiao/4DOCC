@@ -1,279 +1,132 @@
-"""
-  Data loader
-"""
-import numpy as np
-from pyquaternion import Quaternion
+import os
 import torch
-import time
+import numpy as np
 from torch.utils.data import Dataset
-from nuscenes.utils.data_classes import LidarPointCloud
-from nuscenes.utils.geometry_utils import transform_matrix
-from nuscenes.utils.splits import train, val, test
+import torch.nn.functional as F
+from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
+from random import sample as random_sample
+from utils.augmentation import augment_pcds
+import datasets.nusc_utils as nusc_utils
+from datasets.nusc_utils import get_outside_scene_mask
 
 
-class MyLidarPointCloud(LidarPointCloud):
-    def get_ego_mask(self):  # mask the points of ego vehicle: x [-0.8, 0.8], y [-1.5, 2,5]
-        ego_mask = np.logical_and(
-            np.logical_and(-0.8 <= self.points[0], self.points[0] <= 0.8),
-            np.logical_and(-1.5 <= self.points[1], self.points[1] <= 2.5),
-        )
-        return ego_mask
-
-
-class nuScenesDataset(Dataset):
-    def __init__(self, nusc, nusc_split, kwargs):
-        """
-        Figure out a list of sample data tokens for training.
-        """
-        super(nuScenesDataset, self).__init__()
-
+class NuscOcc4dDataset(Dataset):
+    def __init__(self, nusc, cfg_model, cfg_dataset, split):
         self.nusc = nusc
-        self.nusc_split = nusc_split
-        self.nusc_root = self.nusc.dataroot
+        self.cfg_model = cfg_model
+        self.cfg_dataset = cfg_dataset
+        self.split = split  # "train" "val" "mini_train" "mini_val" "test"
 
-        self.pc_range = kwargs["pc_range"]
-        self.input_within_pc_range = kwargs["input_within_pc_range"]
-        self.voxel_size = kwargs["voxel_size"]
-        self.grid_shape = [
-            int((self.pc_range[5] - self.pc_range[2]) / self.voxel_size),
-            int((self.pc_range[4] - self.pc_range[1]) / self.voxel_size),
-            int((self.pc_range[3] - self.pc_range[0]) / self.voxel_size),
-        ]
-
-        # number of sweeps (every 1 sweep / 0.05s)
-        self.n_input = kwargs["n_input"]
-        # number of samples (every 10 sweeps / 0.5s)
-        self.n_output = kwargs["n_output"]
-        self.ego_mask = kwargs["ego_mask"]
-        self.fgbg_label = kwargs["fgbg_label"]
-
-        scenes = self.nusc.scene
-        if self.nusc_split == "train":
-            split_scenes = train
-        elif self.nusc_split == "val":
-            split_scenes = val
+        if split == 'train':
+            # dataset down-sampling: sequence level or sample level
+            if self.cfg_model["downsample_level"] is None:  # for test set and validation set
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
+            elif self.cfg_model["downsample_level"] == "sequence":
+                split_scenes = create_splits_scenes(verbose=True)
+                split_scenes = split_scenes[self.split]
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
+                sample_toks = nusc_utils.split_scenes_to_samples(self.nusc, ds_split_scenes)
+            elif self.cfg_model["downsample_level"] == "sample":
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
+            else:
+                raise ValueError("Invalid dataset down-sampling strategy!")
         else:
-            split_scenes = test
+            split_logs = create_splits_logs(split, self.nusc)
+            sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
-        # list all sample data
-        self.valid_index = []
-        self.flip_flags = []
-        self.scene_tokens = []
-        self.sample_tokens = []
-        self.sample_data_tokens = []
-        self.timestamps = []
-        for scene in scenes:
-            if scene["name"] not in split_scenes:
-                continue
-            scene_token = scene["token"]
-            # location
-            log = self.nusc.get("log", scene["log_token"])
-            # flip x-axis if in left-hand traffic (singapore)
-            flip_flag = True if kwargs["flip"] and log["location"].startswith("singapore") else False
-            #
-            start_index = len(self.sample_tokens)
-            first_sample = self.nusc.get("sample", scene["first_sample_token"])
-            sample_token = first_sample["token"]
-            i = 0  # add all samples to self.sample_tokens, sample_data to self.sample_data_tokens in a specific scene
-            while sample_token != "":
-                self.flip_flags.append(flip_flag)
-                self.scene_tokens.append(scene_token)
-                self.sample_tokens.append(sample_token)
-                sample = self.nusc.get("sample", sample_token)
-                i += 1
-                self.timestamps.append(sample["timestamp"])
-                sample_data_token = sample["data"]["LIDAR_TOP"]
-                self.sample_data_tokens.append(sample_data_token)
-                sample_token = sample["next"]
+        # input sample data tokens: drop the samples without full sequence length
+        self.sample_to_sd_toks_dict = nusc_utils.get_input_sd_toks(self.nusc, self.cfg_model, sample_toks)
 
-            #
-            end_index = len(self.sample_tokens)
-            #
-            valid_start_index = start_index + self.n_input  # (self.n_input // 10)
-            valid_end_index = end_index - self.n_output
-            self.valid_index += list(range(valid_start_index, valid_end_index))
+        # uno sample data tokens (current and future):
+        self.sample_to_uno_sd_toks = nusc_utils.get_curr_future_sd_toks_dict(self.nusc, sample_toks, self.cfg_model, get_curr=False)
 
-        assert len(self.sample_tokens) == len(self.scene_tokens) == len(self.flip_flags) == len(self.timestamps)
-
-        self.n_samples = len(self.valid_index)
-        print(
-            f"{self.nusc_split}: {self.n_samples} valid samples over {len(split_scenes)} scenes"
-        )
+        # valid sample tokens
+        self.valid_sample_toks = list(set(self.sample_to_sd_toks_dict.keys()) & set(self.sample_to_uno_sd_toks.keys()))
 
     def __len__(self):
-        return self.n_samples
+        return len(self.valid_sample_toks)
 
-    def get_global_pose(self, sd_token, inverse=False):
-        sd = self.nusc.get("sample_data", sd_token)
-        sd_ep = self.nusc.get("ego_pose", sd["ego_pose_token"])
-        sd_cs = self.nusc.get("calibrated_sensor", sd["calibrated_sensor_token"])
+    def __getitem__(self, batch_idx):
+        # sample
+        ref_sample_tok = self.valid_sample_toks[batch_idx]
+        ref_sample = self.nusc.get('sample', ref_sample_tok)
+        ref_sd_tok = ref_sample['data']['LIDAR_TOP']
 
-        if inverse is False:  # transform: from lidar coord to global coord
-            global_from_ego = transform_matrix(
-                sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=False
-            )
-            ego_from_sensor = transform_matrix(
-                sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=False
-            )
-            pose = global_from_ego.dot(ego_from_sensor)
-        else:  # transform: from global coord to lidar coord
-            sensor_from_ego = transform_matrix(
-                sd_cs["translation"], Quaternion(sd_cs["rotation"]), inverse=True
-            )
-            ego_from_global = transform_matrix(
-                sd_ep["translation"], Quaternion(sd_ep["rotation"]), inverse=True
-            )
-            pose = sensor_from_ego.dot(ego_from_global)
-        return pose
+        # sample data: concat 4d point clouds
+        input_sd_toks = self.sample_to_sd_toks_dict[ref_sample_tok]  # sequence: -1, -2 ...
+        assert len(input_sd_toks) == self.cfg_model["n_input"], "Invalid input sequence length"
+        pcd_4d_list = []  # 4D Point Cloud (relative timestamp)
+        time_idx = 1
+        for i, sd_tok in enumerate(input_sd_toks):
+            org, pcd, ts, valid_mask = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)  # filter ego and outside inside func
+            # add timestamp (0, -1, -2, ...) to pcd -> pcd_4d
+            time_idx -= 1
+            pcd_4d = torch.hstack([pcd, torch.full((len(pcd), 1), time_idx)])
+            pcd_4d_list.append(pcd_4d)
+        pcds_4d = torch.cat(pcd_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
 
-    def load_fg_labels(self, sample_data_token):
-        lidarseg = self.nusc.get("lidarseg", sample_data_token)
-        lidarseg_labels = np.fromfile(
-            f"{self.nusc.dataroot}/{lidarseg['filename']}", dtype=np.uint8
-        )
-        fg_labels = np.logical_and(1 <= lidarseg_labels, lidarseg_labels <= 23)
-        return fg_labels
+        # data augmentation: will not change the order of points
+        if self.split == 'train' and self.cfg_model["augmentation"]:
+            # TODO: augmentation may cause outside scene bbox
+            pcds_4d = augment_pcds(pcds_4d)
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'],
+                                                        self.cfg_model['outside_scene_mask_z'],
+                                                        self.cfg_model['outside_scene_mask_ub'])
+            pcds_4d = pcds_4d[~outside_scene_mask]
 
-    def get_grid_mask(self, points):
-        # input points are numpy array
-        eps = 0.00001
-        mask1 = np.logical_and(self.pc_range[0] <= points[:, 0], points[:, 0] < (self.pc_range[3] - eps))
-        mask2 = np.logical_and(self.pc_range[1] <= points[:, 1], points[:, 1] < (self.pc_range[4] - eps))
-        mask3 = np.logical_and(self.pc_range[2] <= points[:, 2], points[:, 2] < (self.pc_range[5] - eps))
-        mask = mask1 & mask2 & mask3
-        return mask
+        # generate uno labels
+        uno_sd_toks = self.sample_to_uno_sd_toks[ref_sample_tok]
 
-    def __getitem__(self, idx):
-        ref_index = self.valid_index[idx]  # ref index = current index?
-        ref_sample_token = self.sample_tokens[ref_index]
-        ref_scene_token = self.scene_tokens[ref_index]
-        ref_timestamp = self.timestamps[ref_index]
-        ref_sd_token = self.sample_data_tokens[ref_index]
-        flip_flag = self.flip_flags[ref_index]
+        # future pcds
+        num_cls_samples = self.cfg_model['num_cls_samples']
+        num_ray_cls_samples = self.cfg_model['num_ray_cls_samples']
+        num_rays_per_scan = int(num_cls_samples / num_ray_cls_samples / len(uno_sd_toks))
+        uno_pts_4d_list = []
+        uno_labels_list = []
+        for sd_tok in uno_sd_toks:  # 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0
+            org, pcd, ts, _ = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
+            # balanced sampling of occ points and free points
+            ds_ray_idx = random_sample(range(len(pcd)), num_rays_per_scan)
+            ray_pts = pcd[ds_ray_idx]
+            ray_dir = F.normalize(ray_pts - org, p=2, dim=1)  # unit vector
+            ray_dir_broadcast = ray_dir.repeat(1, num_ray_cls_samples)
+            ray_depth = torch.linalg.norm(ray_pts - org, dim=1, keepdim=True)
+            ray_depth_broadcast = ray_depth.repeat(1, num_ray_cls_samples)  # [num_rays_per_scan, num_ray_cls_samples]
 
-        # reference coordinate frame
-        ref_from_global = self.get_global_pose(ref_sd_token, inverse=True)  # trans: from global coord to ref lidar coord
+            # uno balanced sampling (free points)
+            free_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
+            free_pts_depth = (free_depth_scale * ray_depth_broadcast).reshape(-1, 1)  # [ray_1, ... ray_1, ..., ray_n, ... ray_n]
+            free_pts = org + free_pts_depth * ray_dir_broadcast.reshape(-1, 3)
+            free_pts_4d = torch.cat((free_pts, torch.full((len(free_pts), 1), ts)), dim=1)
 
-        # NOTE: getting input frames
-        input_points_4d_list = []
-        input_origin_list = []
-        for i in range(self.n_input):
-            index = ref_index - i
-            # if this exists a valid target
-            if self.scene_tokens[index] == ref_scene_token:
-                curr_sd_token = self.sample_data_tokens[index]  # sample data token
-                curr_sd = self.nusc.get("sample_data", curr_sd_token)  # sample data
+            # uno balanced sampling (occupied points)
+            occ_depth_scale = torch.rand((num_rays_per_scan, num_ray_cls_samples))
+            occ_thrd = torch.full((len(ray_depth), num_ray_cls_samples), self.cfg_model['occ_thrd'])
+            occ_pts_depth = (ray_depth_broadcast + occ_depth_scale * occ_thrd).reshape(-1, 1)
+            occ_pts = org + occ_pts_depth * ray_dir_broadcast.reshape(-1, 3)
+            occ_pts_4d = torch.cat((occ_pts, torch.full((len(occ_pts), 1), ts)), dim=1)
 
-                # load the current lidar sweep
-                curr_lidar_pc = MyLidarPointCloud.from_file(f"{self.nusc_root}/{curr_sd['filename']}")  # current point cloud, 4(x y z i) * N
-                if self.ego_mask:
-                    ego_mask = curr_lidar_pc.get_ego_mask()
-                    curr_lidar_pc.points = curr_lidar_pc.points[:, np.logical_not(ego_mask)]  # mask the points of ego vehicle, N: 34688 -> 24733
+            # labels
+            free_labels = torch.zeros(len(free_pts), dtype=torch.int64)
+            occ_labels = torch.ones(len(occ_pts), dtype=torch.int64)
 
-                # transform from the current lidar coord to global and then to the reference lidar coord
-                global_from_curr = self.get_global_pose(curr_sd_token, inverse=False)
-                ref_from_curr = ref_from_global.dot(global_from_curr)
-                curr_lidar_pc.transform(ref_from_curr)
+            # concat and append to list
+            uno_pts_4d = torch.cat((free_pts_4d, occ_pts_4d), dim=0)
+            uno_labels = torch.cat((free_labels, occ_labels), dim=0)
 
-                # NOTE: check if we are in Singapore (if so flip x)
-                if flip_flag:
-                    ref_from_curr[0, 3] *= -1
-                    curr_lidar_pc.points[0] *= -1
+            # shuffle
+            shuffle_idx = torch.randperm(len(uno_pts_4d))
+            uno_pts_4d = uno_pts_4d[shuffle_idx]
+            uno_labels = uno_labels[shuffle_idx]
 
-                # tf means transformed?
-                origin_tf = np.array(ref_from_curr[:3, 3], dtype=np.float32)  # location of the lidar sensor (at current lidar coord)
-                points_tf = np.array(curr_lidar_pc.points[:3].T, dtype=np.float32)  # transformed point cloud, N * 3(x y z)
-
-                # filter out input points outside pc range
-                if self.input_within_pc_range:
-                    inside_mask = self.get_grid_mask(points_tf)
-                    points = points_tf[inside_mask]
-                else:
-                    points = points_tf
-                tindex = np.full(len(points), i, dtype=np.float32).reshape(-1, 1)  # relative timestamp
-                points_4d = np.hstack((points, tindex))
-
-            # input 4d points
-            input_points_4d_list.append(points_4d)
-            # origin
-            input_origin_list.append(origin_tf)
-        input_points_4d_tensor = torch.from_numpy(np.concatenate(input_points_4d_list, axis=0))
-        displacement = torch.from_numpy(input_origin_list[0] - input_origin_list[1])  # ego vehicle displacement (x y z)
-
-        # NOTE: getting output frames
-        output_origin_list = []
-        output_points_list = []
-        output_tindex_list = []
-        if self.fgbg_label:
-            output_labels_list = []
-        for i in range(self.n_output):
-            index = ref_index + i + 1
-            # if this exists a valid target
-            if self.scene_tokens[index] == ref_scene_token:  # avoid different samples in different scenes
-                curr_sd_token = self.sample_data_tokens[index]
-
-                curr_sd = self.nusc.get("sample_data", curr_sd_token)
-
-                # load the current lidar sweep
-                curr_lidar_pc = MyLidarPointCloud.from_file(f"{self.nusc_root}/{curr_sd['filename']}")
-                if self.ego_mask:
-                    ego_mask = curr_lidar_pc.get_ego_mask()
-                    curr_lidar_pc.points = curr_lidar_pc.points[:, np.logical_not(ego_mask)]
-
-                # transform from the current lidar coord to global and then to the reference lidar coord
-                global_from_curr = self.get_global_pose(curr_sd_token, inverse=False)
-                ref_from_curr = ref_from_global.dot(global_from_curr)
-                curr_lidar_pc.transform(ref_from_curr)
-
-                # NOTE: check if we are in Singapore (if so flip x)
-                if flip_flag:
-                    ref_from_curr[0, 3] *= -1
-                    curr_lidar_pc.points[0] *= -1
-
-                origin_tf = np.array(ref_from_curr[:3, 3], dtype=np.float32)
-                points_tf = np.array(curr_lidar_pc.points[:3].T, dtype=np.float32)
-                if self.fgbg_label and self.nusc_split != "test":
-                    labels = self.load_fg_labels(curr_sd_token).astype(np.float32)
-                    if self.ego_mask:
-                        labels = labels[np.logical_not(ego_mask)]
-                        assert len(labels) == len(points_tf)
-            else:  # filler
-                origin_tf = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                points_tf = np.full((0, 3), float("nan"), dtype=np.float32)
-                if self.fgbg_label:
-                    labels = np.full((len(points_tf),), -1, dtype=np.float32)
-                    assert len(labels) == len(points_tf)
-            # origin
-            output_origin_list.append(origin_tf)
-
-            # points
-            output_points_list.append(points_tf)
-
-            # timestamp index
-            tindex = np.full(len(points_tf), i, dtype=np.float32)
-            output_tindex_list.append(tindex)
-            if self.fgbg_label:
-                output_labels_list.append(labels)
-
-        output_origin_tensor = torch.from_numpy(np.stack(output_origin_list))
-        output_points_tensor = torch.from_numpy(np.concatenate(output_points_list))
-        output_tindex_tensor = torch.from_numpy(np.concatenate(output_tindex_list))
-        if self.fgbg_label:
-            output_labels_tensor = torch.from_numpy(np.concatenate(output_labels_list))
-            return (
-                    (ref_scene_token, ref_sample_token, ref_sd_token, displacement),
-                    input_points_4d_tensor,
-                    output_origin_tensor,
-                    output_points_tensor,
-                    output_tindex_tensor,
-                    output_labels_tensor
-                )
-        else:
-            return (
-                (ref_scene_token, ref_sample_token, ref_sd_token, displacement),
-                input_points_4d_tensor,
-                output_origin_tensor,
-                output_points_tensor,
-                output_tindex_tensor
-            )
-
+            # append
+            uno_pts_4d_list.append(uno_pts_4d)
+            uno_labels_list.append(uno_labels)
+        uno_pts_4d = torch.cat(uno_pts_4d_list, dim=0)
+        uno_labels = torch.cat(uno_labels_list, dim=0)
+        return [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_pts_4d, uno_labels)]

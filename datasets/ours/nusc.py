@@ -58,7 +58,7 @@ class NuscMopDataset(Dataset):
         ##############################################################################################################################################
 
         # sample tokens: drop the samples without full sequence length
-        self.sample_to_sd_toks_dict = nusc_utils.get_sample_level_seq_input(self.nusc, self.cfg_model, sample_toks)
+        self.sample_to_sd_toks_dict = nusc_utils.get_input_sd_toks(self.nusc, self.cfg_model, sample_toks)
 
     def __len__(self):
         return len(self.sample_to_sd_toks_dict)

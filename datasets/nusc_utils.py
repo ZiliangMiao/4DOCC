@@ -130,7 +130,7 @@ def get_scene_tokens(nusc, split_logs: List[str]) -> List[str]:
     return scene_tokens
 
 
-def get_sample_level_seq_input(nusc, cfg_model, sample_toks: List[str], dir='prev'):
+def get_input_sd_toks(nusc, cfg_model, sample_toks: List[str], dir='prev'):
     input_sample_toks_dict = {}
     for sample_tok in sample_toks:
         sample = nusc.get("sample", sample_tok)
@@ -345,11 +345,16 @@ def get_mutual_sd_toks_dict(nusc, sample_toks: List[str], cfg):
     return key_sd_toks_dict
 
 
-def get_curr_future_sd_toks_dict(nusc, sample_toks: List[str], cfg):
+def get_curr_future_sd_toks_dict(nusc, sample_toks: List[str], cfg, get_curr: bool):
     future_sd_toks_dict = {}
     for ref_sample_tok in sample_toks:
         ref_sample = nusc.get("sample", ref_sample_tok)
-        sample_sd_toks_list = [ref_sample['data']['LIDAR_TOP']]
+        if get_curr:
+            sample_sd_toks_list = [ref_sample['data']['LIDAR_TOP']]  # for uno
+            full_size = cfg['n_input'] + 1
+        else:
+            sample_sd_toks_list = []  # for occ4d
+            full_size = cfg['n_input']
 
         # future sample data
         skip_cnt = 0
@@ -367,7 +372,7 @@ def get_curr_future_sd_toks_dict(nusc, sample_toks: List[str], cfg):
                 num_next_samples += 1
             else:
                 break
-        if len(sample_sd_toks_list) == cfg["n_input"] + 1:  # TODO: add one, to get full insert sample data
+        if len(sample_sd_toks_list) == full_size:
             future_sd_toks_dict[ref_sample_tok] = sample_sd_toks_list
         else:
             continue
