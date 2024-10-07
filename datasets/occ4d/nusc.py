@@ -86,7 +86,7 @@ class NuscOcc4dDataset(Dataset):
         future_orgs = []
         future_pcds = []
         future_tindex = []
-        tindex = 0
+        tindex = -1
         for sd_tok in occ4d_sd_toks:  # 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0
             org, pcd, ts, _ = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
             # future timestamp
@@ -94,7 +94,7 @@ class NuscOcc4dDataset(Dataset):
             # append
             future_orgs.append(org)
             future_pcds.append(pcd)
-            future_tindex.append(torch.ones(len(pcd)) * tindex)  # has to be 1 dimension
+            future_tindex.append(torch.ones(len(pcd)) * tindex)  # has to be 1 dimension [0, 1, 2, 3, 4, 5]
         future_orgs = torch.stack(future_orgs)
         future_pcds = torch.cat(future_pcds, dim=0)
         future_tindex = torch.cat(future_tindex, dim=0)
