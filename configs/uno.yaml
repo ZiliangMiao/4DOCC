@@ -29,7 +29,7 @@ uno:
 
   # training related
   num_epoch: 100
-  batch_size: 4
+  batch_size: 8
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 2 # 0-free, 1-occ
   lr_start: 0.00008  # refer to UnO

@@ -32,7 +32,7 @@ class UnONetwork(LightningModule):
         self.iters_per_epoch = kwargs['iters_per_epoch']
 
         # normal encoder
-        self.encoder = MotionEncoder(self.cfg_model, self.n_uno_cls)
+        self.encoder = MotionEncoder(self.cfg_model)
 
         # uno decoder
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 2)  # TODO: only output x and y pos
@@ -115,7 +115,8 @@ class UnONetwork(LightningModule):
     def get_loss(self, uno_probs, uno_labels):
         uno_labels = uno_labels.long()  # dtype of torch.nllloss must be torch.long
         assert len(uno_labels) == len(uno_probs)
-        log_prob = torch.log(uno_probs.clamp(min=1e-8))
+        # log_prob = torch.log(uno_probs.clamp(min=1e-15))  TODO
+        log_prob = torch.log(uno_probs)
         loss_func = nn.NLLLoss()
         loss = loss_func(log_prob, uno_labels)
         return loss
@@ -180,16 +181,16 @@ class DenseFeatHead(nn.Module):
         super().__init__()
         # extra conv for feature map size correction
         self.conv0k2s2 = ME.MinkowskiConvolution(in_channels, out_channels,
-                                                 kernel_size=5, stride=[2, 2, 2, 1], dimension=D)
+                                                 kernel_size=3, stride=[2, 2, 2, 1], dimension=D)
         self.bn0 = ME.MinkowskiBatchNorm(out_channels)
         self.conv1k2s2 = ME.MinkowskiConvolution(out_channels, out_channels,
-                                                 kernel_size=5, stride=[2, 2, 2, 1], dimension=D)
+                                                 kernel_size=3, stride=[2, 2, 2, 1], dimension=D)
         self.bn1 = ME.MinkowskiBatchNorm(out_channels)
 
         # pooling block (for z and t dimension)
-        self.avg_pool_t = ME.MinkowskiAvgPooling(kernel_size=[1, 1, 1, featmap_shape[5]],
+        self.avg_pool_t = ME.MinkowskiSumPooling(kernel_size=[1, 1, 1, featmap_shape[5]],
                                                  stride=[1, 1, 1, featmap_shape[5]], dimension=D)
-        self.avg_pool_z = ME.MinkowskiAvgPooling(kernel_size=[1, 1, featmap_shape[4], 1],
+        self.avg_pool_z = ME.MinkowskiSumPooling(kernel_size=[1, 1, featmap_shape[4], 1],
                                                  stride=[1, 1, featmap_shape[4], 1], dimension=D)
 
         # to dense, dense featmap shape
@@ -197,13 +198,25 @@ class DenseFeatHead(nn.Module):
 
         # dense block, for denser feature map, output feature map size o = (i - k) + 2p + 1
         self.dense_conv_block = nn.Sequential(OrderedDict([
-            ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
+            ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
             ('bn0', nn.BatchNorm2d(out_channels)),
             ('relu0', nn.ReLU(inplace=False)),
-            ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
+            ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
             ('bn1', nn.BatchNorm2d(out_channels)),
             ('relu1', nn.ReLU(inplace=False)),
-            ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
+            ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn2', nn.BatchNorm2d(out_channels)),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('conv3', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn3', nn.BatchNorm2d(out_channels)),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('conv4', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn4', nn.BatchNorm2d(out_channels)),
+            ('relu4', nn.ReLU(inplace=False)),
+            ('conv5', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn5', nn.BatchNorm2d(out_channels)),
+            ('relu5', nn.ReLU(inplace=False)),
+            ('conv6', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
         ]))
 
     def forward(self, sparse_input):
@@ -228,7 +241,7 @@ class DenseFeatHead(nn.Module):
 
 
 class MotionEncoder(nn.Module):
-    def __init__(self, cfg_model: dict, n_classes: int):
+    def __init__(self, cfg_model: dict):
         super().__init__()
         # quantization offset
         self.scene_bbox = cfg_model["scene_bbox"]
@@ -344,10 +357,8 @@ class UnODecoder(nn.Module):
             ('linear', nn.Linear(hidden_size, hidden_size)),
         ]))
         self.relu = nn.ReLU(inplace=False)
-        self.final = nn.Sequential(OrderedDict([
-            ('final', nn.Linear(hidden_size, num_cls)),
-            ('softmax', nn.Softmax(dim=1)),
-        ]))
+        self.final = nn.Linear(hidden_size, num_cls)
+        self.soft_max = nn.Softmax(dim=-1)
 
     def forward(self, pos, feat):
         pos_proj = self.pos_linear_proj(pos)
@@ -357,6 +368,7 @@ class UnODecoder(nn.Module):
         out_1 = self.relu(input + self.res_block_1(input))
         out_2 = self.relu(out_1 + self.res_block_2(out_1 + feat_proj))
         out_3 = self.relu(out_2 + self.res_block_3(out_2 + feat_proj))
-        uno_probs = self.final(out_3)
+        out_final = self.final(out_3)
+        uno_probs = self.soft_max(out_final)
         return uno_probs
 
