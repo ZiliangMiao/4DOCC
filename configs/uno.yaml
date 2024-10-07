@@ -29,7 +29,7 @@ uno:
 
   # training related
   num_epoch: 100
-  batch_size: 4
+  batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 2 # 0-free, 1-occ
   lr_start: 0.00008  # refer to UnO
@@ -38,7 +38,7 @@ uno:
   weight_decay: 0.0001  # refer to UnO
 
   # device related
-  num_workers: 8
+  num_workers: 16
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
