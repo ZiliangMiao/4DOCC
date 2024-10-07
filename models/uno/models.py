@@ -115,8 +115,7 @@ class UnONetwork(LightningModule):
     def get_loss(self, uno_probs, uno_labels):
         uno_labels = uno_labels.long()  # dtype of torch.nllloss must be torch.long
         assert len(uno_labels) == len(uno_probs)
-        # log_prob = torch.log(uno_probs.clamp(min=1e-15))  TODO
-        log_prob = torch.log(uno_probs)
+        log_prob = torch.log(uno_probs.clamp(min=1e-15))
         loss_func = nn.NLLLoss()
         loss = loss_func(log_prob, uno_labels)
         return loss
@@ -205,18 +204,12 @@ class DenseFeatHead(nn.Module):
             ('bn1', nn.BatchNorm2d(out_channels)),
             ('relu1', nn.ReLU(inplace=False)),
             ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            # ('bn2', nn.BatchNorm2d(out_channels)),
-            # ('relu2', nn.ReLU(inplace=False)),
-            # ('conv3', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            # ('bn3', nn.BatchNorm2d(out_channels)),
-            # ('relu3', nn.ReLU(inplace=False)),
-            # ('conv4', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            # ('bn4', nn.BatchNorm2d(out_channels)),
-            # ('relu4', nn.ReLU(inplace=False)),
-            # ('conv5', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            # ('bn5', nn.BatchNorm2d(out_channels)),
-            # ('relu5', nn.ReLU(inplace=False)),
-            # ('conv6', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn2', nn.BatchNorm2d(out_channels)),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('conv3', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            ('bn3', nn.BatchNorm2d(out_channels)),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('conv4', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
         ]))
 
     def forward(self, sparse_input):
