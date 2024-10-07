@@ -13,11 +13,11 @@ from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # models
-from models.occ4d.models import MinkOccupancyForecastingNetwork
+from models.occ4d.models import Occ4dNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
 from datasets.nusc_utils import NuscDataloader
-from datasets.ours.nusc import NuscMopDataset
+from datasets.occ4d.nusc import NuscOcc4dDataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
@@ -28,10 +28,7 @@ def occ4d_pretrain(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    unk_pct = model_cfg['unk_samples_pct']
-    train_bg_mop = model_cfg['train_bg_mop_samples']
-    pretrain_method = f"mop_bg_{unk_pct}%unk" if train_bg_mop else f"mop_all_{unk_pct}%unk"
-    pretrain_dir = f"./logs/ours/{pretrain_method}/{downsample_pct}%{dataset_name}"
+    pretrain_dir = f"./logs/forecast_baseline/occ4d/{downsample_pct}%{dataset_name}"
     os.makedirs(pretrain_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -41,15 +38,15 @@ def occ4d_pretrain(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscOcc4dDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscOcc4dDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
     # pretrain model
-    pretrain_model = MutualObsPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
+    pretrain_model = Occ4dNetwork(model_cfg, train_flag=True, iters_per_epoch=len(train_dataloader))
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -100,10 +97,10 @@ def occ4d_test(cfg_test, cfg_dataset):  # TODO: need to be modified
 
     # dataloader
     test_dataset = cfg_test['test_dataset']
-    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
+    assert test_dataset == 'nuscenes'
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'val')
+    train_set = NuscOcc4dDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscOcc4dDataset(nusc, cfg_model, cfg_dataset, 'val')
     dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
@@ -125,7 +122,7 @@ def occ4d_test(cfg_test, cfg_dataset):  # TODO: need to be modified
 
         # model
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
-        model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, save_pred_labels=cfg_test['save_pred_labels'])
+        model = Occ4dNetwork(cfg_model, train_flag=False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, save_pred_labels=cfg_test['save_pred_labels'])
 
         # metrics
         metrics = ClassificationMetrics(n_classes=3, ignore_index=0)

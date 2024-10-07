@@ -22,7 +22,6 @@ from utils.deterministic import set_deterministic
 from models.mos4d.models import MosNetwork
 from datasets.nusc_utils import NuscDataloader
 from datasets.mos4d.nusc import NuscMosDataset
-from ours_script import mos_finetune
 
 
 def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):

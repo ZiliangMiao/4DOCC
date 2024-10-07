@@ -1,38 +1,34 @@
 # Pretraining params
-bg_pretrain:
+occ4d:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
   downsample_pct: 100 # use 10% of training dataset to train the model
-  shuffle: False # not used, random sampler default shuffle?
+  shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
   # data processing related
   n_input: 6
   n_skip: 0
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
-  quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
+  quant_size: 0.2 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
-  feat_dim: 128 # feature dimension of each point
-  featmap_size: 1.0 # feature map resolution
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
   outside_scene_mask: True
+  outside_scene_mask_z: True
+  outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
 
   # training related
-  num_epoch: 50000
-  batch_size: 4
+  loss_type: "l1"  # "l1", "l2", "absrel"
+  num_epoch: 100
+  batch_size: 1
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
-  num_cls: 3 # 0-unknown, 1-free, 2-occ
-  num_ds_unk_samples: 100000
-  num_ds_free_samples: 100000
-  num_ds_occ_samples: 100000
-  lr_start: 0.0001
-  lr_epoch: 1
-  lr_decay: 0.99
-  weight_decay: 0.0001  # not used
-  loss_type: "l1"  # "l1", "l2", "absrel" for pre-training only
+  lr_start: 0.00008  # refer to UnO
+  lr_max: 0.0008  # refer to UnO
+  lr_min: 0  # refer to UnO
+  weight_decay: 0.0001  # refer to UnO
 
   # device related
   num_workers: 1
@@ -40,73 +36,28 @@ bg_pretrain:
 
 
 # Background samples test
-bg_test:
-  model_dir: '/home/user/Projects/4DOCC/logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
-  test_epoch: 89
+occ4d_test:
+  model_dir: './logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_0'
+  test_epoch: 49
   test_dataset: 'nuscenes'
   num_devices: 1
 
 
-# Finetuning params
-mos_finetune:
-  pretrain_method: "bg_pretrain"
-  pretrain_dataset: "100%nuscenes"
-  pretrain_params: "vs-0.1_t-9.5_bs-4"
-  pretrain_version: 0
-  pretrain_epoch: 99
-
-  # dataset related
-  dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
-  downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 20 # use 10% of training dataset to train the model
-  shuffle: False # not used, random sampler default shuffle?
-  augmentation: True
-
-  # data processing related
-  n_input: 10
-  n_skip: 1
-  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
-  quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
-  pos_dim: 4 # x, y, z, t
-  transform: True # if true, the points are pose-aligned before feeding to the model
-  ego_mask: True
-  outside_scene_mask: True
-
-  # training related
-  num_epoch: 200
-  batch_size: 4
-  acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
-  lr_start: 0.0001
-  lr_epoch: 1
-  lr_decay: 0.99
-  weight_decay: 0.0001
-
-  # device related
-  num_workers: 1
-  num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
-
-
-
-
-mode: "pretrain"
-
-##Data
-data:
-  dataset_name: "nuscenes"  # "kitti", "argo"
-  dataset_pct: 100  # not used now; percentage of data used for training
-  voxel_size: 0.1  # voxel size
-  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
-  time_interval: 0.05
-  t_scans: 6  # number of input point cloud scan 6, 9, 6 (num of input scans = output scans)
-  n_skip: 4
-  feat_dim: 256  # feature dimension of explicit feature volume
-  n_rays_scan: 128
-  n_points_ray: 1024
-  filter_outside_bbox: True
-#  transform: True # If true, the points are pose-aligned before feeding to the model
-  ego_mask: True  # mask the points of ego-vehicle, 4docc pretraining default=True
-  shuffle: False  # shuffle the dataset
-  flip: True  # flip the x-axis in Singapore (left hand drive)
-  fgbg_label: False  # use foreground background labels to train the model
+#data:
+#  dataset_name: "nuscenes"  # "kitti", "argo"
+#  dataset_pct: 100  # not used now; percentage of data used for training
+#  voxel_size: 0.1  # voxel size
+#  scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]  # valid point cloud range
+#  time_interval: 0.05
+#  t_scans: 6  # number of input point cloud scan 6, 9, 6 (num of input scans = output scans)
+#  n_skip: 4
+#  feat_dim: 256  # feature dimension of explicit feature volume
+#  n_rays_scan: 128
+#  n_points_ray: 1024
+#  filter_outside_bbox: True
+##  transform: True # If true, the points are pose-aligned before feeding to the model
+#  ego_mask: True  # mask the points of ego-vehicle, 4docc pretraining default=True
+#  shuffle: False  # shuffle the dataset
+#  flip: True  # flip the x-axis in Singapore (left hand drive)
+#  fgbg_label: False  # use foreground background labels to train the model
 

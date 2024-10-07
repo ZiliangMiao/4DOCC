@@ -56,7 +56,7 @@ class NuscDataloader(LightningDataModule):
                 num_workers=self.cfg_model["num_workers"],
                 shuffle=False,
                 pin_memory=True,
-                drop_last=False,
+                drop_last=False,  # TODO: may be a bug for uno or occ4d test
                 timeout=0,
             )
 

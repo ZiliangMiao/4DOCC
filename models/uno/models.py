@@ -32,7 +32,7 @@ class UnONetwork(LightningModule):
         self.iters_per_epoch = kwargs['iters_per_epoch']
 
         # normal encoder
-        self.encoder = MotionEncoder(self.cfg_model)
+        self.encoder = UnoEncoder(self.cfg_model)
 
         # uno decoder
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 2)  # TODO: only output x and y pos
@@ -54,11 +54,6 @@ class UnONetwork(LightningModule):
     def forward(self, batch):
         # unfold batch: [(ref_sd_tok, uno_sd_toks), pcds_4d, (uno_pts_4d, uno_labels)]
         meta_batch, pcds_batch, uno_samples_batch = batch
-
-        # encoder
-        dense_featmap = self.encoder(pcds_batch)
-
-        # uno query points and occupancy labels
         uno_points_batch = []
         uno_labels_batch = []
         for uno_samples in uno_samples_batch:
@@ -68,6 +63,9 @@ class UnONetwork(LightningModule):
             uno_labels_batch.append(uno_labels)
         uno_pts_4d = torch.stack(uno_points_batch)
         uno_labels = torch.stack(uno_labels_batch)
+
+        # encoder
+        dense_featmap = self.encoder(pcds_batch)
 
         # bilinear feature interpolation
         uno_pts_yx = torch.stack([uno_pts_4d[:, :, 1], uno_pts_4d[:, :, 0]], dim=2)
@@ -233,7 +231,7 @@ class DenseFeatHead(nn.Module):
         return dense_featmap_xy
 
 
-class MotionEncoder(nn.Module):
+class UnoEncoder(nn.Module):
     def __init__(self, cfg_model: dict):
         super().__init__()
         # quantization offset
@@ -250,7 +248,6 @@ class MotionEncoder(nn.Module):
         b_size = cfg_model["batch_size"]
         t_size = cfg_model['n_input']
         self.featmap_shape = [b_size, self.feat_dim, x_width, y_length, z_height, t_size]
-        self.dense_featmap_shape = [b_size, self.feat_dim, x_width, y_length, 1, 1]  # TODO: squeeze z and t dimension
 
         # backbone network
         self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])

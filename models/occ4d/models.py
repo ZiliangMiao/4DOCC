@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import sys
+from collections import OrderedDict
 from typing import Any
 
 import numpy as np
@@ -12,11 +13,12 @@ from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
 from models.backbone import MinkUNetBackbone
 from models.occ4d.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors
+from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 
 # JIT
 from torch.utils.cpp_extension import load
 
-dvr = load("dvr", sources=["././lib/dvr/dvr.cpp", "././lib/dvr/dvr.cu"], verbose=True,
+dvr = load("dvr", sources=["./lib/dvr/dvr.cpp", "./lib/dvr/dvr.cu"], verbose=True,
            extra_cuda_cflags=['-allow-unsupported-compiler'])
 
 
@@ -36,15 +38,6 @@ def get_grid_mask(points_all, pc_range):
     # print("shape of mask being returned", mask.shape)
     return torch.stack(masks)
 
-def get_grid_mask(points, output_grid):
-    # input points [B, X, Y, Z, T] quantized coord int index
-    # self.output_grid [T, Z, Y, X]
-    eps = 0.1
-    mask_x = torch.logical_and(0 <= points[:, 1], points[:, 1] < (output_grid[3] - eps))
-    mask_y = torch.logical_and(0 <= points[:, 2], points[:, 2] < (output_grid[2] - eps))
-    mask_z = torch.logical_and(0 <= points[:, 3], points[:, 3] < (output_grid[1] - eps))
-    mask = mask_x & mask_y & mask_z
-    return mask
 
 def get_rendered_pcds(origin, points, tindex, gt_dist, pred_dist, pc_range, eval_within_grid=False, eval_outside_grid=False):
     pcds = []
@@ -64,6 +57,7 @@ def get_rendered_pcds(origin, points, tindex, gt_dist, pred_dist, pc_range, eval
         pred_pts = origin[t][None, :] + d * pred_dist[mask][:, None]
         pcds.append(torch.from_numpy(pred_pts))
     return pcds
+
 
 def get_clamped_output(origin, points, tindex, pc_range, gt_dist, eval_within_grid=False, eval_outside_grid=False, get_indices=False):
     pcds = []
@@ -98,204 +92,135 @@ def get_clamped_output(origin, points, tindex, pc_range, gt_dist, eval_within_gr
 #######################################
 
 
-class Occ4dEncoder(nn.Module):
-    def __init__(self, in_channels, out_channels, quantization, output_grid):
-        super(Occ4dEncoder, self).__init__()
-        self.quantization = quantization
-        self.output_grid = output_grid
-        self.MinkUNet = MinkUNetBackbone(in_channels=in_channels, out_channels=out_channels, D=4)
-
-
-    def forward(self, x):
-        # generate dense occ input for skip connection layer
-        batch_size = len(x)
-        [T, Z, Y, X] = self.output_grid
-        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in x]
-        features = [0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)for point_cloud in past_point_clouds]
-
-        coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
-
-        # grid mask
-        grid_mask = self.get_grid_mask(coords)
-        coords = coords[grid_mask]
-        feats = feats[grid_mask]
-
-        tensor_field = ME.TensorField(features=feats, coordinates=coords.type_as(feats),
-                                      quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
-        s_input = tensor_field.sparse()
-
-        s_output = self.MinkUNet(s_input)  # B, X, Y, Z, T; F
-
-        ################################## SLICE & EXEC Dense ##################################
-        # output check
-        # out_coord = s_out.coordinates.cpu().numpy()
-        # pred_coord = s_output.coordinates.cpu().numpy()
-        # pred_feats = s_output.features.cpu().detach().numpy()
-        # x_min = torch.max(pred_coord[:, 1])
-        # y_min = torch.max(pred_coord[:, 2])
-        # z_min = torch.max(pred_coord[:, 3])
-        # t_min = torch.max(pred_coord[:, 4])
-        # occ_feats, min_coord, tensor_stride = s_output.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
-        #                                       min_coordinate=torch.IntTensor([0, 0, 0, 0]), contract_stride=True)
-        ###########################################################################
-
-        # dense grid shape
-        dense_grid_shape = torch.Size([batch_size, 1, X, Y, Z, T])
-
-        d_output, _, _ = s_output.dense(shape=dense_grid_shape, min_coordinate=torch.IntTensor([0, 0, 0, 0]))
-        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc [Batch Dim, Feature Dim, Spatial Dim..., Spatial Dim]
-        d_output = torch.squeeze(d_output.permute(0, 5, 4, 3, 2, 1).contiguous())
-        return d_output
-
-
-class DenseDecoder2D(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(DenseDecoder2D, self).__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.planes = [128, 64]  # original 4docc default
-        if self.in_channels <= 200:   # voxel_size=0.2, t=2, z=45 -> c=90; voxel_size=0.1, t=2. z=90 -> c=180
-            self.planes = [128, 128]
-        elif self.in_channels <= 300:  # voxel_size=0.2, t=6, z=45 -> c=270
-            self.planes = [256, 256]
-        elif self.in_channels <= 600:  # voxel_size=0.1, t=6, z=90 -> c=540
-            self.planes = [512, 512]
-        else:
-            self.planes = [1024, 1024]
-
-        self.block = nn.Sequential(
-            # plane-0
-            nn.Conv2d(self.in_channels, self.planes[0], kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(self.planes[0]),
-            nn.ReLU(inplace=True),
-            # plane-1
-            nn.Conv2d(self.planes[0], self.planes[1], kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(self.planes[1]),
-            nn.ReLU(inplace=True),
-            # # plane-2
-            # nn.Conv2d(self.planes[1], self.planes[2], kernel_size=3, stride=1, padding=1, bias=False),
-            # nn.BatchNorm2d(self.planes[2]),
-            # nn.ReLU(inplace=True),
-            # # plane-3
-            # nn.Conv2d(self.planes[2], self.planes[3], kernel_size=3, stride=1, padding=1, bias=False),
-            # nn.BatchNorm2d(self.planes[3]),
-            # nn.ReLU(inplace=True),
-            # final
-            nn.Conv2d(self.planes[1], self.out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-class SkipConnectLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, quantization, output_grid):
-        super(SkipConnectLayer, self).__init__()
-
-        self.quantization = quantization
-        self.output_grid = output_grid
-        self.linear = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
-                                      kernel_size=3, stride=1, padding=1, bias=True)
-    def forward(self, x):
-        # generate dense occ input for skip connection layer
-        batch_size = len(x)
-        past_point_clouds = [torch.div(point_cloud, self.quantization) for point_cloud in x]
-        features = [
-            0.5 * torch.ones(len(point_cloud), 1).type_as(point_cloud)
-            for point_cloud in past_point_clouds
-        ]
-        coords, feats = ME.utils.sparse_collate(past_point_clouds, features)
-        s_input = ME.SparseTensor(coordinates=coords, features=feats,
-                                  quantization_mode=ME.SparseTensorQuantizationMode.RANDOM_SUBSAMPLE)
-        [T, Z, Y, X] = self.output_grid
-        d_input, _, _ = s_input.dense(shape=torch.Size([batch_size, 1, X, Y, Z, T]),
-                                      min_coordinate=torch.IntTensor([0, 0, 0, -50]))
-
-        a = d_input.is_contiguous()
-
-        # reshape B-0, F-1, X-2, Y-3, Z-4, T-5 to the output of original 4docc
-        d_input = d_input.permute(0, 5, 4, 3, 2, 1)
-        d_input = d_input.contiguous()
-        d_input = d_input.reshape(batch_size, -1, Y, X)
-        return self.linear(d_input)
-
-
-#######################################
-# Lightning Modules
-#######################################
-
-class MinkOccupancyForecastingNetwork(LightningModule):
-    def __init__(self, cfg: dict):
+class OccEncoder(nn.Module):
+    def __init__(self, cfg_model: dict, feat_dim):
         super().__init__()
-        self.cfg = cfg
-
-        self.dataset_name = cfg["data"]["dataset_name"].lower()
-        self.loss_type = cfg["model"]["loss_type"].lower()
-        assert self.loss_type in ["l1", "l2", "absrel"]
-
-        self.n_input = cfg["data"]["n_input"]
-        self.n_output = cfg["data"]["n_output"]
-        self.pc_range = cfg["data"]["pc_range"]
-        self.voxel_size = cfg["data"]["voxel_size"]
-        self.dt = cfg["data"]["time_interval"]
-
-        self.n_height = int((self.pc_range[5] - self.pc_range[2]) / self.voxel_size)
-        self.n_length = int((self.pc_range[4] - self.pc_range[1]) / self.voxel_size)
-        self.n_width = int((self.pc_range[3] - self.pc_range[0]) / self.voxel_size)
-        self.input_grid = [self.n_input, self.n_height, self.n_length, self.n_width]
-        print("input grid:", self.input_grid)
-        self.output_grid = [self.n_output, self.n_height, self.n_length, self.n_width]
-        print("output grid:", self.output_grid)
-
+        # quantization offset
+        self.scene_bbox = cfg_model["scene_bbox"]
         self.offset = torch.nn.parameter.Parameter(
-            torch.Tensor(self.pc_range[:3])[None, None, :], requires_grad=False
-        )
-        self.offset_t = torch.nn.parameter.Parameter(
-            torch.Tensor([self.pc_range[0], self.pc_range[1], self.pc_range[2], 0.0])[None, :], requires_grad=False
-        )
-        self.scaler = torch.nn.parameter.Parameter(
-            torch.Tensor([self.voxel_size] * 3)[None, None, :], requires_grad=False
-        )
-        self.quantization = torch.nn.parameter.Parameter(
-            torch.Tensor([self.voxel_size, self.voxel_size, self.voxel_size, 1]), requires_grad=False)
+            torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -cfg_model['n_input'] + 1])[None:],
+            requires_grad=False)
 
-        # with 4d sparse encoder, feature dimension = 1
-        self.encoder = Occ4dEncoder(in_channels=1, out_channels=1, quantization=self.quantization, output_grid=self.output_grid)
-        self.decoder = DenseDecoder2D(in_channels=self.n_input*self.n_height, out_channels=self.n_output*self.n_height)
-        # self.skip = SkipConnectLayer(in_channels=self.n_input*self.n_height, out_channels=self.n_output*self.n_height, quantization=self.quantization, output_grid=self.output_grid)
+        # input point cloud quantization
+        self.quant_size_s = cfg_model["quant_size"]
+        self.quant_size_t = 1  # TODO: cfg_model["time_interval"]
+        self.quant = torch.Tensor([self.quant_size_s, self.quant_size_s, self.quant_size_s, self.quant_size_t])
 
-        # pytorch-lightning settings
-        if self.cfg["mode"] == "train":
-            self.save_hyperparameters(cfg)
-            self.lr_start = self.cfg["model"]["lr_start"]
-            self.lr_epoch = self.cfg["model"]["lr_epoch"]
-            self.lr_decay = self.cfg["model"]["lr_decay"]
-            self.automatic_optimization = False  # activate manual optimization
-            self.training_step_outputs = []
-            self.validation_step_outputs = []
-            self.iters_acc_loss = 0
-        elif self.cfg["mode"] == "test":
-            # visualize directory
-            model_dataset = self.cfg["model"]["model_dataset"]
-            model_name = self.cfg["model"]["model_name"]
-            model_version = self.cfg["model"]["model_version"]
-            test_epoch = self.cfg["model"]["test_epoch"]
-            model_dir = os.path.join("../../logs", "occ4d", model_dataset, model_name, model_version)
-            self.vis_dir = os.path.join(model_dir, "results", f"epoch_{test_epoch}", "visualization")
+        # backbone network
+        self.feat_dim = feat_dim
+        self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=self.feat_dim, D=cfg_model['pos_dim'])
 
-            date = datetime.date.today().strftime('%Y%m%d')
-            self.log_file = os.path.join(model_dir, "results", f"epoch_{test_epoch}/{date}.txt")
 
-    def dvr_render(self, net_output, output_origin, output_points, output_tindex):
-        assert net_output.requires_grad  # for training
-        sigma = F.relu(net_output, inplace=True)
+    def forward(self, pcds_4d_batch):
+        # quantized 4d pcd and initialized features
+        self.quant = self.quant.type_as(pcds_4d_batch[0])
+        quant_4d_pcds = [torch.div(pcd - self.offset, self.quant, rounding_mode=None) for pcd in pcds_4d_batch]
+        feats = [torch.full((len(pcd), 1), 0.5).type_as(pcd) for pcd in pcds_4d_batch]
+
+        # sparse collate, tensor field, net calculation
+        coords, feats = ME.utils.sparse_collate(quant_4d_pcds, feats)
+        sparse_input = ME.SparseTensor(features=feats, coordinates=coords,
+                                      quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
+
+        # # TODO: filter quantized input which outside quantized scene bbox ##############################################
+        quant_coords = sparse_input.coordinates
+        quant_feats = sparse_input.features
+
+        # filter index out of bound
+        x_max = torch.max(quant_coords[:, 1])
+        y_max = torch.max(quant_coords[:, 2])
+        z_max = torch.max(quant_coords[:, 3])
+        quant_x_max = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.quant_size_s)
+        quant_y_max = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.quant_size_s)
+        quant_z_max = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.quant_size_s)
+        if x_max >= quant_x_max or y_max >= quant_y_max or z_max >= quant_z_max:
+            print(f"\nin max coords out of bound, filter and generate new sparse tensor: {x_max}, {y_max}, {z_max}")
+            quant_valid_mask = torch.logical_and(quant_coords[:, 1] >= 0, quant_coords[:, 1] < quant_x_max)
+            quant_valid_mask = torch.logical_and(quant_valid_mask,
+                               torch.logical_and(quant_coords[:, 2] >= 0, quant_coords[:, 2] < quant_y_max))
+            quant_valid_mask = torch.logical_and(quant_valid_mask,
+                               torch.logical_and(quant_coords[:, 3] >= 0, quant_coords[:, 3] < quant_z_max))
+            # update valid sparse input
+            sparse_input = ME.SparseTensor(features=quant_feats[quant_valid_mask].reshape(-1, 1),
+                                           coordinates=quant_coords[quant_valid_mask],
+                                           quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
+        # ################################################################################################################
+
+        # forward
+        sparse_featmap = self.MinkUNet(sparse_input)
+        return sparse_featmap
+
+
+class OccDenseDecoder(nn.Module):
+    def __init__(self, cfg_model: dict, featmap_shape):
+        super().__init__()
+        # features params
+        self.b_size, self.x_width, self.y_length, self.z_height, self.t_size = tuple(featmap_shape)
+        self.feat_dim = self.t_size * self.z_height
+        self.pos_dim = cfg_model['pos_dim']
+
+        # pooling block (for z and t dimension)
+        self.avg_pool_t = ME.MinkowskiSumPooling(kernel_size=[1, 1, 1, self.t_size],
+                                                 stride=[1, 1, 1, self.t_size], dimension=self.pos_dim)
+        self.avg_pool_z = ME.MinkowskiSumPooling(kernel_size=[1, 1, self.z_height, 1],
+                                                 stride=[1, 1, self.z_height, 1], dimension=self.pos_dim)
+
+        # dense block, for denser feature map, output feature map size o = (i - k) + 2p + 1
+        self.dense_conv_planes = [self.feat_dim, self.feat_dim, self.feat_dim, self.feat_dim, self.feat_dim]
+        self.dense_conv_block = nn.Sequential(OrderedDict([
+            ('conv0', nn.Conv2d(self.feat_dim, self.dense_conv_planes[0], kernel_size=3, padding=1, stride=1)),
+            ('bn0', nn.BatchNorm2d(self.dense_conv_planes[0])),
+            ('relu0', nn.ReLU(inplace=False)),
+            ('conv1', nn.Conv2d(self.dense_conv_planes[0], self.dense_conv_planes[1], kernel_size=3, padding=1, stride=1)),
+            ('bn1', nn.BatchNorm2d(self.dense_conv_planes[1])),
+            ('relu1', nn.ReLU(inplace=False)),
+            ('conv2', nn.Conv2d(self.dense_conv_planes[1], self.dense_conv_planes[2], kernel_size=3, padding=1, stride=1)),
+            ('bn2', nn.BatchNorm2d(self.dense_conv_planes[2])),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('conv3', nn.Conv2d(self.dense_conv_planes[2], self.dense_conv_planes[3], kernel_size=3, padding=1, stride=1)),
+            ('bn3', nn.BatchNorm2d(self.dense_conv_planes[3])),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('conv4', nn.Conv2d(self.dense_conv_planes[3], self.dense_conv_planes[4], kernel_size=3, padding=1, stride=1)),
+        ]))
+
+    def forward(self, sparse_featmap):
+        # avg pooling (for z and t dimension)
+        sparse_featmap_xyz = self.avg_pool_t(sparse_featmap)
+        sparse_featmap_xy = self.avg_pool_z(sparse_featmap_xyz)
+
+        # sparse to dense
+        dense_featmap_xy, _, _ = sparse_featmap_xy.dense(shape=torch.Size([self.b_size, self.feat_dim, self.x_width, self.y_length, 1, 1]),
+                                                         min_coordinate=torch.IntTensor([0, 0, 0, 0]))
+        dense_featmap_xy = torch.squeeze(torch.squeeze(dense_featmap_xy, -1), -1)  # B, F, X, Y
+
+        # dense conv layers (increase receptive field)
+        dense_featmap_xy = self.dense_conv_block(dense_featmap_xy)  # B, F, X, Y
+
+        # dense occupancy logits (logits: before activation; probs: after activation)
+        dense_occ_logits = (torch.permute(dense_featmap_xy, (0, 2, 3, 1)).contiguous()
+                            .view(self.b_size, self.x_width, self.y_length, self.z_height, self.t_size))
+        dense_occ_sigma = F.relu(dense_occ_logits, inplace=True)  # B, X, Y, Z, T
+        dense_occ_sigma = torch.permute(dense_occ_sigma, (0, 4, 3, 2, 1)).contiguous()  # B, T, Z, Y, X
+        return dense_occ_sigma
+
+
+class DifferentiableVolumeRendering(nn.Module):
+    def __init__(self, loss_type, voxel_size, output_grid):
+        super().__init__()
+        self.loss_type = loss_type
+        self.voxel_size = voxel_size
+        self.output_grid = output_grid
+
+    def dvr_render(self, dense_occ_sigma, future_org, future_pcd, future_tindex):
+        assert dense_occ_sigma.requires_grad  # for training
         pred_dist, gt_dist, grad_sigma = dvr.render(
-            sigma,
-            output_origin,
-            output_points,
-            output_tindex,
+            dense_occ_sigma,
+            future_org,
+            future_pcd,
+            future_tindex,
             self.loss_type
         )
+
         # take care of nans and infs if any
         grad_sigma[torch.isnan(grad_sigma)] = 0.0
         pred_dist[torch.isinf(pred_dist)] = 0.0
@@ -303,46 +228,111 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         pred_dist[torch.isnan(pred_dist)] = 0.0
         gt_dist[torch.isnan(pred_dist)] = 0.0
 
+        # recover depth scale
         pred_dist *= self.voxel_size
         gt_dist *= self.voxel_size
-        return sigma, pred_dist, gt_dist, grad_sigma
+        return dense_occ_sigma, pred_dist, gt_dist, grad_sigma
 
-    def dvr_render_forward(self, net_output, output_origin, output_points, output_tindex):
-        assert net_output.requires_grad is False  # for validation or test
-        sigma = F.relu(net_output, inplace=True)
+    def dvr_render_forward(self, dense_occ_sigma, future_org, future_pcd, future_tindex):
+        assert dense_occ_sigma.requires_grad is False  # for validation or test
         pred_dist, gt_dist = dvr.render_forward(
-            sigma,
-            output_origin,
-            output_points,
-            output_tindex,
+            dense_occ_sigma,
+            future_org,
+            future_pcd,
+            future_tindex,
             self.output_grid,
             "test"  # original setting: "train" for train and validation, "test" for test
         )
+
         # take care of nans if any
         invalid = torch.isnan(pred_dist)
         pred_dist[invalid] = 0.0
         gt_dist[invalid] = 0.0
 
+        # recover depth scale
         pred_dist *= self.voxel_size
         gt_dist *= self.voxel_size
-        return sigma, pred_dist, gt_dist
+        return dense_occ_sigma, pred_dist, gt_dist
 
-    def forward(self, _input):
-        batch_size = len(_input)
-        # _li_output = self.skip(_input)
-        _en_output = self.encoder(_input)
-        [T, Z, Y, X] = self.output_grid
-        _de_output = self.decoder(_en_output.reshape(batch_size, -1, Y, X))
-        # w/ skip connection
-        _output = _de_output.reshape(batch_size, self.n_output, self.n_height, self.n_length, self.n_width)
-        return _output
+
+#######################################
+# Lightning Modules
+#######################################
+
+
+class Occ4dNetwork(LightningModule):
+    def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
+        super().__init__()
+        # params
+        self.cfg_model = cfg_model
+        self.loss_type = cfg_model["loss_type"]
+        self.quant_size = cfg_model['quant_size']
+        assert self.loss_type in ["l1", "l2", "absrel"]
+        self.scene_bbox = cfg_model['scene_bbox']
+        self.z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.quant_size)  # 90
+        self.y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.quant_size)  # 1400
+        self.x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.quant_size)  # 1400
+        self.t_size = cfg_model['n_input']
+        self.b_size = cfg_model["batch_size"]
+
+        # featmap
+        self.featmap_shape = [self.b_size, self.x_width, self.y_length, self.z_height, self.t_size]
+        self.feat_dim = self.z_height * self.t_size
+
+        # encoder, decoder, dvr
+        self.iters_per_epoch = kwargs['iters_per_epoch']
+        self.encoder = OccEncoder(cfg_model=self.cfg_model, feat_dim=self.feat_dim)
+        self.decoder = OccDenseDecoder(cfg_model=self.cfg_model, featmap_shape=self.featmap_shape)
+        self.dvr = DifferentiableVolumeRendering(loss_type=self.loss_type, voxel_size=self.quant_size,
+                                                 output_grid=[self.t_size, self.z_height, self.y_length, self.x_width])
+
+        # save predictions
+        if not train_flag:
+            self.model_dir = kwargs['model_dir']
+            self.test_epoch = kwargs['test_epoch']
+            self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
+            os.makedirs(self.pred_dir, exist_ok=True)
+    def forward(self, batch):
+        # unpack batch data
+        meta_batch, pcds_batch, occ4d_future_batch = batch
+        future_org_batch = []
+        future_pcd_batch = []
+        future_tindex_batch = []
+        for occ4d_sample in occ4d_future_batch:
+            future_orgs, future_pcds, future_tindex = occ4d_sample
+            future_org_batch.append(future_orgs)
+            future_pcd_batch.append(future_pcds)
+            future_tindex_batch.append(future_tindex)
+        future_org = torch.stack(future_org_batch)  # B, T, 3
+        future_pcd = torch.stack(future_pcd_batch)  # B, N, 3
+        future_tindex = torch.stack(future_tindex_batch)  # B, N, 3
+
+        # encoder
+        sparse_featmap = self.encoder(pcds_batch)
+
+        # decoder
+        dense_occ_sigma = self.decoder(sparse_featmap)  # B, T, Z, Y, X
+
+        # dvr depth rendering
+        dense_occ_sigma, pred_dist, gt_dist, grad_sigma = self.dvr.dvr_render(dense_occ_sigma, future_org, future_pcd, future_tindex)
+        return dense_occ_sigma, pred_dist, gt_dist, grad_sigma
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr_start)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=self.lr_epoch, gamma=self.lr_decay)
-        return [optimizer], [scheduler]
+        lr_start = self.cfg_model["lr_start"]
+        weight_decay = self.cfg_model["weight_decay"]
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr_start, weight_decay=weight_decay)
+        lr_max = self.cfg_model["lr_max"]
+        lr_min = self.cfg_model["lr_min"]
+        scheduler = CosineAnnealingWarmupRestarts(optimizer,
+                                                  warmup_steps=0.02 * self.cfg_model['num_epoch'] * self.iters_per_epoch,
+                                                  first_cycle_steps=self.cfg_model['num_epoch'] * self.iters_per_epoch,
+                                                  cycle_mult=1.0,  # period
+                                                  max_lr=lr_max,
+                                                  min_lr=lr_min,
+                                                  gamma=1.0)  # lr_max decrease rate
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def get_losses(self, gt_dist, pred_dist):
+    def get_loss(self, gt_dist, pred_dist):
         l1_loss = torch.abs(gt_dist - pred_dist)
         l2_loss = ((gt_dist - pred_dist) ** 2) / 2
         absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
@@ -353,125 +343,65 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         absrel_loss = torch.sum(absrel_loss[valid]) / valid_pts_count
         return (l1_loss, l2_loss, absrel_loss)
 
-    def unpack_batch(self, batch):
-        meta = batch[0]
-        input_points_4d = batch[1]
-        output_origin, output_points, output_tindex = batch[2:5]
-        net_input = [(points_4d - self.offset_t) for points_4d in input_points_4d]
-        output_origin = ((output_origin - self.offset) / self.scaler).float()
-        output_points = ((output_points - self.offset) / self.scaler).float()
-        if self.cfg["data"]["fgbg_label"]:
-            output_labels = batch[5] if self.dataset_name == "nuscenes" else None
-            return net_input, output_origin, output_points, output_tindex, output_labels, meta
-        else:
-            return net_input, output_origin, output_points, output_tindex, meta
+    def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
+        # encoder, decoder, volume rendering
+        dense_occ_sigma, pred_dist, gt_dist, grad_sigma = self.forward(batch)
 
-    def training_step(self, batch: tuple, batch_idx):
-        # unpack batch data
-        if self.cfg["data"]["fgbg_label"]:
-            net_input, output_origin, output_points, output_tindex, output_labels, _ = self.unpack_batch(batch)
-        else:
-            net_input, output_origin, output_points, output_tindex, _ = self.unpack_batch(batch)
+        # get loss
+        l1_loss, l2_loss, absrel_loss = self.get_loss(gt_dist, pred_dist)
 
-        # forward
-        net_output = self.forward(net_input)
-        sigma, pred_dist, gt_dist, grad_sigma = self.dvr_render(net_output, output_origin, output_points, output_tindex)
-
-        # compute training losses
-        l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)
-
-        # log training losses
-        self.log("train_l1_loss", l1_loss.item(), on_step=True)  # logger=True default
-        self.log("train_l2_loss", l2_loss.item(), on_step=True)
-        self.log("train_absrel_loss", absrel_loss.item(), on_step=True)
-        train_loss_dict = {"train_l1_loss": l1_loss.item(),
-                           "train_l2_loss": l1_loss.item(),
-                           "train_absrel_loss": absrel_loss.item()}
+        # logging
+        self.log("l1_loss", l1_loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("l2_loss", l2_loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("absrel_loss", absrel_loss.item(), on_step=True, prog_bar=True, logger=True)
+        train_loss_dict = {"l1_loss": l1_loss.item(),
+                           "l2_loss": l1_loss.item(),
+                           "absrel_loss": absrel_loss.item()}
         self.training_step_outputs.append(train_loss_dict)
+
         # iters accumulated loss
-        self.iters_acc_loss += train_loss_dict[f"train_{self.loss_type}_loss"] / 50
+        self.iters_acc_loss += train_loss_dict[f"{self.loss_type}_loss"] / 50
         if (self.global_step + 1) % 50 == 0:  # self.current_batch
-            self.log("train_50_iters_acc_loss", self.iters_acc_loss, prog_bar=True)
+            self.log("train_50_iters_acc_loss", self.iters_acc_loss, on_step=True, prog_bar=True, logger=True)
             self.iters_acc_loss = 0
 
-        # manual backward and optimization
+        # manual backward and optimization for pytorch-lightning
         opt = self.optimizers()
         opt.zero_grad()
-        self.manual_backward(sigma, gradient=grad_sigma)
+        self.manual_backward(dense_occ_sigma, gradient=grad_sigma)
         opt.step()
         torch.cuda.empty_cache()
 
-        # check model parameters
-        # epoch_idx = self.current_epoch
-        # global_idx = self.global_step
-        # encoder_params = list(self.encoder.named_parameters())
-        # decoder_params = list(self.decoder.named_parameters())
-        # encoder_kernel_0 = encoder_params[0]
-        # decoder_kernel_0 = decoder_params[0]
-
     def on_train_epoch_end(self):
-        # step lr per each epoch
-        sch = self.lr_schedulers()
-        sch.step()
+        # # step lr per each epoch
+        # sch = self.lr_schedulers()
+        # sch.step()
 
         # epoch logging
-        epoch_loss_list = []
+        epoch_l1_loss_list = []
+        epoch_l2_loss_list = []
+        epoch_absrel_loss_list = []
         for train_loss_dict in self.training_step_outputs:
-            epoch_loss_list.append(train_loss_dict[f"train_{self.loss_type}_loss"])
-        self.log("train_epoch_loss", np.array(epoch_loss_list).mean(), on_epoch=True, prog_bar=True)
+            epoch_l1_loss_list.append(train_loss_dict["l1_loss"])
+            epoch_l2_loss_list.append(train_loss_dict["l2_loss"])
+            epoch_absrel_loss_list.append(train_loss_dict["absrel_loss"])
+        self.log("epoch_l1_loss", np.array(epoch_l1_loss_list).mean(), on_epoch=True, prog_bar=True)
+        self.log("epoch_l2_loss", np.array(epoch_l2_loss_list).mean(), on_epoch=True, prog_bar=True)
+        self.log("epoch_absrel_loss", np.array(epoch_absrel_loss_list).mean(), on_epoch=True, prog_bar=True)
 
         # clear
         self.training_step_outputs = []
-
-    def validation_step(self, batch: tuple, batch_idx):
-        # unpack batch data
-        if self.cfg["data"]["fgbg_label"]:
-            net_input, output_origin, output_points, output_tindex, output_labels, _ = self.unpack_batch(batch)
-        else:
-            net_input, output_origin, output_points, output_tindex, _ = self.unpack_batch(batch)
-
-        # forward (dvr.render_forward)
-        net_output = self.forward(net_input)
-        sigma, pred_dist, gt_dist = self.dvr_render_forward(net_output, output_origin, output_points, output_tindex)
-
-        # compute validation losses
-        l1_loss, l2_loss, absrel_loss = self.get_losses(gt_dist, pred_dist)
-
-        # store validation loss
-        val_loss_dict = {"val_l1_loss": l1_loss.item(),
-                         "val_l2_loss": l1_loss.item(),
-                         "val_absrel_loss": absrel_loss.item()}  # .item(): tensor -> float
-        self.log("val_l1_loss_step", l1_loss.item(), on_step=True, prog_bar=True, logger=False)
-        self.validation_step_outputs.append(val_loss_dict)
         torch.cuda.empty_cache()
-
-    def on_validation_epoch_end(self):
-        val_l1_loss_list = []
-        val_l2_loss_list = []
-        val_absrel_loss_list = []
-        for val_loss_dict in self.validation_step_outputs:
-            val_l1_loss_list.append(val_loss_dict["val_l1_loss"])
-            val_l2_loss_list.append(val_loss_dict["val_l2_loss"])
-            val_absrel_loss_list.append(val_loss_dict["val_absrel_loss"])
-        val_l1_loss = np.array(val_l1_loss_list).mean()
-        val_l2_loss = np.array(val_l2_loss_list).mean()
-        val_absrel_loss = np.array(val_absrel_loss_list).mean()
-        self.log("val_l1_loss", val_l1_loss, on_epoch=True, prog_bar=True)
-        self.log("val_l2_loss", val_l2_loss, on_epoch=True)
-        self.log("val_absrel_loss", val_absrel_loss, on_epoch=True)
-
-        # clear
-        self.validation_step_outputs = []
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:
         # unpack batch data
-        if self.cfg["data"]["fgbg_label"]:
+        if self.cfg_model["data"]["fgbg_label"]:
             net_input, output_origin, output_points, output_tindex, output_labels, meta = self.unpack_batch(batch)
         else:
             net_input, output_origin, output_points, output_tindex, meta = self.unpack_batch(batch)
 
         # if assume constant velocity
-        if self.cfg["model"]["assume_const_velo"]:
+        if self.cfg_model["model"]["assume_const_velo"]:
             # meta: (ref_scene_token, ref_sample_token, ref_sd_token, displacement)
             # displacement = input_origin[current_index] - input_origin[current_index - 1]
             displacement = torch.concat([fname[-1] for fname in meta]).reshape((-1, 1, 3))
@@ -498,7 +428,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
         logging.basicConfig(filename=self.log_file, level=logging.INFO,
                             format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-        logging.info(str(self.cfg))
+        logging.info(str(self.cfg_model))
         logging.info(self.log_file)
 
         # evaluation
@@ -518,16 +448,16 @@ class MinkOccupancyForecastingNetwork(LightningModule):
                 gt_dist[i].cpu().numpy(),
                 pred_dist[i].cpu().numpy(),
                 self.pc_range,
-                self.cfg["model"]["eval_within_grid"],
-                self.cfg["model"]["eval_outside_grid"])
+                self.cfg_model["model"]["eval_within_grid"],
+                self.cfg_model["model"]["eval_outside_grid"])
             gt_pcds = get_clamped_output(
                 output_origin[i].cpu().numpy(),
                 output_points[i].cpu().numpy(),
                 output_tindex[i].cpu().numpy(),
                 self.pc_range,
                 gt_dist[i].cpu().numpy(),
-                self.cfg["model"]["eval_within_grid"],
-                self.cfg["model"]["eval_outside_grid"])
+                self.cfg_model["model"]["eval_within_grid"],
+                self.cfg_model["model"]["eval_outside_grid"])
 
             # load predictions (loop in time-axis)
             for j in range(len(gt_pcds)):
@@ -544,7 +474,7 @@ class MinkOccupancyForecastingNetwork(LightningModule):
                 metrics["absrel_error"] += absrel_error
 
                 # save pred_pcd as [sample_data_token]_pred.pcd
-                if self.cfg["model"]["write_pcd"]:
+                if self.cfg_model["model"]["write_pcd"]:
                     import open3d
                     pred_pcd_file = os.path.join(pred_pcds_dir, f"{meta[i][2]}_pred.pcd")
                     o3d_pred_pcd = open3d.geometry.PointCloud()
