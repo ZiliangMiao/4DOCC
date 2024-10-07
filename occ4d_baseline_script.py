@@ -9,6 +9,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from datasets.occ4d.common import MinkCollateFn
 from models.occ4d.models_2d import MinkOccupancyForecastingNetwork
+# from models.ours_depth_rendering.models_pl_3d import MinkOccForecastNet
 from utils.deterministic import set_deterministic
 
 def make_mink_dataloaders(cfg):

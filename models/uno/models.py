@@ -35,9 +35,6 @@ class UnONetwork(LightningModule):
         self.encoder = MotionEncoder(self.cfg_model, self.n_uno_cls)
 
         # uno decoder
-        self.xy_offset = torch.nn.parameter.Parameter(torch.Tensor([self.cfg_model["scene_bbox"][0],
-                                                                    self.cfg_model["scene_bbox"][1]])[None:],
-                                                      requires_grad=False)
         self.offset_predictor = OffsetPredictor(self.pos_dim, self.feat_dim, self.hidden_size, 2)  # TODO: only output x and y pos
         self.decoder = UnODecoder(self.pos_dim, self.feat_dim * 2, self.hidden_size, self.n_uno_cls)
 
@@ -114,15 +111,13 @@ class UnONetwork(LightningModule):
                                                   min_lr=lr_min,
                                                   gamma=1.0)  # lr_max decrease rate
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-        # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
-        # return [optimizer], [scheduler]  # TODO: default scheduler interval is 'epoch'
 
     def get_loss(self, uno_probs, uno_labels):
-        uno_labels = uno_labels.long()
+        uno_labels = uno_labels.long()  # dtype of torch.nllloss must be torch.long
         assert len(uno_labels) == len(uno_probs)
         log_prob = torch.log(uno_probs.clamp(min=1e-8))
         loss_func = nn.NLLLoss()
-        loss = loss_func(log_prob, uno_labels)  # dtype of torch.nllloss must be torch.long
+        loss = loss_func(log_prob, uno_labels)
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
@@ -185,10 +180,10 @@ class DenseFeatHead(nn.Module):
         super().__init__()
         # extra conv for feature map size correction
         self.conv0k2s2 = ME.MinkowskiConvolution(in_channels, out_channels,
-                                                 kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+                                                 kernel_size=5, stride=[2, 2, 2, 1], dimension=D)
         self.bn0 = ME.MinkowskiBatchNorm(out_channels)
         self.conv1k2s2 = ME.MinkowskiConvolution(out_channels, out_channels,
-                                                 kernel_size=2, stride=[2, 2, 2, 1], dimension=D)
+                                                 kernel_size=5, stride=[2, 2, 2, 1], dimension=D)
         self.bn1 = ME.MinkowskiBatchNorm(out_channels)
 
         # pooling block (for z and t dimension)
@@ -200,14 +195,15 @@ class DenseFeatHead(nn.Module):
         # to dense, dense featmap shape
         self.dense_featmap_shape = [featmap_shape[0], featmap_shape[1], featmap_shape[2], featmap_shape[3], 1, 1]
 
-        # dense block, for denser feature map TODO: output feature map size o = (i - k) + 2p + 1
+        # dense block, for denser feature map, output feature map size o = (i - k) + 2p + 1
         self.dense_conv_block = nn.Sequential(OrderedDict([
             ('conv0', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
+            ('bn0', nn.BatchNorm2d(out_channels)),
+            ('relu0', nn.ReLU(inplace=False)),
             ('conv1', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
+            ('bn1', nn.BatchNorm2d(out_channels)),
+            ('relu1', nn.ReLU(inplace=False)),
             ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=7, padding=3, stride=1)),
-            ('relu', nn.ReLU(inplace=False)),
         ]))
 
     def forward(self, sparse_input):
@@ -228,7 +224,6 @@ class DenseFeatHead(nn.Module):
 
         # dense conv layers (increase receptive field)
         dense_featmap_xy = self.dense_conv_block(dense_featmap_xy)
-        # dense_featmap_np = dense_featmap_xy.detach().cpu().numpy()[0]
         return dense_featmap_xy
 
 
@@ -266,14 +261,14 @@ class MotionEncoder(nn.Module):
         # quantized 4d pcd and initialized features
         self.quant = self.quant.type_as(pcds_4d_batch[0])
         quant_4d_pcds = [torch.div(pcd - self.offset, self.quant, rounding_mode=None) for pcd in pcds_4d_batch]
-        feats = [0.5 * torch.ones(len(pcd), 1).type_as(pcd) for pcd in pcds_4d_batch]
+        feats = [torch.full((len(pcd), 1), 0.5).type_as(pcd) for pcd in pcds_4d_batch]
 
         # sparse collate, tensor field, net calculation
         coords, feats = ME.utils.sparse_collate(quant_4d_pcds, feats)
         sparse_input = ME.SparseTensor(features=feats, coordinates=coords,
                                       quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
 
-        # TODO: filter quantized input which outside quantized scene bbox ##############################################
+        # # TODO: filter quantized input which outside quantized scene bbox ##############################################
         quant_coords = sparse_input.coordinates
         quant_feats = sparse_input.features
 
@@ -295,7 +290,7 @@ class MotionEncoder(nn.Module):
             sparse_input = ME.SparseTensor(features=quant_feats[quant_valid_mask].reshape(-1, 1),
                                            coordinates=quant_coords[quant_valid_mask],
                                            quantization_mode=ME.SparseTensorQuantizationMode.UNWEIGHTED_AVERAGE)
-        ################################################################################################################
+        # ################################################################################################################
 
         # forward
         sparse_output = self.MinkUNet(sparse_input)
