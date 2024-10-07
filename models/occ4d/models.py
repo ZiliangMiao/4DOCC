@@ -286,6 +286,9 @@ class Occ4dNetwork(LightningModule):
         self.dvr = DifferentiableVolumeRendering(loss_type=self.loss_type, voxel_size=self.quant_size,
                                                  output_grid=[self.t_size, self.z_height, self.y_length, self.x_width])
 
+        # pytorch lightning training output
+        self.training_step_outputs = []
+
         # save predictions
         if not train_flag:
             self.model_dir = kwargs['model_dir']
