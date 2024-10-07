@@ -126,7 +126,7 @@ class UnONetwork(LightningModule):
         uno_probs_batch, uno_labels_batch = self.forward(batch)  # encoder & decoder
         uno_probs = uno_probs_batch.view(-1, self.n_uno_cls)
         uno_labels = uno_labels_batch.view(-1)
-        pred_labels = torch.argmax(uno_probs, axis=1)
+        pred_labels = torch.argmax(uno_probs, axis=-1)
         loss = self.get_loss(uno_probs, uno_labels)
 
         # metrics
@@ -205,18 +205,18 @@ class DenseFeatHead(nn.Module):
             ('bn1', nn.BatchNorm2d(out_channels)),
             ('relu1', nn.ReLU(inplace=False)),
             ('conv2', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            ('bn2', nn.BatchNorm2d(out_channels)),
-            ('relu2', nn.ReLU(inplace=False)),
-            ('conv3', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            ('bn3', nn.BatchNorm2d(out_channels)),
-            ('relu3', nn.ReLU(inplace=False)),
-            ('conv4', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            ('bn4', nn.BatchNorm2d(out_channels)),
-            ('relu4', nn.ReLU(inplace=False)),
-            ('conv5', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
-            ('bn5', nn.BatchNorm2d(out_channels)),
-            ('relu5', nn.ReLU(inplace=False)),
-            ('conv6', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            # ('bn2', nn.BatchNorm2d(out_channels)),
+            # ('relu2', nn.ReLU(inplace=False)),
+            # ('conv3', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            # ('bn3', nn.BatchNorm2d(out_channels)),
+            # ('relu3', nn.ReLU(inplace=False)),
+            # ('conv4', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            # ('bn4', nn.BatchNorm2d(out_channels)),
+            # ('relu4', nn.ReLU(inplace=False)),
+            # ('conv5', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
+            # ('bn5', nn.BatchNorm2d(out_channels)),
+            # ('relu5', nn.ReLU(inplace=False)),
+            # ('conv6', nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1)),
         ]))
 
     def forward(self, sparse_input):
