@@ -288,6 +288,7 @@ class Occ4dNetwork(LightningModule):
 
         # pytorch lightning training output
         self.training_step_outputs = []
+        self.iters_acc_loss = 0
 
         # save predictions
         if not train_flag:
