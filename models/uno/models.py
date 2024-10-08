@@ -212,13 +212,13 @@ class DenseFeatHead(nn.Module):
 
     def forward(self, sparse_input):
         # extra conv layer (feature map size correction)
-        sparse_out = self.conv0k2s2(sparse_input)
-        sparse_out = self.bn0(sparse_out)
-        sparse_out = self.conv1k2s2(sparse_out)
-        sparse_out = self.bn1(sparse_out)
+        sparse_out_s2 = self.conv0k2s2(sparse_input)
+        sparse_out_s2 = self.bn0(sparse_out_s2)
+        sparse_out_s4 = self.conv1k2s2(sparse_out_s2)
+        sparse_out_s4 = self.bn1(sparse_out_s4)
 
         # avg pooling (for z and t dimension)
-        sparse_out_xyz = self.avg_pool_t(sparse_out)
+        sparse_out_xyz = self.avg_pool_t(sparse_out_s4)
         sparse_out_xy = self.avg_pool_z(sparse_out_xyz)
 
         # sparse to dense

@@ -159,6 +159,14 @@ class OccDenseDecoder(nn.Module):
         self.feat_dim = self.t_size * self.z_height
         self.pos_dim = cfg_model['pos_dim']
 
+        # extra conv for feature map size correction
+        self.conv0k2s2 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
+                                                 kernel_size=3, stride=[2, 2, 2, 1], dimension=self.pos_dim)
+        self.bn0 = ME.MinkowskiBatchNorm(self.feat_dim)
+        self.conv1k2s2 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
+                                                 kernel_size=3, stride=[1, 1, 1, 1], dimension=self.pos_dim)
+        self.bn1 = ME.MinkowskiBatchNorm(self.feat_dim)
+
         # pooling block (for z and t dimension)
         self.avg_pool_t = ME.MinkowskiSumPooling(kernel_size=[1, 1, 1, self.t_size],
                                                  stride=[1, 1, 1, self.t_size], dimension=self.pos_dim)
@@ -184,8 +192,14 @@ class OccDenseDecoder(nn.Module):
         ]))
 
     def forward(self, sparse_featmap):
+        # extra conv layer (feature map size correction)
+        sparse_featmap_s2 = self.conv0k2s2(sparse_featmap)  # tensor stride = 2
+        sparse_featmap_s2 = self.bn0(sparse_featmap_s2)
+        sparse_featmap_s2 = self.conv1k2s2(sparse_featmap_s2)
+        sparse_featmap_s2 = self.bn1(sparse_featmap_s2)
+
         # avg pooling (for z and t dimension)
-        sparse_featmap_xyz = self.avg_pool_t(sparse_featmap)
+        sparse_featmap_xyz = self.avg_pool_t(sparse_featmap_s2)
         sparse_featmap_xy = self.avg_pool_z(sparse_featmap_xyz)
 
         # sparse to dense
@@ -269,24 +283,27 @@ class Occ4dNetwork(LightningModule):
         # params
         self.cfg_model = cfg_model
         self.loss_type = cfg_model["loss_type"]
-        self.quant_size = cfg_model['quant_size']
         assert self.loss_type in ["l1", "l2", "absrel"]
         self.scene_bbox = cfg_model['scene_bbox']
-        self.z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.quant_size)  # 90
-        self.y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.quant_size)  # 1400
-        self.x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.quant_size)  # 1400
         self.t_size = cfg_model['n_input']
         self.b_size = cfg_model["batch_size"]
 
         # featmap
+        self.offset = torch.nn.parameter.Parameter(
+            torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -cfg_model['n_input'] + 1])[None:],
+            requires_grad=False)
+        self.featmap_size = cfg_model['featmap_size']
+        self.z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)  # 45
+        self.y_length = int((self.scene_bbox[4] - self.scene_bbox[1]) / self.featmap_size)  # 700
+        self.x_width = int((self.scene_bbox[3] - self.scene_bbox[0]) / self.featmap_size)  # 700
         self.featmap_shape = [self.b_size, self.x_width, self.y_length, self.z_height, self.t_size]
-        self.feat_dim = self.z_height * self.t_size
+        self.feat_dim = self.z_height * self.t_size  # 45 * 6 = 270
 
         # encoder, decoder, dvr
         self.iters_per_epoch = kwargs['iters_per_epoch']
         self.encoder = OccEncoder(cfg_model=self.cfg_model, feat_dim=self.feat_dim)
         self.decoder = OccDenseDecoder(cfg_model=self.cfg_model, featmap_shape=self.featmap_shape)
-        self.dvr = DifferentiableVolumeRendering(loss_type=self.loss_type, voxel_size=self.quant_size,
+        self.dvr = DifferentiableVolumeRendering(loss_type=self.loss_type, voxel_size=self.featmap_size,
                                                  output_grid=[self.t_size, self.z_height, self.y_length, self.x_width])
 
         # pytorch lightning training output
@@ -299,6 +316,7 @@ class Occ4dNetwork(LightningModule):
             self.test_epoch = kwargs['test_epoch']
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
             os.makedirs(self.pred_dir, exist_ok=True)
+
     def forward(self, batch):
         # unpack batch data
         meta_batch, pcds_batch, occ4d_future_batch = batch
@@ -307,8 +325,10 @@ class Occ4dNetwork(LightningModule):
         future_tindex_batch = []
         for occ4d_sample in occ4d_future_batch:
             future_orgs, future_pcds, future_tindex = occ4d_sample
-            future_org_batch.append(future_orgs)
-            future_pcd_batch.append(future_pcds)
+            future_orgs_grid = torch.div(future_orgs - self.offset, self.featmap_size)
+            future_pcds_grid = torch.div(future_pcds - self.offset, self.featmap_size)
+            future_org_batch.append(future_orgs_grid)
+            future_pcd_batch.append(future_pcds_grid)
             future_tindex_batch.append(future_tindex)
         future_org = torch.stack(future_org_batch)  # B, T, 3
         future_pcd = torch.stack(future_pcd_batch)  # B, N, 3

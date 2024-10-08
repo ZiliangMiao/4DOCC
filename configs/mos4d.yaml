@@ -34,7 +34,7 @@ train:
 
 
 finetune:
-  pretrain_method: "mop_all_1%unk"
+  pretrain_method: "mop_bg_100%unk"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-16"
   pretrain_version: 0

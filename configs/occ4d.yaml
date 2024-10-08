@@ -11,7 +11,8 @@ occ4d:
   n_input: 6
   n_skip: 0
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
-  quant_size: 0.2 # used for discretization in x,y,z when creating a sparse tensor
+  quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
+  featmap_size: 0.2
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
   transform: True # if true, the points are pose-aligned before feeding to the model
