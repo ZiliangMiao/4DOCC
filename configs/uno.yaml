@@ -24,8 +24,9 @@ uno:
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
   occ_thrd: 0.1
   n_sd_per_sample: 1
-  num_rays: 5000 # number of down-sampled rays per sample [5000]
+  num_rays: 1000 # number of down-sampled rays per sample [1000]
   num_ray_cls_samples: 10 # number of uno samples per ray per class [10]
+  # total uno samples per class per batch: batch_size * num_rays * num_ray_cls_samples = 16 * 6 * 1000 * 10 = 960,000
 
   # training related
   num_epoch: 100
@@ -38,7 +39,7 @@ uno:
   weight_decay: 0.0001  # refer to UnO
 
   # device related
-  num_workers: 16
+  num_workers: 8
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 

@@ -310,7 +310,9 @@ class Occ4dNetwork(LightningModule):
                                                  output_grid=[self.t_size, self.z_height, self.y_length, self.x_width])
 
         # pytorch lightning training output
-        self.training_step_outputs = []
+        self.epoch_acc_l1_loss = 0
+        self.epoch_acc_l2_loss = 0
+        self.epoch_acc_absrel_loss = 0
         self.iters_acc_loss = 0
 
         # save predictions
@@ -396,13 +398,12 @@ class Occ4dNetwork(LightningModule):
         self.log("l1_loss", l1_loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("l2_loss", l2_loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("absrel_loss", absrel_loss.item(), on_step=True, prog_bar=True, logger=True)
-        train_loss_dict = {"l1_loss": l1_loss.item(),
-                           "l2_loss": l1_loss.item(),
-                           "absrel_loss": absrel_loss.item()}
-        self.training_step_outputs.append(train_loss_dict)
+        self.epoch_acc_l1_loss += l1_loss.item()
+        self.epoch_acc_l2_loss += l2_loss.item()
+        self.epoch_acc_absrel_loss += absrel_loss.item()
 
         # iters accumulated loss
-        self.iters_acc_loss += train_loss_dict[f"{self.loss_type}_loss"] / 50
+        self.iters_acc_loss += l1_loss.item() / 50
         if (self.global_step + 1) % 50 == 0:  # self.current_batch
             self.log("train_50_iters_acc_loss", self.iters_acc_loss, on_step=True, prog_bar=True, logger=True)
             self.iters_acc_loss = 0
@@ -413,26 +414,24 @@ class Occ4dNetwork(LightningModule):
         self.manual_backward(dense_occ_sigma, gradient=grad_sigma)
         opt.step()
 
-        # step lr per each epoch
+        # step lr per step
         sch = self.lr_schedulers()
         sch.step()
         torch.cuda.empty_cache()
 
     def on_train_epoch_end(self):
         # epoch logging
-        epoch_l1_loss_list = []
-        epoch_l2_loss_list = []
-        epoch_absrel_loss_list = []
-        for train_loss_dict in self.training_step_outputs:
-            epoch_l1_loss_list.append(train_loss_dict["l1_loss"])
-            epoch_l2_loss_list.append(train_loss_dict["l2_loss"])
-            epoch_absrel_loss_list.append(train_loss_dict["absrel_loss"])
-        self.log("epoch_l1_loss", np.array(epoch_l1_loss_list).mean(), on_epoch=True, prog_bar=True)
-        self.log("epoch_l2_loss", np.array(epoch_l2_loss_list).mean(), on_epoch=True, prog_bar=True)
-        self.log("epoch_absrel_loss", np.array(epoch_absrel_loss_list).mean(), on_epoch=True, prog_bar=True)
+        epoch_l1_loss = self.epoch_acc_l1_loss / len(self.train_dataloader())
+        epoch_l2_loss = self.epoch_acc_l2_loss / len(self.train_dataloader())
+        epoch_absrel_loss = self.epoch_acc_absrel_loss / len(self.train_dataloader())
+        self.log("epoch_l1_loss", epoch_l1_loss, on_epoch=True, prog_bar=True)
+        self.log("epoch_l2_loss", epoch_l2_loss, on_epoch=True, prog_bar=True)
+        self.log("epoch_absrel_loss", epoch_absrel_loss, on_epoch=True, prog_bar=True)
 
-        # clear
-        self.training_step_outputs = []
+        # clear cuda memory
+        self.epoch_acc_l1_loss = 0
+        self.epoch_acc_l2_loss = 0
+        self.epoch_acc_absrel_loss = 0
         torch.cuda.empty_cache()
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Any:

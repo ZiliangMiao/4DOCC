@@ -20,12 +20,13 @@ occ4d:
   outside_scene_mask: True
   outside_scene_mask_z: True
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
-  num_rays: 50000 # number of downsampled rays for depth rendering per sample
+  num_rays: 1000 # number of downsampled rays for depth rendering per sample
+  # total occ4d depth rendering rays per batch: batch_size * n_input * num_rays = 16 * 6 * 1000 = 96,000
 
   # training related
   loss_type: "l1"  # "l1", "l2", "absrel"
   num_epoch: 50
-  batch_size: 1
+  batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.00008  # refer to UnO
   lr_max: 0.0008  # refer to UnO

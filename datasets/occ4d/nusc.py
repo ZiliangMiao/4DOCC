@@ -83,12 +83,16 @@ class NuscOcc4dDataset(Dataset):
         occ4d_sd_toks = self.sample_to_occ4d_sd_toks[ref_sample_tok]
 
         # future pcds
+        num_rays_per_scan = self.cfg_model['num_rays']
         future_orgs = []
         future_pcds = []
         future_tindex = []
         tindex = -1
         for sd_tok in occ4d_sd_toks:  # 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0
             org, pcd, ts, _ = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
+            # ray down-sample
+            ds_ray_idx = random_sample(range(len(pcd)), num_rays_per_scan)
+            pcd = pcd[ds_ray_idx]
             # future timestamp
             tindex += 1
             # append
