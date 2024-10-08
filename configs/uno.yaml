@@ -24,8 +24,8 @@ uno:
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
   occ_thrd: 0.1
   n_sd_per_sample: 1
-  num_cls_samples: 50000  # number of uno samples per scan per class [50000]
-  num_ray_cls_samples: 10  # number of uno samples per ray per class [10]
+  num_rays: 5000 # number of down-sampled rays per sample [5000]
+  num_ray_cls_samples: 10 # number of uno samples per ray per class [10]
 
   # training related
   num_epoch: 100

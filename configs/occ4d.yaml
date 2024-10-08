@@ -20,6 +20,7 @@ occ4d:
   outside_scene_mask: True
   outside_scene_mask_z: True
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
+  num_rays: 50000 # number of downsampled rays for depth rendering per sample
 
   # training related
   loss_type: "l1"  # "l1", "l2", "absrel"

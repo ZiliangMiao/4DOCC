@@ -236,11 +236,14 @@ class DifferentiableVolumeRendering(nn.Module):
         )
 
         # take care of nans and infs if any
-        grad_sigma[torch.isnan(grad_sigma)] = 0.0
-        pred_dist[torch.isinf(pred_dist)] = 0.0
-        gt_dist[torch.isinf(pred_dist)] = 0.0
-        pred_dist[torch.isnan(pred_dist)] = 0.0
-        gt_dist[torch.isnan(pred_dist)] = 0.0
+        invalid = torch.isnan(grad_sigma)
+        grad_sigma[invalid] = 0.0
+        invalid = torch.isnan(pred_dist)
+        pred_dist[invalid] = -1.0
+        gt_dist[invalid] = -1.0
+        invalid = torch.isinf(pred_dist)
+        pred_dist[invalid] = -1.0
+        gt_dist[invalid] = -1.0
 
         # recover depth scale
         pred_dist *= self.voxel_size
@@ -354,16 +357,6 @@ class Occ4dNetwork(LightningModule):
 
         # dvr depth rendering
         dense_occ_sigma, pred_dist, gt_dist, grad_sigma = self.dvr.dvr_render(dense_occ_sigma, future_org, future_pcd, future_tindex)
-
-        # take care of nans and infs if any
-        invalid = torch.isnan(grad_sigma)
-        grad_sigma[invalid] = 0.0
-        invalid = torch.isnan(pred_dist)
-        pred_dist[invalid] = 0.0
-        gt_dist[invalid] = 0.0
-        invalid = torch.isinf(pred_dist)
-        pred_dist[invalid] = 0.0
-        gt_dist[invalid] = 0.0
         return dense_occ_sigma, pred_dist, gt_dist, grad_sigma
 
     def configure_optimizers(self):
@@ -386,11 +379,10 @@ class Occ4dNetwork(LightningModule):
         valid = gt_dist >= 0
         gt_dist = gt_dist[valid]
         pred_dist = pred_dist[valid]
-
         # get loss
         l1_loss = torch.mean(torch.abs(gt_dist - pred_dist))
         l2_loss = torch.mean(torch.pow(gt_dist - pred_dist, 2) / 2)
-        absrel_loss = torch.mean(torch.abs(gt_dist - pred_dist) / gt_dist)
+        absrel_loss = torch.mean(torch.abs(gt_dist - pred_dist) / (gt_dist + 1e-15))
         return (l1_loss, l2_loss, absrel_loss)
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
