@@ -83,9 +83,8 @@ class NuscUnODataset(Dataset):
         uno_sd_toks = self.sample_to_uno_sd_toks[ref_sample_tok]
 
         # future pcds
-        num_cls_samples = self.cfg_model['num_cls_samples']
+        num_rays_per_scan = self.cfg_model['num_rays']
         num_ray_cls_samples = self.cfg_model['num_ray_cls_samples']
-        num_rays_per_scan = int(num_cls_samples / num_ray_cls_samples / len(uno_sd_toks))
         uno_pts_4d_list = []
         uno_labels_list = []
         for sd_tok in uno_sd_toks:  # 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0
