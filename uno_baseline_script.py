@@ -59,7 +59,7 @@ def uno_pretrain(model_cfg, dataset_cfg, resume_version):
         save_top_k=model_cfg['num_epoch'],
         mode="max",
         filename="{epoch}",
-        every_n_epochs=5,
+        every_n_epochs=1,
         save_last=True,
     )
 
