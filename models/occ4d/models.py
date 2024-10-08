@@ -337,16 +337,16 @@ class Occ4dNetwork(LightningModule):
             future_orgs_grid = torch.div(future_orgs - self.offset, self.featmap_size, rounding_mode=None)
             future_pcds_grid = torch.div(future_pcds - self.offset, self.featmap_size, rounding_mode=None)
 
-            # padding nan and -1, for batch stack
-            future_pcds_grid_pad = F.pad(future_pcds_grid, (0, 0, 0, max_num_pcd - len(future_pcds_grid)),
-                                         mode="constant", value=float("nan"))
-            future_tindex_pad = F.pad(future_tindex, (0, max_num_pcd - len(future_tindex)),
-                                         mode="constant", value=-1)
+            # # padding nan and -1, for batch stack
+            # future_pcds_grid_pad = F.pad(future_pcds_grid, (0, 0, 0, max_num_pcd - len(future_pcds_grid)),
+            #                              mode="constant", value=float("nan"))
+            # future_tindex_pad = F.pad(future_tindex, (0, max_num_pcd - len(future_tindex)),
+            #                              mode="constant", value=-1)
 
             # append
             future_org_batch.append(future_orgs_grid)
-            future_pcd_batch.append(future_pcds_grid_pad)
-            future_tindex_batch.append(future_tindex_pad)
+            future_pcd_batch.append(future_pcds_grid)
+            future_tindex_batch.append(future_tindex)
         future_org = torch.stack(future_org_batch)  # B, T, 3
         future_pcd = torch.stack(future_pcd_batch)  # B, N, 3
         future_tindex = torch.stack(future_tindex_batch)  # B, N, 3
