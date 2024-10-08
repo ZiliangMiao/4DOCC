@@ -290,7 +290,7 @@ class Occ4dNetwork(LightningModule):
 
         # featmap
         self.offset = torch.nn.parameter.Parameter(
-            torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2], -cfg_model['n_input'] + 1])[None:],
+            torch.Tensor([self.scene_bbox[0], self.scene_bbox[1], self.scene_bbox[2]])[None:],
             requires_grad=False)
         self.featmap_size = cfg_model['featmap_size']
         self.z_height = int((self.scene_bbox[5] - self.scene_bbox[2]) / self.featmap_size)  # 45
@@ -323,12 +323,24 @@ class Occ4dNetwork(LightningModule):
         future_org_batch = []
         future_pcd_batch = []
         future_tindex_batch = []
+
+        # quantize future orgs and pcds
+        max_num_pcd = max([len(occ4d_sample[1]) for occ4d_sample in occ4d_future_batch])
         for occ4d_sample in occ4d_future_batch:
+            # quantization
             future_orgs, future_pcds, future_tindex = occ4d_sample
-            future_orgs_grid = torch.div(future_orgs - self.offset, self.featmap_size)
-            future_pcds_grid = torch.div(future_pcds - self.offset, self.featmap_size)
-            future_org_batch.append(future_orgs_grid)
-            future_pcd_batch.append(future_pcds_grid)
+            future_orgs_grid = torch.div(future_orgs - self.offset, self.featmap_size, rounding_mode=None)
+            future_pcds_grid = torch.div(future_pcds - self.offset, self.featmap_size, rounding_mode=None)
+
+            # padding nan and -1, for batch stack
+            future_orgs_grid_pad = F.pad(future_orgs_grid, (0, 0, 0, max_num_pcd - len(future_orgs_grid)),
+                                         mode="constant", value=float("nan"))
+            future_pcds_grid_pad = F.pad(future_pcds_grid, (0, 0, 0, max_num_pcd - len(future_orgs_grid)),
+                                         mode="constant", value=-1)
+
+            # append
+            future_org_batch.append(future_orgs_grid_pad)
+            future_pcd_batch.append(future_pcds_grid_pad)
             future_tindex_batch.append(future_tindex)
         future_org = torch.stack(future_org_batch)  # B, T, 3
         future_pcd = torch.stack(future_pcd_batch)  # B, N, 3
