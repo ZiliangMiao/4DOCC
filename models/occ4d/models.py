@@ -280,9 +280,6 @@ class DifferentiableVolumeRendering(nn.Module):
 class Occ4dNetwork(LightningModule):
     def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
         super().__init__()
-        # manual optimization
-        self.automatic_optimization = False
-
         # params
         self.cfg_model = cfg_model
         self.loss_type = cfg_model["loss_type"]
@@ -308,6 +305,12 @@ class Occ4dNetwork(LightningModule):
         self.decoder = OccDenseDecoder(cfg_model=self.cfg_model, featmap_shape=self.featmap_shape)
         self.dvr = DifferentiableVolumeRendering(loss_type=self.loss_type, voxel_size=self.featmap_size,
                                                  output_grid=[self.t_size, self.z_height, self.y_length, self.x_width])
+
+        # manual optimization
+        self.automatic_optimization = False
+        # self.acc_batches = cfg_model['acc_batches']
+        # self.num_acc_batch = 0
+        # self.acc_grads = torch.zeros([self.b_size, self.t_size, self.z_height, self.y_length, self.x_width])
 
         # pytorch lightning training output
         self.epoch_acc_l1_loss = 0
@@ -408,15 +411,31 @@ class Occ4dNetwork(LightningModule):
             self.log("train_50_iters_acc_loss", self.iters_acc_loss, on_step=True, prog_bar=True, logger=True)
             self.iters_acc_loss = 0
 
-        # manual backward and optimization for pytorch-lightning
+        # step learning rate scheduler
+        sch = self.lr_schedulers()
+        sch.step()
+
+        # manual optimization
         opt = self.optimizers()
         opt.zero_grad()
         self.manual_backward(dense_occ_sigma, gradient=grad_sigma)
         opt.step()
 
-        # step lr per step
-        sch = self.lr_schedulers()
-        sch.step()
+        # # accumulated batches manual backward and optimization
+        # if self.acc_batches != 0:
+        #     self.acc_grads.add(grad_sigma / self.acc_batches)
+        #     self.num_acc_batch += 1
+        #     if self.num_acc_batch == self.acc_batches:
+        #         # manual optimization
+        #         opt = self.optimizers()
+        #         opt.zero_grad()
+        #         self.manual_backward(dense_occ_sigma, gradient=grad_sigma)
+        #         opt.step()
+        #         # clear
+        #         self.acc_grads = 0
+        #         self.num_acc_batch = 0
+
+        # clear cuda memory
         torch.cuda.empty_cache()
 
     def on_train_epoch_end(self):
