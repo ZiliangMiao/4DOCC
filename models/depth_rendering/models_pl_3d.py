@@ -14,7 +14,7 @@ from MinkowskiEngine.modules.resnet_block import BasicBlock
 from lib.minkowski.minkunet import MinkUNetBase
 
 # occlusion rendering decoder
-from models.ours_depth_rendering.occlusion_decoder import OcclusionDecoder
+from models.depth_rendering.occlusion_decoder import OcclusionDecoder
 
 # evaluation
 from models.occ4d.occ4d_evaluation import compute_chamfer_distance, compute_chamfer_distance_inner, compute_ray_errors

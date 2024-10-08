@@ -26,7 +26,7 @@ occ4d:
   # training related
   loss_type: "l1"  # "l1", "l2", "absrel"
   num_epoch: 50
-  batch_size: 16
+  batch_size: 8
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.00008  # refer to UnO
   lr_max: 0.0008  # refer to UnO
