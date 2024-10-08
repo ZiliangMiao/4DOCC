@@ -40,7 +40,7 @@ class MutualObsPretrainNetwork(LightningModule):
         self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
 
         # pytorch lightning training output
-        self.training_step_outputs = []
+        self.epoch_acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
 
         # save predictions
         if not train_flag:
@@ -148,20 +148,17 @@ class MutualObsPretrainNetwork(LightningModule):
         self.log("unk_acc", unk_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("free_acc", free_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("occ_acc", occ_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.training_step_outputs.append({"loss": loss.item(), "confusion_matrix": conf_mat})
+        self.epoch_acc_conf_mat.add(conf_mat)
+
+        # clean cuda memory
         torch.cuda.empty_cache()
         return loss
 
     def on_train_epoch_end(self):
-        conf_mat_list = [output["confusion_matrix"] for output in self.training_step_outputs]
-        acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-
         # metrics in one epoch
-        iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+        iou = self.ClassificationMetrics.get_iou(self.epoch_acc_conf_mat)
         unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
-        acc = self.ClassificationMetrics.get_acc(acc_conf_mat)
+        acc = self.ClassificationMetrics.get_acc(self.epoch_acc_conf_mat)
         unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
         self.log("epoch_unk_iou", unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
@@ -170,8 +167,8 @@ class MutualObsPretrainNetwork(LightningModule):
         self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_occ_acc", occ_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
-        # clean
-        self.training_step_outputs = []
+        # clean cuda memory
+        self.epoch_acc_conf_mat = self.epoch_acc_conf_mat.zero_()
         torch.cuda.empty_cache()
 
 

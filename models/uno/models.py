@@ -158,7 +158,7 @@ class UnONetwork(LightningModule):
         self.log("epoch_occ_acc", occ_acc, on_epoch=True, prog_bar=True, logger=True)
 
         # clean
-        self.epoch_acc_conf_mat = 0
+        self.epoch_acc_conf_mat = self.epoch_acc_conf_mat.zero_()
         torch.cuda.empty_cache()
 
     def predict_step(self, batch: tuple, batch_idx):
