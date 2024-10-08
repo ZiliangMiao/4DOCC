@@ -95,7 +95,7 @@ class NuscOcc4dDataset(Dataset):
             future_orgs.append(org)
             future_pcds.append(pcd)
             future_tindex.append(torch.ones(len(pcd)) * tindex)  # has to be 1 dimension [0, 1, 2, 3, 4, 5]
-        future_orgs = torch.stack(future_orgs)
-        future_pcds = torch.cat(future_pcds, dim=0)
-        future_tindex = torch.cat(future_tindex, dim=0)
+        future_orgs = torch.stack(future_orgs)  # dim=2
+        future_pcds = torch.cat(future_pcds, dim=0)  # dim=2
+        future_tindex = torch.cat(future_tindex, dim=0)  # dim=1
         return [(ref_sd_tok, occ4d_sd_toks), pcds_4d, (future_orgs, future_pcds, future_tindex)]

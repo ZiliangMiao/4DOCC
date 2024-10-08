@@ -160,10 +160,10 @@ class OccDenseDecoder(nn.Module):
         self.pos_dim = cfg_model['pos_dim']
 
         # extra conv for feature map size correction
-        self.conv0k2s2 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
+        self.conv0k3s2 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
                                                  kernel_size=3, stride=[2, 2, 2, 1], dimension=self.pos_dim)
         self.bn0 = ME.MinkowskiBatchNorm(self.feat_dim)
-        self.conv1k2s2 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
+        self.conv1k3s1 = ME.MinkowskiConvolution(self.feat_dim, self.feat_dim,
                                                  kernel_size=3, stride=[1, 1, 1, 1], dimension=self.pos_dim)
         self.bn1 = ME.MinkowskiBatchNorm(self.feat_dim)
 
@@ -193,9 +193,9 @@ class OccDenseDecoder(nn.Module):
 
     def forward(self, sparse_featmap):
         # extra conv layer (feature map size correction)
-        sparse_featmap_s2 = self.conv0k2s2(sparse_featmap)  # tensor stride = 2
+        sparse_featmap_s2 = self.conv0k3s2(sparse_featmap)  # tensor stride = 2
         sparse_featmap_s2 = self.bn0(sparse_featmap_s2)
-        sparse_featmap_s2 = self.conv1k2s2(sparse_featmap_s2)
+        sparse_featmap_s2 = self.conv1k3s1(sparse_featmap_s2)
         sparse_featmap_s2 = self.bn1(sparse_featmap_s2)
 
         # avg pooling (for z and t dimension)
@@ -354,6 +354,16 @@ class Occ4dNetwork(LightningModule):
 
         # dvr depth rendering
         dense_occ_sigma, pred_dist, gt_dist, grad_sigma = self.dvr.dvr_render(dense_occ_sigma, future_org, future_pcd, future_tindex)
+
+        # take care of nans and infs if any
+        invalid = torch.isnan(grad_sigma)
+        grad_sigma[invalid] = 0.0
+        invalid = torch.isnan(pred_dist)
+        pred_dist[invalid] = 0.0
+        gt_dist[invalid] = 0.0
+        invalid = torch.isinf(pred_dist)
+        pred_dist[invalid] = 0.0
+        gt_dist[invalid] = 0.0
         return dense_occ_sigma, pred_dist, gt_dist, grad_sigma
 
     def configure_optimizers(self):
@@ -372,14 +382,15 @@ class Occ4dNetwork(LightningModule):
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
     def get_loss(self, gt_dist, pred_dist):
-        l1_loss = torch.abs(gt_dist - pred_dist)
-        l2_loss = ((gt_dist - pred_dist) ** 2) / 2
-        absrel_loss = torch.abs(gt_dist - pred_dist) / gt_dist
+        # valid distance
         valid = gt_dist >= 0
-        valid_pts_count = torch.sum(valid) if torch.sum(valid) != 0 else 1
-        l1_loss = torch.sum(l1_loss[valid]) / valid_pts_count
-        l2_loss = torch.sum(l2_loss[valid]) / valid_pts_count
-        absrel_loss = torch.sum(absrel_loss[valid]) / valid_pts_count
+        gt_dist = gt_dist[valid]
+        pred_dist = pred_dist[valid]
+
+        # get loss
+        l1_loss = torch.mean(torch.abs(gt_dist - pred_dist))
+        l2_loss = torch.mean(torch.pow(gt_dist - pred_dist, 2) / 2)
+        absrel_loss = torch.mean(torch.abs(gt_dist - pred_dist) / gt_dist)
         return (l1_loss, l2_loss, absrel_loss)
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
