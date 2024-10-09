@@ -27,6 +27,9 @@ dvr = load("dvr", sources=["./lib/dvr/dvr.cpp", "./lib/dvr/dvr.cu"], verbose=Tru
 class Occ4dNetwork(LightningModule):
     def __init__(self, cfg_model: dict, train_flag: bool, **kwargs):
         super().__init__()
+        if train_flag:
+            self.save_hyperparameters(cfg_model)
+
         # params
         self.cfg_model = cfg_model
         self.loss_type = cfg_model["loss_type"]
@@ -106,10 +109,6 @@ class Occ4dNetwork(LightningModule):
 
         # dvr depth rendering
         dense_occ_sigma, pred_dist, gt_dist, grad_sigma = self.dvr.dvr_render(dense_occ_sigma, future_org, future_pcd, future_tindex)
-
-        # clear cuda memory
-        del sparse_featmap, future_tindex, future_pcd, future_org, pcds_batch, occ4d_future_batch
-        torch.cuda.empty_cache()
         return dense_occ_sigma, pred_dist, gt_dist, grad_sigma
 
     def configure_optimizers(self):
