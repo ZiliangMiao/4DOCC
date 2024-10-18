@@ -43,7 +43,7 @@ finetune:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 50 # use 10% of training dataset to train the model
+  downsample_pct: 20 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
