@@ -161,59 +161,62 @@ class NuscMopDataset(Dataset):
         mop_pts = ref_org + mop_depth.view(-1, 1) * rays_dir[mop_rays_idx]
         mop_pts_4d = torch.hstack((mop_pts, mop_ts.reshape(-1, 1)))
 
-        # TODO: balanced sampling of current observation samples (refer to uno)
-        num_co_ray_samples_cls = self.cfg_model['num_co_ray_samples_cls']
-        num_co_samples_cls = np.min((num_co_ray_samples_cls * num_rays, num_mop_samples_cls))
-        rays_dir_broadcast = rays_dir.repeat(1, num_co_ray_samples_cls)
-        rays_depth_broadcast = rays_depth.repeat(1, num_co_ray_samples_cls)  # [num_rays, num_co_ray_samples_cls]
+        if self.cfg_model['train_co_samples']:
+            # TODO: balanced sampling of current observation samples (refer to uno)
+            num_co_ray_samples_cls = self.cfg_model['num_co_ray_samples_cls']
+            num_co_samples_cls = np.min((num_co_ray_samples_cls * num_rays, num_mop_samples_cls))
+            rays_dir_broadcast = rays_dir.repeat(1, num_co_ray_samples_cls)
+            rays_depth_broadcast = rays_depth.repeat(1, num_co_ray_samples_cls)  # [num_rays, num_co_ray_samples_cls]
 
-        # TODO: stratified randomization
-        co_free_depth_scale, co_occ_depth_scale = [], []
-        delta = 1 / num_co_ray_samples_cls
-        for i in range(num_co_ray_samples_cls):
-            co_free_depth_scale_i = delta * i + torch.rand(num_rays) * delta
-            co_occ_depth_scale_i = delta * i + torch.rand(num_rays) * delta
-            co_free_depth_scale.append(co_free_depth_scale_i.view(-1, 1))
-            co_occ_depth_scale.append(co_occ_depth_scale_i.view(-1, 1))
-        co_free_depth_scale = torch.hstack(co_free_depth_scale)
-        co_occ_depth_scale = torch.hstack(co_occ_depth_scale)
+            # TODO: stratified randomization
+            co_free_depth_scale, co_occ_depth_scale = [], []
+            delta = 1 / num_co_ray_samples_cls
+            for i in range(num_co_ray_samples_cls):
+                co_free_depth_scale_i = delta * i + torch.rand(num_rays) * delta
+                co_occ_depth_scale_i = delta * i + torch.rand(num_rays) * delta
+                co_free_depth_scale.append(co_free_depth_scale_i.view(-1, 1))
+                co_occ_depth_scale.append(co_occ_depth_scale_i.view(-1, 1))
+            co_free_depth_scale = torch.hstack(co_free_depth_scale)
+            co_occ_depth_scale = torch.hstack(co_occ_depth_scale)
 
-        # occupancy balanced sampling (free points)
-        co_free_pts_depth = (co_free_depth_scale * rays_depth_broadcast).view(-1, 1)  # [ray_1, ... ray_1, ..., ray_n, ... ray_n]
-        co_free_pts = ref_org + co_free_pts_depth * rays_dir_broadcast.view(-1, 3)
-        co_free_rays_idx = rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1)
+            # occupancy balanced sampling (free points)
+            co_free_pts_depth = (co_free_depth_scale * rays_depth_broadcast).view(-1, 1)  # [ray_1, ... ray_1, ..., ray_n, ... ray_n]
+            co_free_pts = ref_org + co_free_pts_depth * rays_dir_broadcast.view(-1, 3)
+            co_free_rays_idx = torch.squeeze(rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1))
 
-        # occupancy balanced sampling (occupied points)
-        occ_thrd = torch.full((num_rays, num_co_ray_samples_cls), self.cfg_model['occ_thrd'])
-        co_occ_pts_depth = (rays_depth_broadcast + co_occ_depth_scale * occ_thrd).view(-1, 1)
-        co_occ_pts = ref_org + co_occ_pts_depth * rays_dir_broadcast.view(-1, 3)
-        co_occ_rays_idx = rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1)
+            # occupancy balanced sampling (occupied points)
+            occ_thrd = torch.full((num_rays, num_co_ray_samples_cls), self.cfg_model['occ_thrd'])
+            co_occ_pts_depth = (rays_depth_broadcast + co_occ_depth_scale * occ_thrd).view(-1, 1)
+            co_occ_pts = ref_org + co_occ_pts_depth * rays_dir_broadcast.view(-1, 3)
+            co_occ_rays_idx = torch.squeeze(rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1))
 
-        # down-sample
-        ds_co_idx_cls = random_sample(range(num_co_ray_samples_cls * num_rays), num_co_samples_cls)
-        co_free_pts = co_free_pts[ds_co_idx_cls]
-        co_free_pts_4d = torch.cat((co_free_pts, torch.full((len(co_free_pts), 1), ref_ts)), dim=1)
-        co_occ_pts = co_occ_pts[ds_co_idx_cls]
-        co_occ_pts_4d = torch.cat((co_occ_pts, torch.full((len(co_occ_pts), 1), ref_ts)), dim=1)
+            # down-sample
+            ds_co_idx_cls = random_sample(range(num_co_ray_samples_cls * num_rays), num_co_samples_cls)
+            co_free_pts = co_free_pts[ds_co_idx_cls]
+            co_free_pts_4d = torch.cat((co_free_pts, torch.full((len(co_free_pts), 1), ref_ts)), dim=1)
+            co_occ_pts = co_occ_pts[ds_co_idx_cls]
+            co_occ_pts_4d = torch.cat((co_occ_pts, torch.full((len(co_occ_pts), 1), ref_ts)), dim=1)
 
-        # labels
-        co_free_rays_idx = co_free_rays_idx[ds_co_idx_cls]
-        co_occ_rays_idx = co_occ_rays_idx[ds_co_idx_cls]
-        co_free_labels = torch.ones(len(co_free_pts), dtype=torch.int64)
-        co_occ_labels = torch.ones(len(co_occ_pts), dtype=torch.int64) * 2
-        co_free_confidence = torch.ones(len(co_free_pts), dtype=torch.float32)
-        co_occ_confidence = torch.squeeze(torch.exp(-(co_occ_pts_depth[ds_co_idx_cls] - rays_depth_broadcast.view(-1, 1)[ds_co_idx_cls])))
+            # labels
+            co_free_rays_idx = co_free_rays_idx[ds_co_idx_cls]
+            co_occ_rays_idx = co_occ_rays_idx[ds_co_idx_cls]
+            co_free_labels = torch.ones(len(co_free_pts), dtype=torch.int64)
+            co_occ_labels = torch.ones(len(co_occ_pts), dtype=torch.int64) * 2
+            co_free_confidence = torch.ones(len(co_free_pts), dtype=torch.float32)
+            co_occ_confidence = torch.squeeze(torch.exp(-(co_occ_pts_depth[ds_co_idx_cls] - rays_depth_broadcast.view(-1, 1)[ds_co_idx_cls])))
 
-        # concat and append to list
-        co_rays_idx = torch.cat((co_free_rays_idx, co_occ_rays_idx), dim=0)
-        co_pts_4d = torch.cat((co_free_pts_4d, co_occ_pts_4d), dim=0)
-        co_labels = torch.cat((co_free_labels, co_occ_labels), dim=0)
-        co_confidence = torch.cat((co_free_confidence, co_occ_confidence), dim=0)
+            # concat and append to list
+            co_rays_idx = torch.cat((co_free_rays_idx, co_occ_rays_idx), dim=0)
+            co_pts_4d = torch.cat((co_free_pts_4d, co_occ_pts_4d), dim=0)
+            co_labels = torch.cat((co_free_labels, co_occ_labels), dim=0)
+            co_confidence = torch.cat((co_free_confidence, co_occ_confidence), dim=0)
 
-        # shuffle
-        shuffle_idx = torch.randperm(len(co_pts_4d))
-        co_rays_idx = co_rays_idx[shuffle_idx]
-        co_pts_4d = co_pts_4d[shuffle_idx]
-        co_labels = co_labels[shuffle_idx]
-        co_confidence = co_confidence[shuffle_idx]
-        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mop_rays_idx, mop_pts_4d, mop_labels, mop_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence)]
+            # shuffle
+            shuffle_idx = torch.randperm(len(co_pts_4d))
+            co_rays_idx = co_rays_idx[shuffle_idx]
+            co_pts_4d = co_pts_4d[shuffle_idx]
+            co_labels = co_labels[shuffle_idx]
+            co_confidence = co_confidence[shuffle_idx]
+            return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mop_rays_idx, mop_pts_4d, mop_labels, mop_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence)]
+        else:
+            return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mop_rays_idx, mop_pts_4d, mop_labels, mop_confidence)]

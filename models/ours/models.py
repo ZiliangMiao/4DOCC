@@ -70,13 +70,16 @@ class MutualObsPretrainNetwork(LightningModule):
         mo_feats_batch, mo_labels_batch, mo_confidence_batch = [], [], []
         co_feats_batch, co_labels_batch, co_confidence_batch = [], [], []
         for batch_idx, samples in enumerate(samples_batch):
-            # unfold samples
-            mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence = samples
-
             # get point-wise features
             coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
             feats = sparse_featmap.features_at(batch_index=batch_idx)
             feats = feats[coords[:, -1] == 0]
+
+            # unfold samples
+            if self.cfg_model['train_co_samples']:
+                mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence = samples
+            else:
+                mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence = samples
 
             # mutual observation feats and labels
             mo_feats = feats[mo_rays_idx]
@@ -86,18 +89,22 @@ class MutualObsPretrainNetwork(LightningModule):
             mo_labels_batch.append(mo_labels)
             mo_confidence_batch.append(mo_confidence)
 
-            # current observation feats and labels
-            co_feats = feats[co_rays_idx]
-            co_pe_feats = self.pe(co_pts_4d)
-            co_feats = co_feats + co_pe_feats
-            co_feats_batch.append(co_feats)
-            co_labels_batch.append(co_labels)
-            co_confidence_batch.append(co_confidence)
+            # decoder
+            mo_probs_batch = self.decoder(mo_feats_batch)  # logits -> softmax -> probs
 
-        # decoder
-        mo_probs_batch = self.decoder(mo_feats_batch)  # logits -> softmax -> probs
-        co_probs_batch = self.decoder(co_feats_batch)
-        return mo_probs_batch, mo_labels_batch, mo_confidence_batch, co_probs_batch, co_labels_batch, co_confidence_batch
+            # current observation feats and labels
+            if self.cfg_model['train_co_samples']:
+                co_feats = feats[co_rays_idx]
+                co_pe_feats = self.pe(co_pts_4d)
+                co_feats = co_feats + co_pe_feats
+                co_feats_batch.append(co_feats)
+                co_labels_batch.append(co_labels)
+                co_confidence_batch.append(co_confidence)
+
+                # decoder
+                co_probs_batch = self.decoder(co_feats_batch)
+                return mo_probs_batch, mo_labels_batch, mo_confidence_batch, co_probs_batch, co_labels_batch, co_confidence_batch
+        return mo_probs_batch, mo_labels_batch, mo_confidence_batch
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
@@ -126,25 +133,18 @@ class MutualObsPretrainNetwork(LightningModule):
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
-        (mo_probs_batch, mo_labels_batch, mo_confidence_batch,
-         co_probs_batch, co_labels_batch, co_confidence_batch) = self.forward(batch)
+        if self.cfg_model['train_co_samples']:
+            (mo_probs_batch, mo_labels_batch, mo_confidence_batch,
+             co_probs_batch, co_labels_batch, co_confidence_batch) = self.forward(batch)
+        else:
+            mo_probs_batch, mo_labels_batch, mo_confidence_batch = self.forward(batch)
 
         # mutual observation prediction loss
         mo_probs = torch.cat(mo_probs_batch, dim=0)
         mo_labels = torch.cat(mo_labels_batch, dim=0)
         mo_pred_labels = torch.argmax(mo_probs, axis=1)
         mo_confidence = torch.cat(mo_confidence_batch, dim=0)
-        mo_loss = self.get_loss(mo_probs, mo_labels, mo_confidence)
-
-        # current observation occupancy prediction loss
-        co_probs = torch.cat(co_probs_batch, dim=0)
-        co_labels = torch.cat(co_labels_batch, dim=0)
-        co_pred_labels = torch.argmax(co_probs, axis=1)
-        co_confidence = torch.cat(co_confidence_batch, dim=0)
-        co_loss = self.get_loss(co_probs, co_labels, co_confidence)
-
-        # loss
-        loss = mo_loss + co_loss
+        loss = self.get_loss(mo_probs, mo_labels, mo_confidence)
 
         # metrics
         mo_conf_mat = self.ClassificationMetrics.compute_conf_mat(mo_pred_labels, mo_labels)
@@ -153,20 +153,32 @@ class MutualObsPretrainNetwork(LightningModule):
         mo_unk_iou, mo_free_iou, mo_occ_iou = mo_iou[0], mo_iou[1], mo_iou[2]
         # mo_acc = self.ClassificationMetrics.get_acc(conf_mat)
         # mo_unk_acc, mo_free_acc, mo_occ_acc = mo_acc[0], mo_acc[1], mo_acc[2]
-        co_conf_mat = self.ClassificationMetrics.compute_conf_mat(co_pred_labels, co_labels)
-        self.epoch_co_conf_mat.add(co_conf_mat)
-        co_iou = self.ClassificationMetrics.get_iou(co_conf_mat)
-        co_free_iou, co_occ_iou = co_iou[1], co_iou[2]
+
+        # current observation occupancy prediction loss
+        if self.cfg_model['train_co_samples']:
+            co_probs = torch.cat(co_probs_batch, dim=0)
+            co_labels = torch.cat(co_labels_batch, dim=0)
+            co_pred_labels = torch.argmax(co_probs, axis=1)
+            co_confidence = torch.cat(co_confidence_batch, dim=0)
+            co_loss = self.get_loss(co_probs, co_labels, co_confidence)
+
+            # loss
+            loss = loss + co_loss
+
+            # metrics
+            co_conf_mat = self.ClassificationMetrics.compute_conf_mat(co_pred_labels, co_labels)
+            self.epoch_co_conf_mat.add(co_conf_mat)
+            co_iou = self.ClassificationMetrics.get_iou(co_conf_mat)
+            co_free_iou, co_occ_iou = co_iou[1], co_iou[2]
 
         # logging
-        self.log("mo_loss", mo_loss.item(), on_step=True, prog_bar=True, logger=True)
-        self.log("co_loss", co_loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("mo_unk_iou", mo_unk_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("mo_free_iou", mo_free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("mo_occ_iou", mo_occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("co_free_iou", co_free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("co_occ_iou", co_occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        if self.cfg_model['train_co_samples']:
+            self.log("co_free_iou", co_free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+            self.log("co_occ_iou", co_occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
 
         # clean cuda memory
         torch.cuda.empty_cache()
