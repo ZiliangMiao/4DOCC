@@ -24,13 +24,12 @@ uno:
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
   occ_thrd: 0.1
   n_sd_per_sample: 1
-  num_rays: 1000 # number of down-sampled rays per sample [1000]
+  num_rays: 940 # number of down-sampled rays per sample [940]
   num_ray_cls_samples: 10 # number of uno samples per ray per class [10]
-  # total uno samples per class per batch: batch_size * num_rays * num_ray_cls_samples = 16 * 6 * 1000 * 10 = 960,000
-
+  # total uno samples per class per batch: batch_size * num_rays * num_ray_cls_samples = 16 * 6 * 940 * 10 = 902,400
   # training related
-  num_epoch: 100
-  batch_size: 12
+  num_epoch: 50
+  batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 2 # 0-free, 1-occ
   lr_start: 0.00008  # refer to UnO

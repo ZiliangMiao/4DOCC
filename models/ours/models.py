@@ -40,7 +40,8 @@ class MutualObsPretrainNetwork(LightningModule):
         self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
 
         # pytorch lightning training output
-        self.epoch_acc_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
+        self.epoch_mo_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
+        self.epoch_co_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)
 
         # save predictions
         if not train_flag:
@@ -59,44 +60,44 @@ class MutualObsPretrainNetwork(LightningModule):
             self.accumulated_conf_mat = torch.zeros(self.n_mutual_cls, self.n_mutual_cls)  # to calculate point-level avg. iou
 
     def forward(self, batch):
-        # unfold batch: [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_depth, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
-        meta_batch, pcds_batch, mutual_samples_batch = batch
+        # mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence
+        meta_batch, pcds_batch, samples_batch = batch
 
         # encoder
         sparse_featmap = self.encoder(pcds_batch)
 
-        # get mop samples
-        mutual_labels_batch = []
-        mutual_feats_batch = []
-        mutual_confidence_batch = []
-        for batch_idx, mutual_samples in enumerate(mutual_samples_batch):
-            # ref_sd_tok = meta_batch[batch_idx][0]
-            # mutual_sd_toks = meta_batch[batch_idx][1]
-            mutual_obs_rays_idx = mutual_samples[0]
-            mutual_obs_pts = mutual_samples[1]
-            mutual_obs_ts = mutual_samples[2]
-            mutual_obs_labels = mutual_samples[3]
-            mutual_obs_confidence = mutual_samples[4]
+        # get mutual observation and current observation samples
+        mo_feats_batch, mo_labels_batch, mo_confidence_batch = [], [], []
+        co_feats_batch, co_labels_batch, co_confidence_batch = [], [], []
+        for batch_idx, samples in enumerate(samples_batch):
+            # unfold samples
+            mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence = samples
 
-            # point-wise features
+            # get point-wise features
             coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
             feats = sparse_featmap.features_at(batch_index=batch_idx)
-            ref_time_mask = coords[:, -1] == 0
-            # coords = coords[ref_time_mask]
-            query_feats = feats[ref_time_mask][mutual_obs_rays_idx]
+            feats = feats[coords[:, -1] == 0]
 
-            # mutual obs points positional encoding
-            mutual_pts_4d = torch.hstack((mutual_obs_pts, mutual_obs_ts.reshape(-1, 1)))
-            pe_feats = self.pe(mutual_pts_4d)
-            mutual_obs_feats = query_feats + pe_feats
+            # mutual observation feats and labels
+            mo_feats = feats[mo_rays_idx]
+            mo_pe_feats = self.pe(mo_pts_4d)
+            mo_feats = mo_feats + mo_pe_feats
+            mo_feats_batch.append(mo_feats)
+            mo_labels_batch.append(mo_labels)
+            mo_confidence_batch.append(mo_confidence)
 
-            # collate to batch
-            mutual_feats_batch.append(mutual_obs_feats)
-            mutual_labels_batch.append(mutual_obs_labels)
-            mutual_confidence_batch.append(mutual_obs_confidence)
+            # current observation feats and labels
+            co_feats = feats[co_rays_idx]
+            co_pe_feats = self.pe(co_pts_4d)
+            co_feats = co_feats + co_pe_feats
+            co_feats_batch.append(co_feats)
+            co_labels_batch.append(co_labels)
+            co_confidence_batch.append(co_confidence)
+
         # decoder
-        mutual_probs_batch = self.decoder(mutual_feats_batch)  # logits -> softmax -> probs
-        return mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch
+        mo_probs_batch = self.decoder(mo_feats_batch)  # logits -> softmax -> probs
+        co_probs_batch = self.decoder(co_feats_batch)
+        return mo_probs_batch, mo_labels_batch, mo_confidence_batch, co_probs_batch, co_labels_batch, co_confidence_batch
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
@@ -113,42 +114,59 @@ class MutualObsPretrainNetwork(LightningModule):
                                                   gamma=1.0)  # lr_max decrease rate
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
-        # return [optimizer], [scheduler]  # TODO: default scheduler interval is 'epoch'
+        # return [optimizer], [scheduler]  # default scheduler interval is 'epoch'
 
-    def get_loss(self, mutual_probs, mutual_labels, mutual_confidence):
-        mutual_labels = mutual_labels.long()
-        assert len(mutual_labels) == len(mutual_probs)
-        log_prob = torch.log(mutual_probs.clamp(min=1e-8))
+    def get_loss(self, probs, labels, confidence):
+        labels = labels.long()
+        assert len(labels) == len(probs)
+        log_prob = torch.log(probs.clamp(min=1e-8))
         loss_func = nn.NLLLoss(reduction='none')
-        loss = loss_func(log_prob, mutual_labels)  # dtype of torch.nllloss must be torch.long
-        loss = torch.mean(loss * mutual_confidence)  # TODO: add confidence weight
+        loss = loss_func(log_prob, labels)  # dtype of torch.nllloss must be torch.long
+        loss = torch.mean(loss * confidence)
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
-        # model_dict = self.state_dict()  # check state dict
-        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
-        mutual_probs = torch.cat(mutual_probs_batch, dim=0)
-        pred_labels = torch.argmax(mutual_probs, axis=1)
-        mutual_labels = torch.cat(mutual_labels_batch, dim=0)
-        mutual_confidence = torch.cat(mutual_confidence_batch, dim=0)
-        loss = self.get_loss(mutual_probs, mutual_labels, mutual_confidence)
+        (mo_probs_batch, mo_labels_batch, mo_confidence_batch,
+         co_probs_batch, co_labels_batch, co_confidence_batch) = self.forward(batch)
+
+        # mutual observation prediction loss
+        mo_probs = torch.cat(mo_probs_batch, dim=0)
+        mo_labels = torch.cat(mo_labels_batch, dim=0)
+        mo_pred_labels = torch.argmax(mo_probs, axis=1)
+        mo_confidence = torch.cat(mo_confidence_batch, dim=0)
+        mo_loss = self.get_loss(mo_probs, mo_labels, mo_confidence)
+
+        # current observation occupancy prediction loss
+        co_probs = torch.cat(co_probs_batch, dim=0)
+        co_labels = torch.cat(co_labels_batch, dim=0)
+        co_pred_labels = torch.argmax(co_probs, axis=1)
+        co_confidence = torch.cat(co_confidence_batch, dim=0)
+        co_loss = self.get_loss(co_probs, co_labels, co_confidence)
+
+        # loss
+        loss = mo_loss + co_loss
 
         # metrics
-        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
-        iou = self.ClassificationMetrics.get_iou(conf_mat)
-        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
-        acc = self.ClassificationMetrics.get_acc(conf_mat)
-        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
+        mo_conf_mat = self.ClassificationMetrics.compute_conf_mat(mo_pred_labels, mo_labels)
+        self.epoch_mo_conf_mat.add(mo_conf_mat)
+        mo_iou = self.ClassificationMetrics.get_iou(mo_conf_mat)
+        mo_unk_iou, mo_free_iou, mo_occ_iou = mo_iou[0], mo_iou[1], mo_iou[2]
+        # mo_acc = self.ClassificationMetrics.get_acc(conf_mat)
+        # mo_unk_acc, mo_free_acc, mo_occ_acc = mo_acc[0], mo_acc[1], mo_acc[2]
+        co_conf_mat = self.ClassificationMetrics.compute_conf_mat(co_pred_labels, co_labels)
+        self.epoch_co_conf_mat.add(co_conf_mat)
+        co_iou = self.ClassificationMetrics.get_iou(co_conf_mat)
+        co_free_iou, co_occ_iou = co_iou[1], co_iou[2]
 
         # logging
+        self.log("mo_loss", mo_loss.item(), on_step=True, prog_bar=True, logger=True)
+        self.log("co_loss", co_loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
-        self.log("unk_iou", unk_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("free_iou", free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("occ_iou", occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("unk_acc", unk_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("free_acc", free_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.log("occ_acc", occ_acc.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.epoch_acc_conf_mat.add(conf_mat)
+        self.log("mo_unk_iou", mo_unk_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("mo_free_iou", mo_free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("mo_occ_iou", mo_occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("co_free_iou", co_free_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
+        self.log("co_occ_iou", co_occ_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
 
         # clean cuda memory
         torch.cuda.empty_cache()
@@ -156,51 +174,88 @@ class MutualObsPretrainNetwork(LightningModule):
 
     def on_train_epoch_end(self):
         # metrics in one epoch
-        iou = self.ClassificationMetrics.get_iou(self.epoch_acc_conf_mat)
-        unk_iou, free_iou, occ_iou = iou[0], iou[1], iou[2]
-        acc = self.ClassificationMetrics.get_acc(self.epoch_acc_conf_mat)
-        unk_acc, free_acc, occ_acc = acc[0], acc[1], acc[2]
-        self.log("epoch_unk_iou", unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_free_iou", free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_occ_iou", occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_unk_acc", unk_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_free_acc", free_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
-        self.log("epoch_occ_acc", occ_acc.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        mo_iou = self.ClassificationMetrics.get_iou(self.epoch_mo_conf_mat)
+        mo_unk_iou, mo_free_iou, mo_occ_iou = mo_iou[0], mo_iou[1], mo_iou[2]
+        co_iou = self.ClassificationMetrics.get_iou(self.epoch_co_conf_mat)
+        co_free_iou, co_occ_iou = co_iou[1], co_iou[2]
+
+        # log
+        self.log("epoch_mo_unk_iou", mo_unk_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_mo_free_iou", mo_free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_mo_occ_iou", mo_occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_co_free_iou", co_free_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
+        self.log("epoch_co_occ_iou", co_occ_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
         # clean cuda memory
-        self.epoch_acc_conf_mat = self.epoch_acc_conf_mat.zero_()
+        self.epoch_mo_conf_mat = self.epoch_mo_conf_mat.zero_()
+        self.epoch_co_conf_mat = self.epoch_co_conf_mat.zero_()
         torch.cuda.empty_cache()
 
 
-    def predict_step(self, batch: tuple, batch_idx):
-        # model_dict = self.state_dict()  # check state dict
-        meta_batch, _, _ = batch
-        mutual_probs_batch, mutual_labels_batch, mutual_confidence_batch = self.forward(batch)  # encoder & decoder
+    def predict_step(self, batch: tuple, batch_idx, dataloader_idx=0):
+        if self.pred_occ:
+            # TODO: predict occupancy states of the current ray
+            # model_dict = self.state_dict()  # check state dict
+            meta_batch, _, _ = batch
+            occ_probs_batch, occ_labels_batch, _ = self.forward(batch)  # encoder & decoder
 
-        # iterate each batch data for predicted label saving
-        for meta, mutual_probs, mutual_labels in zip(meta_batch, mutual_probs_batch, mutual_labels_batch):
-            sd_tok = meta[0]
-            pred_labels = torch.argmax(mutual_probs, axis=1)
+            # iterate each batch data for predicted label saving
+            for meta, occ_probs, occ_labels in zip(meta_batch, occ_probs_batch, occ_labels_batch):
+                sd_tok = meta[0]
+                pred_labels = torch.argmax(occ_probs, axis=1)
 
-            # metrics
-            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
-            iou = self.ClassificationMetrics.get_iou(conf_mat)
-            unk_iou, free_iou, occ_iou = iou[0].item()*100, iou[1].item()*100, iou[2].item()*100
-            acc = self.ClassificationMetrics.get_acc(conf_mat)
-            unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
+                # metrics
+                conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, occ_labels)
+                iou = self.ClassificationMetrics.get_iou(conf_mat)
+                unk_iou, free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100, iou[2].item() * 100
+                acc = self.ClassificationMetrics.get_acc(conf_mat)
+                unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
 
-            # update confusion matrix
-            self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
+                # update confusion matrix
+                self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
 
-            if self.save_pred_labels:
-                # save predicted labels for visualization
-                pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
-                pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
-                pred_labels.tofile(pred_file)
+                if self.save_pred_labels:
+                    # save predicted labels for visualization
+                    pred_file = os.path.join(self.pred_dir, f"{sd_tok}_occ_pred.label")
+                    pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
+                    pred_labels.tofile(pred_file)
 
-            # logger
-            self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
-                         sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
+                # logger
+                self.test_logger.info(
+                    "Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
+                    sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
+        torch.cuda.empty_cache()
+
+        if self.pred_mop:
+            # TODO: predict unknown occupancy states with mutual observations
+            # model_dict = self.state_dict()  # check state dict
+            meta_batch, _, _ = batch
+            mutual_probs_batch, mutual_labels_batch, _ = self.forward(batch)  # encoder & decoder
+
+            # iterate each batch data for predicted label saving
+            for meta, mutual_probs, mutual_labels in zip(meta_batch, mutual_probs_batch, mutual_labels_batch):
+                sd_tok = meta[0]
+                pred_labels = torch.argmax(mutual_probs, axis=1)
+
+                # metrics
+                conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mutual_labels)
+                iou = self.ClassificationMetrics.get_iou(conf_mat)
+                unk_iou, free_iou, occ_iou = iou[0].item()*100, iou[1].item()*100, iou[2].item()*100
+                acc = self.ClassificationMetrics.get_acc(conf_mat)
+                unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
+
+                # update confusion matrix
+                self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
+
+                if self.save_pred_labels:
+                    # save predicted labels for visualization
+                    pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
+                    pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
+                    pred_labels.tofile(pred_file)
+
+                # logger
+                self.test_logger.info("Val sample data (IoU/Acc): %s, [Unk %.3f/%.3f], [Free %.3f/%.3f], [Occ %.3f/%.3f]",
+                             sd_tok, unk_iou, unk_acc, free_iou, free_acc, occ_iou, occ_acc)
         torch.cuda.empty_cache()
 
 

@@ -77,14 +77,17 @@ class NuscMopDataset(Dataset):
         time_idx = 1
         ref_pts = None
         ref_org = None
+        ref_ts = None
         for i, sd_tok in enumerate(input_sd_toks):
-            lidar_org, pcd, rela_ts, valid_mask = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)  # TODO: filter ego and outside inside func
+            # TODO: filter ego and outside points
+            org, pcd, ts, valid_mask = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
             if i == 0:  # reference sample data token
-                ref_org = lidar_org
+                ref_org = org
                 ref_pts = pcd
+                ref_ts = ts
             # add timestamp (0, -1, -2, ...) to pcd -> pcd_4d
             time_idx -= 1
-            # assert time_idx == round(rela_ts / 0.5), "relative timestamp repeated"  # TODO: corner cases
+            # assert time_idx == round(ts / 0.5), "relative timestamp repeated"  # TODO: has repeated corner cases
             pcd_4d = torch.hstack([pcd, torch.ones(len(pcd)).reshape(-1, 1) * time_idx])
             pcd_4d_list.append(pcd_4d)
         pcds_4d = torch.cat(pcd_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
@@ -93,63 +96,114 @@ class NuscMopDataset(Dataset):
         if self.split == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
 
-        # load labels
+        # load mutual observation samples
         mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
         mutual_obs_meta = os.path.join(mutual_obs_folder, ref_sd_tok + "_key_meta.bin")
         mutual_sd_toks = nusc_utils.get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
-        mutual_obs_rays_idx = os.path.join(mutual_obs_folder, ref_sd_tok + "_rays_idx.bin")
-        mutual_obs_depth = os.path.join(mutual_obs_folder, ref_sd_tok + "_depth.bin")
-        mutual_obs_labels = os.path.join(mutual_obs_folder, ref_sd_tok + "_labels.bin")
-        mutual_obs_confidence = os.path.join(mutual_obs_folder, ref_sd_tok + "_confidence.bin")
+        mop_rays_idx = os.path.join(mutual_obs_folder, ref_sd_tok + "_rays_idx.bin")
+        mop_depth = os.path.join(mutual_obs_folder, ref_sd_tok + "_depth.bin")
+        mop_labels = os.path.join(mutual_obs_folder, ref_sd_tok + "_labels.bin")
+        mop_confidence = os.path.join(mutual_obs_folder, ref_sd_tok + "_confidence.bin")
         mutual_obs_meta = np.fromfile(mutual_obs_meta, dtype=np.uint32).reshape(-1, 2).astype(np.int64)
-        mutual_obs_rays_idx = torch.from_numpy(np.fromfile(mutual_obs_rays_idx, dtype=np.uint16).astype(np.int64))
-        mutual_obs_depth = torch.from_numpy(np.fromfile(mutual_obs_depth, dtype=np.float16).astype(np.float32))
-        mutual_obs_labels = torch.from_numpy(np.fromfile(mutual_obs_labels, dtype=np.uint8).astype(np.int64))
-        mutual_obs_confidence = torch.from_numpy(np.fromfile(mutual_obs_confidence, dtype=np.float16).astype(np.float32))
+        mop_rays_idx = torch.from_numpy(np.fromfile(mop_rays_idx, dtype=np.uint16).astype(np.int64))
+        mop_depth = torch.from_numpy(np.fromfile(mop_depth, dtype=np.float16).astype(np.float32))
+        mop_labels = torch.from_numpy(np.fromfile(mop_labels, dtype=np.uint8).astype(np.int64))
+        mop_confidence = torch.from_numpy(np.fromfile(mop_confidence, dtype=np.float16).astype(np.float32))
         mutual_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
         mutual_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] -
                                       self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
-        mutual_obs_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
+        mop_ts = torch.tensor(mutual_sensors_timestamps)[mutual_sensors_indices]
 
+        # only select background mop samples (unknown occupancy state)
         if self.cfg_model['train_bg_mop_samples']:
             # mask mutual obs points which depth less than ray depth
-            ray_depth = torch.linalg.norm(ref_pts - ref_org, dim=1, keepdim=False)[mutual_obs_rays_idx]
-            bg_mask = mutual_obs_depth >= ray_depth
+            rays_depth = torch.linalg.norm(ref_pts - ref_org, dim=1, keepdim=False)[mop_rays_idx]
+            bg_mask = mop_depth >= rays_depth
             # update valid samples with bg mask
-            mutual_obs_rays_idx = mutual_obs_rays_idx[bg_mask]
-            mutual_obs_depth = mutual_obs_depth[bg_mask]
-            mutual_obs_ts = mutual_obs_ts[bg_mask]
-            mutual_obs_labels = mutual_obs_labels[bg_mask]
-            mutual_obs_confidence = mutual_obs_confidence[bg_mask]
+            mop_rays_idx = mop_rays_idx[bg_mask]
+            mop_depth = mop_depth[bg_mask]
+            mop_ts = mop_ts[bg_mask]
+            mop_labels = mop_labels[bg_mask]
+            mop_confidence = mop_confidence[bg_mask]
 
-        # balanced sampling
-        if self.split == 'train':  # TODO: do not balance sampling when testing
-            mutual_unk_idx = torch.where(mutual_obs_labels == 0)[0]
-            mutual_free_idx = torch.where(mutual_obs_labels == 1)[0]
-            mutual_occ_idx = torch.where(mutual_obs_labels == 2)[0]
+        # TODO: balanced down-sampling for training (do not balance sampling when testing, but cost a lot of gpu memory)
+        mop_unk_idx = torch.where(mop_labels == 0)[0]
+        mop_free_idx = torch.where(mop_labels == 1)[0]
+        mop_occ_idx = torch.where(mop_labels == 2)[0]
 
-            # downsample occ and free class
-            num_free = len(mutual_free_idx)
-            num_occ = len(mutual_occ_idx)
-            num_cls_min = np.min((num_free, num_occ))
-            num_ds_cls = np.min((num_cls_min, self.cfg_model['num_cls_samples_max']))
-            ds_mutual_free_idx = mutual_free_idx[random_sample(range(num_free), num_ds_cls)]
-            ds_mutual_occ_idx = mutual_occ_idx[random_sample(range(num_occ), num_ds_cls)]
+        # downsample occ and free class
+        num_mop_free = len(mop_free_idx)
+        num_mop_occ = len(mop_occ_idx)
+        num_mop_samples_cls = np.min((np.min((num_mop_free, num_mop_occ)), self.cfg_model['max_mop_samples_cls']))
+        ds_mop_free_idx = mop_free_idx[random_sample(range(num_mop_free), num_mop_samples_cls)]
+        ds_mop_occ_idx = mop_occ_idx[random_sample(range(num_mop_occ), num_mop_samples_cls)]
 
-            # downsample unk
-            num_unk = len(mutual_unk_idx)
-            num_ds_unk = np.min((num_unk, int(num_ds_cls * self.cfg_model['unk_samples_pct'] / 100)))
-            ds_mutual_unk_idx = mutual_unk_idx[random_sample(range(num_unk), num_ds_unk)]
+        # downsample unk (a certain percentage of num_mop_samples_cls)
+        num_mop_unk = len(mop_unk_idx)
+        num_mop_samples_unk = np.min((num_mop_unk, int(num_mop_samples_cls * self.cfg_model['unk_samples_pct'] / 100)))
+        ds_mop_unk_idx = mop_unk_idx[random_sample(range(num_mop_unk), num_mop_samples_unk)]
 
-            # update down-sampled mutual obs samples
-            ds_mutual_sample_indices = torch.cat([ds_mutual_unk_idx, ds_mutual_free_idx, ds_mutual_occ_idx])
-            mutual_obs_rays_idx = mutual_obs_rays_idx[ds_mutual_sample_indices]
-            mutual_obs_depth = mutual_obs_depth[ds_mutual_sample_indices]
-            mutual_obs_ts = mutual_obs_ts[ds_mutual_sample_indices]
-            mutual_obs_labels = mutual_obs_labels[ds_mutual_sample_indices]
-            mutual_obs_confidence = mutual_obs_confidence[ds_mutual_sample_indices]
+        # update down-sampled mutual obs samples
+        ds_mop_sample_indices = torch.cat([ds_mop_unk_idx, ds_mop_free_idx, ds_mop_occ_idx])
+        mop_rays_idx = mop_rays_idx[ds_mop_sample_indices]
+        mop_depth = mop_depth[ds_mop_sample_indices]
+        mop_ts = mop_ts[ds_mop_sample_indices]
+        mop_labels = mop_labels[ds_mop_sample_indices]
+        mop_confidence = mop_confidence[ds_mop_sample_indices]
+
+        # rays params
+        num_rays = len(ref_pts)
+        rays_idx = torch.tensor(range(num_rays)).view(-1, 1)
+        rays_dir = F.normalize(ref_pts - ref_org, p=2, dim=1)  # unit vector
+        rays_depth = torch.linalg.norm(ref_pts - ref_org, dim=1, keepdim=True)
 
         # mutual obs points (down-sampled)
-        mutual_rays_dir = F.normalize(ref_pts - ref_org, p=2, dim=1)  # unit vector
-        mutual_obs_pts = ref_org + mutual_obs_depth.reshape(-1, 1) * mutual_rays_dir[mutual_obs_rays_idx]
-        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mutual_obs_rays_idx, mutual_obs_pts, mutual_obs_ts, mutual_obs_labels, mutual_obs_confidence)]
+        mop_pts = ref_org + mop_depth.view(-1, 1) * rays_dir[mop_rays_idx]
+        mop_pts_4d = torch.hstack((mop_pts, mop_ts.reshape(-1, 1)))
+
+        # TODO: balanced sampling of current observation samples (refer to uno)
+        num_co_ray_samples_cls = self.cfg_model['num_co_ray_samples_cls']
+        num_co_samples_cls = np.min(num_co_ray_samples_cls * num_rays, num_mop_samples_cls)
+        rays_dir_broadcast = rays_dir.repeat(1, num_co_ray_samples_cls)
+        rays_depth_broadcast = rays_depth.repeat(1, num_co_ray_samples_cls)  # [num_rays, num_co_ray_samples_cls]
+
+        # occupancy balanced sampling (free points)
+        co_free_depth_scale = torch.rand((num_rays, num_co_ray_samples_cls))
+        co_free_pts_depth = (co_free_depth_scale * rays_depth_broadcast).view(-1, 1)  # [ray_1, ... ray_1, ..., ray_n, ... ray_n]
+        co_free_pts = ref_org + co_free_pts_depth * rays_dir_broadcast.view(-1, 3)
+        co_free_rays_idx = rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1)
+
+        # occupancy balanced sampling (occupied points)
+        co_occ_depth_scale = torch.rand((num_rays, num_co_ray_samples_cls))
+        occ_thrd = torch.full((num_rays, num_co_ray_samples_cls), self.cfg_model['occ_thrd'])
+        co_occ_pts_depth = (rays_depth_broadcast + co_occ_depth_scale * occ_thrd).view(-1, 1)
+        co_occ_pts = ref_org + co_occ_pts_depth * rays_dir_broadcast.view(-1, 3)
+        co_occ_rays_idx = rays_idx.repeat(1, num_co_ray_samples_cls).view(-1, 1)
+
+        # down-sample
+        ds_co_idx_cls = random_sample(range(num_co_ray_samples_cls * num_rays), num_co_samples_cls)
+        co_free_pts = co_free_pts[ds_co_idx_cls]
+        co_free_pts_4d = torch.cat((co_free_pts, torch.full((len(co_free_pts), 1), ref_ts)), dim=1)
+        co_occ_pts = co_occ_pts[ds_co_idx_cls]
+        co_occ_pts_4d = torch.cat((co_occ_pts, torch.full((len(co_occ_pts), 1), ref_ts)), dim=1)
+
+        # labels
+        co_free_rays_idx = co_free_rays_idx[ds_co_idx_cls]
+        co_occ_rays_idx = co_occ_rays_idx[ds_co_idx_cls]
+        co_free_labels = torch.ones(len(co_free_pts), dtype=torch.int64)
+        co_occ_labels = torch.ones(len(co_occ_pts), dtype=torch.int64) * 2
+        co_free_confidence = torch.ones(len(co_free_pts), dtype=torch.float32)
+        co_occ_confidence = torch.exp(-(co_occ_pts_depth[ds_co_idx_cls] - rays_depth_broadcast.view(-1, 1)[ds_co_idx_cls]))
+
+        # concat and append to list
+        co_rays_idx = torch.cat((co_free_rays_idx, co_occ_rays_idx), dim=0)
+        co_pts_4d = torch.cat((co_free_pts_4d, co_occ_pts_4d), dim=0)
+        co_labels = torch.cat((co_free_labels, co_occ_labels), dim=0)
+        co_confidence = torch.cat((co_free_confidence, co_occ_confidence), dim=0)
+
+        # shuffle
+        shuffle_idx = torch.randperm(len(co_pts_4d))
+        co_rays_idx = co_rays_idx[shuffle_idx]
+        co_pts_4d = co_pts_4d[shuffle_idx]
+        co_labels = co_labels[shuffle_idx]
+        return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mop_rays_idx, mop_pts_4d, mop_labels, mop_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence)]

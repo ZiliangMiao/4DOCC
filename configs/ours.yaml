@@ -31,11 +31,12 @@ mop:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 16
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
-  num_cls_samples_max: 100000 # max number of mop samples for each class
-  unk_samples_pct: 1 # 1% unknown mop samples
+  max_mop_samples_cls: 100000 # max number of mop samples for each class
+  num_co_ray_samples_cls: 10 # co: current observation
+  unk_samples_pct: 100 # 1% unknown mop samples
   lr_start: 0.00008  # refer to UnO
   lr_max: 0.0008  # refer to UnO
   lr_min: 0  # refer to UnO
@@ -48,7 +49,7 @@ mop:  # mutual observation pretraining
 
 # Background samples test
 mop_test:
-  model_dir: './logs/ours/mop(1:4:5)/100%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  model_dir: './logs/ours/mop_bg_100%unk_shuffle/100%nuscenes/vs-0.1_t-3.0_bs-16/version_0'
   test_epoch: [49, 39, 29, 19, 09]
   test_dataset: 'nuscenes'
   num_devices: 1
