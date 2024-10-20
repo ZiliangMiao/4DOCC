@@ -51,7 +51,7 @@ color_first_return = my_cmap[0]
 color_second_return = my_cmap[1]
 
 occ_colormap = {
-    0: (255 / 255, 255 / 255, 255 / 255),  # unknown: black
+    0: (255 / 255, 255 / 255, 255 / 255),  # unknown: white
     1: (0 / 255, 153 / 255, 41 / 255),  # tp (free -> free): green #009929
     2: (230 / 255, 172 / 255, 0 / 255),  # tn (occ -> occ): yellow #E6AC00
     3: (0 / 255, 163 / 255, 166 / 255),  # fp (free -> occ): cyan #00A3A6
@@ -59,7 +59,7 @@ occ_colormap = {
 }
 
 mos_colormap = {
-    0: (255 / 255, 255 / 255, 255 / 255),  # unknown: black
+    0: (255 / 255, 255 / 255, 255 / 255),  # unknown: white
     1: (63 / 255, 79 / 255, 153 / 255),  # tp (sta -> sta): blue #3F4F99
     2: (153 / 255, 50 / 255, 50 / 255),  # tn (mov -> mov): red #993232
     3: (63 / 255, 79 / 255, 153 / 255),  # fp (sta -> mov): blue #3F4F99
@@ -253,13 +253,13 @@ def split_to_samples_boston(nusc, split_logs):
     return sample_tokens, sample_data_tokens
 
 
-def get_vis_sd_toks(nusc, source: str, split: str, bg_label_dir, label_suffix: str):
+def get_vis_sd_toks(nusc, source: str, split: str, pred_labels_dir, label_suffix: str):
     if source == 'all':
         split_logs = create_splits_logs(split, nusc)
         sample_tokens, sd_toks_list = split_to_samples(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(bg_label_dir)
+        mos_pred_file_list = os.listdir(pred_labels_dir)
         for i in range(len(mos_pred_file_list)):
             mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list
@@ -271,7 +271,7 @@ def get_vis_sd_toks(nusc, source: str, split: str, bg_label_dir, label_suffix: s
         sample_tokens, sd_toks_list = split_to_samples_singapore(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(bg_label_dir)
+        mos_pred_file_list = os.listdir(pred_labels_dir)
         for i in range(len(mos_pred_file_list)):
             mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list
@@ -283,7 +283,7 @@ def get_vis_sd_toks(nusc, source: str, split: str, bg_label_dir, label_suffix: s
         sample_tokens, sd_toks_list = split_to_samples_boston(nusc, split_logs)
 
         # list predicted labels to get all valid sd tokens
-        mos_pred_file_list = os.listdir(bg_label_dir)
+        mos_pred_file_list = os.listdir(pred_labels_dir)
         for i in range(len(mos_pred_file_list)):
             mos_pred_file_list[i] = mos_pred_file_list[i].replace(label_suffix, '')
         valid_sd_toks_list = mos_pred_file_list

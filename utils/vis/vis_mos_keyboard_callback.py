@@ -14,6 +14,7 @@ import warnings
 import matplotlib
 import numpy as np
 import torch
+import yaml
 from tqdm import tqdm
 import multiprocessing
 from nuscenes.nuscenes import NuScenes
@@ -25,9 +26,12 @@ from datasets.nusc_utils import get_outside_scene_mask, get_ego_mask
 from open3d_vis_utils import draw_box, get_confusion_color, mos_color_func, get_vis_sd_toks
 
 
-def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
-    # vis sample index
-    sample_idx = 0
+def render_mos_samples(nusc, sd_toks_list, vis_cfg):
+    # visualization cfg
+    sample_idx = vis_cfg['mos']['start_sample_idx']
+    ours_dir = vis_cfg['mos']['ours_dir']
+    baseline_dir = vis_cfg['mos']['baseline_dir']
+    point_size = vis_cfg['mos']['point_size']
 
     # TODO: skip flag 实在没办法解决按一次render两次. 打个补丁吧
     skip_flag = True
@@ -79,14 +83,10 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
         pcl_path = os.path.join(nusc.dataroot, sample_data['filename'])
         points = LidarPointCloud.from_file(pcl_path).points.T  # [num_points, 4]
         ego_mask = get_ego_mask(torch.tensor(points))
-        outside_scene_mask = get_outside_scene_mask(torch.tensor(points), [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5])
+        outside_scene_mask = get_outside_scene_mask(torch.tensor(points), vis_cfg['mos']['scene_bbox'],
+                                                                          mask_z=False, upper_bound=True)
         valid_mask = torch.logical_and(~ego_mask, ~outside_scene_mask)
         points = points[valid_mask]
-
-        # bboxes
-        _, box_list, _ = nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
-        baseline_vis = draw_box(baseline_vis, box_list)
-        ours_vis = draw_box(ours_vis, box_list)
 
         # labels
         gt_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
@@ -95,6 +95,29 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
         baseline_labels = np.fromfile(baseline_labels_file, dtype=np.uint8)
         ours_labels_file = os.path.join(ours_dir, sd_tok + "_mos_pred.label")
         ours_labels = np.fromfile(ours_labels_file, dtype=np.uint8)
+
+        # moving object bboxes and test metrics
+        _, box_list, _ = nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
+        mov_box_list = []
+        mov_obj_num = 0
+        inconsistent_obj_num = 0
+        for ann_tok, box in zip(sample['anns'], box_list):
+            ann = nusc.get('sample_annotation', ann_tok)
+            if ann['num_lidar_pts'] == 0: continue
+            obj_pts_mask = points_in_box(box, points[:, :3].T)
+            if np.sum(obj_pts_mask) == 0: continue
+            gt_obj_labels = gt_labels[obj_pts_mask]
+            mov_pts_mask = gt_obj_labels == 2
+            if np.sum(mov_pts_mask) == 0:
+                continue
+            else:
+                mov_obj_num += 1
+                mov_box_list.append(box)
+                if len(np.unique(gt_obj_labels)) != 1:
+                    inconsistent_obj_num += 1
+        baseline_vis = draw_box(baseline_vis, mov_box_list)
+        ours_vis = draw_box(ours_vis, mov_box_list)
+        print(f"Number of moving objects: {mov_obj_num}, Number of inconsistent moving object: {inconsistent_obj_num}")
 
         # origin
         axis_pcd = open3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
@@ -109,34 +132,6 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
         ours_pts.points = open3d.utility.Vector3dVector(points[:, :3])
         ours_vis.add_geometry(ours_pts)
 
-        # colored by predicted labels
-        # vfunc = np.vectorize(mos_colormap.get)
-        # gt_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(gt_labels[valid_mask])).T)
-        # baseline_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(baseline_labels)).T)
-        # ours_pts.colors = open3d.utility.Vector3dVector(np.array(vfunc(ours_labels)).T)
-
-        # test metrics visualization
-        mov_obj_num = 0
-        inconsistent_obj_num = 0
-        for ann_tok, box in zip(sample['anns'], box_list):
-            ann = nusc.get('sample_annotation', ann_tok)
-            if ann['num_lidar_pts'] == 0: continue
-            obj_pts_mask = points_in_box(box, points[:, :3].T)
-            obj_pts_indices = np.where(obj_pts_mask)[0]
-            if np.sum(obj_pts_mask) == 0:  # not lidar points in obj bbox
-                continue
-            # gt and pred object labels
-            gt_obj_labels = gt_labels[obj_pts_mask]
-            mov_pts_mask = gt_obj_labels == 2
-            mov_pts_indices = np.where(mov_pts_mask)[0]
-            if np.sum(mov_pts_mask) == 0:  # static object
-                continue
-            else:
-                mov_obj_num += 1
-                if len(np.unique(gt_obj_labels)) != 1:
-                    inconsistent_obj_num += 1
-        print(f"Number of moving objects: {mov_obj_num}, Number of inconsistent moving object: {inconsistent_obj_num}")
-
         # colored by TP TN FP FN
         baseline_colors = get_confusion_color(gt_labels, baseline_labels)
         ours_colors = get_confusion_color(gt_labels, ours_labels)
@@ -144,9 +139,9 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
         ours_pts.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(ours_colors)).T)
 
         # view settings
-        baseline_vis.get_render_option().point_size = 9.0
+        baseline_vis.get_render_option().point_size = point_size
         baseline_vis.get_render_option().background_color = (0 / 255, 0 / 255, 0 / 255)
-        ours_vis.get_render_option().point_size = 9.0
+        ours_vis.get_render_option().point_size = point_size
         ours_vis.get_render_option().background_color = (0 / 255, 0 / 255, 0 / 255)
 
         # view options
@@ -221,25 +216,15 @@ def render_mos_samples(nusc, sd_toks_list, baseline_dir, ours_dir):
 
 if __name__ == '__main__':
     open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)  # TODO: ignore stupid open3d warnings
-
-    baseline_dir = '../../logs/mos_baseline/mos4d_train/50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_199'
-    ours_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_199'
-    source = 'all'  # 'all', 'given'
-
-    parser = argparse.ArgumentParser(description='Generate nuScenes lidar panaptic gt.')
-    parser.add_argument('--root_dir', type=str, default='/home/user/Datasets/nuScenes')
-    parser.add_argument('--baseline_dir', type=str, default=baseline_dir)
-    parser.add_argument('--ours_dir', type=str, default=ours_dir)
-    parser.add_argument('--source', type=str, choices=['all', 'singapore', 'boston', 'given'], default=source)
-    parser.add_argument('--version', type=str, default='v1.0-trainval')
-    parser.add_argument('--verbose', type=bool, default=True, help='Whether to print to stdout.')
-    args = parser.parse_args()
-
-    nusc = NuScenes(version=args.version, dataroot=args.root_dir, verbose=args.verbose)
-    if not hasattr(nusc, "lidarseg") or len(getattr(nusc, 'lidarseg')) == 0:
-        raise RuntimeError(f"No nuscenes-lidarseg annotations found in {nusc.version}")
     warnings.filterwarnings("ignore")
 
+    with open('vis_cfg.yaml', 'r') as f:
+        vis_cfg = yaml.safe_load(f)
+
+    nusc = NuScenes(version='v1.0-trainval', dataroot=vis_cfg['mos']['dataset_root'], verbose=True)
+    if not hasattr(nusc, "lidarseg") or len(getattr(nusc, 'lidarseg')) == 0:
+        raise RuntimeError(f"No nuscenes-lidarseg annotations found in {nusc.version}")
+
     # render mos samples
-    sd_toks_list = get_vis_sd_toks(nusc, source, ours_dir)
-    render_mos_samples(nusc, sd_toks_list, args.baseline_dir, args.ours_dir)
+    sd_toks_list = get_vis_sd_toks(nusc, vis_cfg['mos']['source'], 'val', vis_cfg['mos']['ours_dir'], label_suffix='_mos_pred.label')
+    render_mos_samples(nusc, sd_toks_list, vis_cfg)

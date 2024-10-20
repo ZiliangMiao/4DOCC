@@ -430,5 +430,5 @@ if __name__ == '__main__':
 
     # visualization
     source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', bg_label_dir=os.path.join(nusc.dataroot, 'mutual_obs_labels', nusc.version), label_suffix='_depth.bin')
+    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', pred_labels_dir=os.path.join(nusc.dataroot, 'mutual_obs_labels', nusc.version), label_suffix='_depth.bin')
     draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)
