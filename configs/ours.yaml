@@ -29,7 +29,7 @@ mop:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 4
+  batch_size: 16
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   max_mop_samples_cls: 100000 # max number of mop samples for each class

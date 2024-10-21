@@ -199,7 +199,7 @@ class NuscMopDataset(Dataset):
         if self.cfg_model['train_co_samples']:
             # TODO: balanced sampling of current observation samples (refer to uno)
             num_co_ray_samples_cls = self.cfg_model['num_co_ray_samples_cls']
-            num_co_samples_cls = np.min((num_co_ray_samples_cls * num_rays, num_mo_samples_cls))
+            num_co_samples_cls = np.min((np.min((num_co_ray_samples_cls * num_rays, num_mo_samples_cls)), self.cfg_model['max_mop_samples_cls']))
             rays_dir_broadcast = rays_dir.repeat(1, num_co_ray_samples_cls)
             rays_depth_broadcast = rays_depth.repeat(1, num_co_ray_samples_cls)  # [num_rays, num_co_ray_samples_cls]
 
