@@ -89,9 +89,6 @@ class MutualObsPretrainNetwork(LightningModule):
             mo_labels_batch.append(mo_labels)
             mo_confidence_batch.append(mo_confidence)
 
-            # decoder
-            mo_probs_batch = self.decoder(mo_feats_batch)  # logits -> softmax -> probs
-
             # current observation feats and labels
             if self.cfg_model['train_co_samples']:
                 co_feats = feats[co_rays_idx]
@@ -101,9 +98,12 @@ class MutualObsPretrainNetwork(LightningModule):
                 co_labels_batch.append(co_labels)
                 co_confidence_batch.append(co_confidence)
 
-                # decoder
-                co_probs_batch = self.decoder(co_feats_batch)
-                return mo_probs_batch, mo_labels_batch, mo_confidence_batch, co_probs_batch, co_labels_batch, co_confidence_batch
+        # decoder TODO: bug
+        mo_probs_batch = self.decoder(mo_feats_batch)  # logits -> softmax -> probs
+        if self.cfg_model['train_co_samples']:
+            # decoder
+            co_probs_batch = self.decoder(co_feats_batch)
+            return mo_probs_batch, mo_labels_batch, mo_confidence_batch, co_probs_batch, co_labels_batch, co_confidence_batch
         return mo_probs_batch, mo_labels_batch, mo_confidence_batch
 
     def configure_optimizers(self):

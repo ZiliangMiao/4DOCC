@@ -29,7 +29,7 @@ mop:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 16
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   max_mop_samples_cls: 100000 # max number of mop samples for each class
@@ -37,10 +37,10 @@ mop:  # mutual observation pretraining
   unk_samples_pct: 100 # 1% unknown mop samples
   train_co_samples: True
   train_bg_mop_samples: True # if True, only use background mutual observation samples for pre-training
-  lr_start: 0.00008  # refer to UnO
-  lr_max: 0.0008  # refer to UnO
+  lr_start: 0.000005  # refer to UnO [8e-5]
+  lr_max: 0.00005  # refer to UnO [8e-4]
   lr_min: 0  # refer to UnO
-  weight_decay: 0.0001  # refer to UnO
+  weight_decay: 0.0001  # refer to UnO [1e-4]
 
   # device related
   num_workers: 4
