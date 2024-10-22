@@ -19,20 +19,17 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from nuscenes.nuscenes import NuScenes
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
-from models.mos4d.models import MosNetwork
+from models.semantic.models import SemanticNetwork
 from datasets.nusc_utils import NuscDataloader
-from datasets.mos4d.nusc import NuscMosDataset
+from datasets.semantic.nusc import NuscSemanticDataset
 
 
-def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
+def semantic_baseline_train(model_cfg, dataset_cfg, resume_version):
     # params
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    if model_cfg['shuffle']:
-        train_dir = f"./logs/mos_baseline/mos4d_shuffle/{downsample_pct}%{dataset_name}"
-    else:
-        train_dir = f"./logs/mos_baseline/mos4d/{downsample_pct}%{dataset_name}"
+    train_dir = f"./logs/semantic_baseline/semantic/{downsample_pct}%{dataset_name}"
     os.makedirs(train_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -41,15 +38,15 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
     # model
-    model = MosNetwork(model_cfg, True)
+    model = SemanticNetwork(model_cfg, True)
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -120,7 +117,7 @@ def load_pretrained_encoder(ckpt_path, model):
     return model
 
 
-def mos_finetune(model_cfg, dataset_cfg, resume_version):
+def semantic_finetune(model_cfg, dataset_cfg, resume_version):
     # pre-training checkpoint path
     pre_method = model_cfg["pretrain_method"]
     pre_dataset = model_cfg["pretrain_dataset"]
@@ -135,7 +132,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    finetune_dir = f"./logs/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"  # TODO: rename
+    finetune_dir = f"./logs/{pre_method}(epoch-{pre_epoch})-semantic_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"  # TODO: rename
     os.makedirs(finetune_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -144,15 +141,15 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
     # load pre-trained encoder to fine-tuning model
-    finetune_model = MosNetwork(model_cfg, True)
+    finetune_model = SemanticNetwork(model_cfg, True)
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -195,7 +192,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         trainer.fit(finetune_model, train_dataloader)
 
 
-def mos_test(cfg_test, cfg_dataset):
+def semantic_test(cfg_test, cfg_dataset):
     # model config
     model_dir = cfg_test['model_dir']
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
@@ -206,8 +203,8 @@ def mos_test(cfg_test, cfg_dataset):
     test_dataset = cfg_test['test_dataset']
     assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'val')
+    train_set = NuscSemanticDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscSemanticDataset(nusc, cfg_model, cfg_dataset, 'val')
     dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
@@ -231,7 +228,7 @@ def mos_test(cfg_test, cfg_dataset):
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
         # model
-        model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc)
+        model = SemanticNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc)
         iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
 
         # predict
@@ -271,7 +268,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # load config
-    with open("configs/mos4d.yaml", "r") as f:
+    with open("configs/semantic.yaml", "r") as f:
         cfg = yaml.safe_load(f)
     with open("configs/dataset.yaml", "r") as f:
         dataset_cfg = yaml.safe_load(f)
@@ -284,8 +281,8 @@ if __name__ == "__main__":
 
     # training from scratch
     if args.mode == 'train':
-        mos4d_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
+        semantic_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'finetune':
-        mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
+        semantic_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'test':
-        mos_test(cfg[args.mode], dataset_cfg)
+        semantic_test(cfg[args.mode], dataset_cfg)

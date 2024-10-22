@@ -132,7 +132,7 @@ class UnONetwork(LightningModule):
         free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
         acc = self.ClassificationMetrics.get_acc(conf_mat)
         free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100
-        self.epoch_acc_conf_mat.add(conf_mat)  # add conf mat to epoch accumulated conf mat
+        self.epoch_acc_conf_mat += conf_mat  # add conf mat to epoch accumulated conf mat
 
         # logging
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)

@@ -23,7 +23,6 @@ class MosNetwork(LightningModule):
         self.cfg_model = cfg_model
         self.n_mos_cls = 3  # 0 -> unknown, 1 -> static, 2 -> moving
         self.ignore_class_idx = [0]  # ignore unknown class when calculating scores
-        self.mov_class_idx = 2
         # self.dt_prediction = self.cfg_model["time_interval"]
 
         # only encoder, no decoder
@@ -32,9 +31,8 @@ class MosNetwork(LightningModule):
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_mos_cls, self.ignore_class_idx)
 
-        # pytorch lightning training output
-        self.training_step_outputs = []
-        self.validation_step_outputs = []
+        # epoch accumulation
+        self.epoch_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)
 
         # loss
         weight = [0.0 if i in self.ignore_class_idx else 1.0 for i in range(self.n_mos_cls)]
@@ -110,24 +108,19 @@ class MosNetwork(LightningModule):
         self.log("loss", loss.item(), on_step=True, prog_bar=True, logger=True)
         self.log("sta_iou", sta_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
         self.log("mov_iou", mov_iou.item() * 100, on_step=True, prog_bar=True, logger=True)
-        self.training_step_outputs.append({"loss": loss.item(), "confusion_matrix": conf_mat})
+        self.epoch_conf_mat += conf_mat
         torch.cuda.empty_cache()
         return loss
 
     def on_train_epoch_end(self):
-        conf_mat_list = [output["confusion_matrix"] for output in self.training_step_outputs]
-        acc_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)
-        for conf_mat in conf_mat_list:
-            acc_conf_mat = acc_conf_mat.add(conf_mat)
-
         # metrics in one epoch
-        iou = self.ClassificationMetrics.get_iou(acc_conf_mat)
+        iou = self.ClassificationMetrics.get_iou(self.epoch_conf_mat)
         sta_iou, mov_iou = iou[1], iou[2]
         self.log("epoch_sta_iou", sta_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
         self.log("epoch_mov_iou", mov_iou.item() * 100, on_epoch=True, prog_bar=True, logger=True)
 
         # clean
-        self.training_step_outputs = []
+        self.epoch_conf_mat.zero_()
         torch.cuda.empty_cache()
 
     def validation_step(self, batch: tuple, batch_idx):
@@ -202,7 +195,7 @@ class MosNetwork(LightningModule):
                 self.no_mov_sample_num += 1
 
             # metric-4: point-level iou
-            self.accumulated_conf_mat = self.accumulated_conf_mat.add(sample_conf_mat)
+            self.accumulated_conf_mat += sample_conf_mat
 
             # save predicted labels
             mos_pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mos_pred.label")

@@ -2,7 +2,7 @@ train:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 50 # use 10% of training dataset to train the model
+  downsample_pct: 10 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
@@ -64,7 +64,7 @@ finetune:
   num_epoch: 600
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
-  lr_start: 0.0001  # refer to mos4d [1e-4]
+  lr_start: 0.0001  # refer to mos4d [1e-4] 0.001
   lr_epoch: 1 # refer to mos4d [1]
   lr_decay: 0.99 # refer to mos4d [0.99]
   weight_decay: 0.0001 # refer to mos4d [1e-4]

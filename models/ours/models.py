@@ -148,7 +148,7 @@ class MutualObsPretrainNetwork(LightningModule):
 
         # metrics
         mo_conf_mat = self.ClassificationMetrics.compute_conf_mat(mo_pred_labels, mo_labels)
-        self.epoch_mo_conf_mat.add(mo_conf_mat)
+        self.epoch_mo_conf_mat += mo_conf_mat
         mo_iou = self.ClassificationMetrics.get_iou(mo_conf_mat)
         mo_unk_iou, mo_free_iou, mo_occ_iou = mo_iou[0], mo_iou[1], mo_iou[2]
         # mo_acc = self.ClassificationMetrics.get_acc(conf_mat)
@@ -167,7 +167,7 @@ class MutualObsPretrainNetwork(LightningModule):
 
             # metrics
             co_conf_mat = self.ClassificationMetrics.compute_conf_mat(co_pred_labels, co_labels)
-            self.epoch_co_conf_mat.add(co_conf_mat)
+            self.epoch_co_conf_mat += co_conf_mat
             co_iou = self.ClassificationMetrics.get_iou(co_conf_mat)
             co_free_iou, co_occ_iou = co_iou[1], co_iou[2]
 
@@ -224,7 +224,7 @@ class MutualObsPretrainNetwork(LightningModule):
                 unk_acc, free_acc, occ_acc = acc[0].item() * 100, acc[1].item() * 100, acc[2].item() * 100
 
                 # update confusion matrix
-                self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
+                self.accumulated_conf_mat += conf_mat
 
                 if self.save_pred_labels:
                     # save predicted labels for visualization
@@ -257,7 +257,7 @@ class MutualObsPretrainNetwork(LightningModule):
                 unk_acc, free_acc, occ_acc = acc[0].item()*100, acc[1].item()*100, acc[2].item()*100
 
                 # update confusion matrix
-                self.accumulated_conf_mat = self.accumulated_conf_mat.add(conf_mat)
+                self.accumulated_conf_mat += conf_mat
 
                 if self.save_pred_labels:
                     # save predicted labels for visualization
