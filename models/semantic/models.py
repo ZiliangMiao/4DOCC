@@ -122,7 +122,7 @@ class SemanticNetwork(LightningModule):
     def on_train_epoch_end(self):
         # metrics in one epoch
         iou = self.ClassificationMetrics.get_iou(self.epoch_conf_mat)
-        semantic_cls_names = list(self.cfg_semantic['labels_16'].values())[1:-1]
+        semantic_cls_names = list(self.cfg_semantic['labels_16'].values())
 
         # logging
         miou_list = []
