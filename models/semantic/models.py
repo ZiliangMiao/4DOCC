@@ -54,9 +54,6 @@ class SemanticNetwork(LightningModule):
 
             # metrics
             self.accumulated_conf_mat = torch.zeros(self.n_cls, self.n_cls)  # to calculate point-level avg. iou
-            self.mov_obj_num = 0  # number of all moving objects
-            self.det_mov_obj_cnt = 0  # count of detected moving objects
-            self.no_mov_sample_num = 0  # number of samples that have no moving objects
 
     def forward(self, batch: dict):
         # unfold batch data
@@ -121,8 +118,8 @@ class SemanticNetwork(LightningModule):
 
     def on_train_epoch_end(self):
         # metrics in one epoch
-        iou = self.ClassificationMetrics.get_iou(self.epoch_conf_mat)
-        semantic_cls_names = list(self.cfg_semantic['labels_16'].values())
+        iou = self.ClassificationMetrics.get_iou(self.epoch_conf_mat)[1:]  # remove noise
+        semantic_cls_names = list(self.cfg_semantic['labels_16'].values())[1:]  # remove noise
 
         # logging
         miou_list = []
@@ -142,7 +139,25 @@ class SemanticNetwork(LightningModule):
         a = 1
 
     def predict_step(self, batch: tuple, batch_idx):
-        a = 1
+        sd_toks_batch, pcds_batch, semantic_labels_batch = batch
+        semantic_probs_batch = self.forward(batch)  # encoder & decoder
+
+        for sd_tok, pcds_4d, semantic_probs, semantic_labels in zip(sd_toks_batch, pcds_batch, semantic_probs_batch, semantic_labels_batch):
+            # prediction
+            pred_labels = torch.argmax(semantic_probs, axis=1)
+
+            # metric
+            conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, semantic_labels)
+            self.accumulated_conf_mat += conf_mat
+            iou = self.ClassificationMetrics.get_iou(conf_mat)[1:]
+
+            # save predicted labels
+            semantic_pred_file = os.path.join(self.pred_dir, f"{sd_tok}_semantic_pred.label")
+            pred_labels = torch.argmax(semantic_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
+            pred_labels.tofile(semantic_pred_file)
+
+            # logging
+            self.test_logger.info("Val sd tok: %s, mIoU: %.3f", sd_tok, np.mean(list(iou * 100)))
         torch.cuda.empty_cache()
 
 

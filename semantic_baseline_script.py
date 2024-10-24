@@ -229,31 +229,20 @@ def semantic_test(cfg_test, cfg_dataset):
 
         # model
         model = SemanticNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc)
-        iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
 
         # predict
         trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
         trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
 
-        # metric-1: object-level detection rate
-        det_rate = model.det_mov_obj_cnt / (model.mov_obj_num + 1e-15)
-        logger.info('Metric-1 moving object detection rate: %.3f' % (det_rate * 100))
+        # metric
+        semantic_cls_names = list(model.cfg_semantic['labels_16'].values())[1:]  # remove noise
+        iou = model.ClassificationMetrics.get_iou(model.accumulated_conf_mat)[1:]
 
-        # metric-2: object-level iou
-        obj_iou_mean = torch.mean(torch.tensor(model.object_iou_list)).item()
-        logger.info('Metric-2 object-level avg. moving iou: %.3f' % (obj_iou_mean * 100))
+        # metric-1: semantic class mean IoU
+        for cls_name, cls_iou in zip(semantic_cls_names, iou):
+            logger.info(cls_name + "IoU: %.3f", cls_iou * 100)
 
-        # metric-3: sample-level iou
-        sample_iou_mean = torch.mean(torch.tensor(model.sample_iou_list)).item()
-        logger.info('Metric-3 sample-level avg. moving iou: %.3f' % (sample_iou_mean * 100))
-
-        # metric-4: point-level iou
-        point_iou = iou_metric.get_iou(model.accumulated_conf_mat)
-        logger.info('Metric-4 point-level moving iou: %.3f' % (point_iou[2] * 100))
-        logger.info('Metric-4 point-level static iou: %.3f' % (point_iou[1] * 100))
-
-        # statistics
-        logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
+        logger.info("Semantic class mean IoU: %.3f", np.mean(list(iou * 100)))
 
 
 if __name__ == "__main__":
