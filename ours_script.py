@@ -17,7 +17,7 @@ from models.ours.models import MutualObsPretrainNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
 from datasets.nusc_utils import NuscDataloader
-from datasets.ours.nusc import NuscMopDataset
+from datasets.ours.nusc import NuscMoCoDataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
@@ -25,7 +25,7 @@ from utils.metrics import ClassificationMetrics
 
 def statistics(cfg_model, cfg_dataset):
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    nuscenes = NuscMopDataset(nusc, cfg_model, cfg_dataset, "train")
+    nuscenes = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, "train")
     num_occ_percentage_per_ray = []
     num_occ_total = 0
     num_free_total = 0
@@ -82,9 +82,9 @@ def mutual_observation_pretrain(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    unk_pct = model_cfg['unk_samples_pct']
-    train_bg_mop = model_cfg['train_bg_mop_samples']
-    pretrain_method = f"mop_bg_{unk_pct}%unk" if train_bg_mop else f"mop_all_{unk_pct}%unk"
+    unk_pct = model_cfg['mo_samples_unk_pct']
+    train_bg_mo = model_cfg['train_bg_mo_samples']
+    pretrain_method = f"moco_bg_{unk_pct}%unk" if train_bg_mo else f"mo_all_{unk_pct}%unk"
     pretrain_dir = f"./logs/ours/{pretrain_method}/{downsample_pct}%{dataset_name}"
     os.makedirs(pretrain_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
@@ -95,8 +95,8 @@ def mutual_observation_pretrain(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMopDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
@@ -156,8 +156,8 @@ def mutual_obs_test(cfg_test, cfg_dataset):
     test_dataset = cfg_test['test_dataset']
     assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscMopDataset(nusc, cfg_model, cfg_dataset, 'val')
+    train_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'val')
     dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
@@ -203,7 +203,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['mop', 'mop_test'], default='mop')
+    parser.add_argument('--mode', choices=['moco', 'moco_test'], default='moco')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     parser.add_argument('--statistics', type=bool, default=False)
@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
     # statistics of background samples
     if args.statistics:
-        statistics(cfg['mop'], dataset_cfg)
+        statistics(cfg['moco'], dataset_cfg)
 
     # dataset root path at different platform
     if args.autodl:
@@ -226,8 +226,8 @@ if __name__ == "__main__":
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
 
     # pre-training on background for motion segmentation task
-    if args.mode == 'mop':
+    if args.mode == 'moco':
         mutual_observation_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
     # background test
-    elif args.mode == 'mop_test':
+    elif args.mode == 'moco_test':
         mutual_obs_test(cfg[args.mode], dataset_cfg)

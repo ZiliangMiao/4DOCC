@@ -260,7 +260,7 @@ class MutualObsPretrainNetwork(LightningModule):
 
                 if self.save_pred_labels:
                     # save predicted labels for visualization
-                    pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mop_pred.label")
+                    pred_file = os.path.join(self.pred_dir, f"{sd_tok}_moco_pred.label")
                     pred_labels = pred_labels.type(torch.uint8).detach().cpu().numpy()
                     pred_labels.tofile(pred_file)
 
