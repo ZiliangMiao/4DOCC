@@ -33,7 +33,7 @@ class MutualObsPretrainNetwork(LightningModule):
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model)
         self.pe = PositionalEncoding(feat_dim=self.cfg_model["feat_dim"], pos_dim=self.cfg_model['pos_dim'])
-        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 128, 64, 32, 16, self.n_mutual_cls])
+        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"] * 2, planes=[256, 128, 64, 32, 16, self.n_mutual_cls])
 
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
@@ -92,7 +92,7 @@ class MutualObsPretrainNetwork(LightningModule):
             if self.cfg_model['train_co_samples']:
                 co_feats = feats[co_rays_idx]
                 co_pe_feats = self.pe(co_pts_4d)
-                co_feats = co_feats + co_pe_feats
+                co_feats = torch.cat((co_feats, co_pe_feats), dim=1)
                 co_feats_batch.append(co_feats)
                 co_labels_batch.append(co_labels)
                 co_confidence_batch.append(co_confidence)
