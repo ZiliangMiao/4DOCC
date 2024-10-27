@@ -83,7 +83,7 @@ class MutualObsPretrainNetwork(LightningModule):
             # mutual observation feats and labels
             mo_feats = feats[mo_rays_idx]
             mo_pe_feats = self.pe(mo_pts_4d)
-            mo_feats = mo_feats + mo_pe_feats
+            mo_feats = torch.cat((mo_feats, mo_pe_feats), dim=1)
             mo_feats_batch.append(mo_feats)
             mo_labels_batch.append(mo_labels)
             mo_confidence_batch.append(mo_confidence)
