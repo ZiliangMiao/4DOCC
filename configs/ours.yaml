@@ -10,7 +10,8 @@ mop:  # mutual observation pretraining
   # pre-processing
   max_range: 100 # sqrt(70^2 + 70^2 + 4.5^2)
   dvg_ang: 0.0030 # beam divergence angle (Velodyne HDL-32E: 0.003 (horizontal), 0.0012 (vertical))
-  occ_thrd: 0.105361  # log_e(10/9)
+  occ_thrd: 0.105361  # -ln(0.9)
+  unk_thrd: 2.302585 # -ln(0.1)
   n_sd_per_sample: 1
 
   # data processing related
@@ -29,7 +30,7 @@ mop:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 16
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   max_mop_samples_cls: 100000 # max number of mop samples for each class

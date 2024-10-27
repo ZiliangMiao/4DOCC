@@ -10,7 +10,6 @@ import numpy as np
 from lib.minkowski.resnet import ResNetBase
 from pytorch_lightning import LightningModule
 import MinkowskiEngine as ME
-from MinkowskiEngine.modules.resnet_block import BasicBlock
 from models.backbone import MinkUNetBackbone
 from utils.metrics import ClassificationMetrics
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
@@ -339,19 +338,19 @@ class BackgroundFieldMLP(nn.Module):
         super().__init__()
         self.block = nn.Sequential(OrderedDict([
             ('linear0', nn.Linear(in_dim, planes[0])),
-            ('bn0', nn.BatchNorm1d(planes[0])),
+            # ('bn0', nn.BatchNorm1d(planes[0])),
             ('relu0', nn.ReLU(inplace=False)),
             ('linear1', nn.Linear(planes[0], planes[1])),
-            ('bn1', nn.BatchNorm1d(planes[1])),
+            # ('bn1', nn.BatchNorm1d(planes[1])),
             ('relu1', nn.ReLU(inplace=False)),
             ('linear2', nn.Linear(planes[1], planes[2])),
-            ('bn2', nn.BatchNorm1d(planes[2])),
+            # ('bn2', nn.BatchNorm1d(planes[2])),
             ('relu2', nn.ReLU(inplace=False)),
             ('linear3', nn.Linear(planes[2], planes[3])),
-            ('bn3', nn.BatchNorm1d(planes[3])),
+            # ('bn3', nn.BatchNorm1d(planes[3])),
             ('relu3', nn.ReLU(inplace=False)),
             ('linear4', nn.Linear(planes[3], planes[4])),
-            ('bn4', nn.BatchNorm1d(planes[4])),
+            # ('bn4', nn.BatchNorm1d(planes[4])),
             ('relu4', nn.ReLU(inplace=False)),
             ('final', nn.Linear(planes[4], planes[5])),
             ('softmax', nn.Softmax(dim=1)),

@@ -1,6 +1,6 @@
 # Dataset Config
 nuscenes: # ours label
-  root: "/Datasets_0/nuScenes"  # /root/autodl-tmp/Datasets/nuScenes /home/user/Datasets/nuScenes
+  root: "/Datasets/nuScenes"  # /root/autodl-tmp/Datasets/nuScenes /home/user/Datasets/nuScenes
   version: "v1.0-trainval" # "v1.0-mini"
 SEKITTI:
   PATH: "/home/user/Datasets/SeKITTI/sequences" # labeled by PRPonn, seq 00-21

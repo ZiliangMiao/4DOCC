@@ -165,7 +165,7 @@ def mutual_obs_test(cfg_test, cfg_dataset):
     for test_epoch in cfg_test["test_epoch"]:
         # logger
         date = datetime.now().strftime('%m%d')  # %m%d-%H%M
-        log_file = os.path.join(log_dir, f"epoch_{test_epoch}_{date}.txt")
+        log_file = os.path.join(log_dir,    f"epoch_{test_epoch}_{date}.txt")
         formatter = logging.Formatter(fmt='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     if args.autodl:
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
     else:
-        dataset_cfg['nuscenes']['root'] = '/home/user' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
 
     # pre-training on background for motion segmentation task
     if args.mode == 'mop':

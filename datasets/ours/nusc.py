@@ -1,6 +1,6 @@
 import os
-from collections import defaultdict
-
+import time
+from collections import defaultdict, Counter
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -113,7 +113,7 @@ class NuscMopDataset(Dataset):
         mo_labels = os.path.join(mutual_obs_folder, ref_sd_tok + "_labels.bin")
         mo_confidence = os.path.join(mutual_obs_folder, ref_sd_tok + "_confidence.bin")
         mutual_obs_meta = np.fromfile(mutual_obs_meta, dtype=np.uint32).reshape(-1, 2).astype(np.int64)
-        mo_rays_idx = torch.from_numpy(np.fromfile(mo_rays_idx, dtype=np.uint16).astype(np.int64))
+        mo_rays_idx = np.fromfile(mo_rays_idx, dtype=np.uint16).astype(np.int64)
         mo_depth = torch.from_numpy(np.fromfile(mo_depth, dtype=np.float16).astype(np.float32))
         mo_labels = torch.from_numpy(np.fromfile(mo_labels, dtype=np.uint8).astype(np.int64))
         mo_confidence = torch.from_numpy(np.fromfile(mo_confidence, dtype=np.float16).astype(np.float32))
@@ -195,6 +195,19 @@ class NuscMopDataset(Dataset):
         # mutual obs points (down-sampled)
         mo_pts = ref_org + mo_depth.view(-1, 1) * rays_dir[mo_rays_idx]
         mo_pts_4d = torch.hstack((mo_pts, mo_ts.reshape(-1, 1)))
+
+        # TODO: ray level average
+        # t_s = time.perf_counter()
+        # count points num on rays
+        num_mo_sample_per_ray = Counter(mo_rays_idx)
+        # average
+        samples_weight_by_ray = np.ones(num_rays)
+        samples_weight_by_ray[list(num_mo_sample_per_ray.keys())] = list(num_mo_sample_per_ray.values())
+        samples_weight_by_ray = (1. / samples_weight_by_ray).astype(np.float32)
+        mo_confidence = mo_confidence * samples_weight_by_ray[mo_rays_idx]
+        # t_e = time.perf_counter()
+        # print(t_e - t_s)
+
 
         if self.cfg_model['train_co_samples']:
             # TODO: balanced sampling of current observation samples (refer to uno)

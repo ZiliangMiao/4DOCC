@@ -161,7 +161,7 @@ if __name__ == "__main__":
     if args.autodl:
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
     else:
-        dataset_cfg['nuscenes']['root'] = '/home/user' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
 
     # occ4d pretrain
     if args.mode == 'occ4d':

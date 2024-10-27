@@ -20,7 +20,7 @@ train:
   outside_scene_mask_ub: True
 
   # training related
-  num_epoch: 600
+  num_epoch: 300
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
@@ -34,9 +34,9 @@ train:
 
 
 finetune:
-  pretrain_method: "ours/mop_bg_100%unk_shuffle"
+  pretrain_method: "forecast_baseline/occ4d"
   pretrain_dataset: "100%nuscenes"
-  pretrain_params: "vs-0.1_t-3.0_bs-16"
+  pretrain_params: "vs-0.1_t-3.0_bs-2"
   pretrain_version: 0
   pretrain_epoch: 49
 
@@ -75,7 +75,8 @@ finetune:
 
 
 test:
-  model_dir: './logs/ours/mop_bg_100%unk_shuffle(epoch-49)-semantic_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [79] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99], [109, 119, 129, 139, 149, 159, 169, 179, 189, 199] [209, 219, 229, 239, 249, 259, 269, 279, 289, 299] [309, 319, 329, 339, 349, 359, 369, 379, 389, 399], [409, 419, 429, 439, 449, 459, 469, 479, 489, 499], [509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  # 539, 549, 559, 569, 579, 589, 599
+  model_dir: './logs/ours/moco_8e-4(epoch-49)-semantic_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch:  [109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
   test_dataset: 'nuscenes'
   num_devices: 1
