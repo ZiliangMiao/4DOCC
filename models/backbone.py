@@ -72,15 +72,21 @@ class MinkUNetBackbone(ResNetBase):
 
         self.inplanes = self.PLANES[7] + self.INIT_DIM
         self.block8 = self._make_layer(self.BLOCK, self.PLANES[7], self.LAYERS[7])
+        self.relu = ME.MinkowskiReLU(inplace=True)
 
         # final layer
-        self.final = ME.MinkowskiConvolution(
+        self.final_0 = ME.MinkowskiConvolution(
             self.PLANES[7] * self.BLOCK.expansion,
+            out_channels / 2,
+            kernel_size=1,
+            bias=True,
+            dimension=D)
+        self.final_1 = ME.MinkowskiConvolution(
+            out_channels / 2,
             out_channels,
             kernel_size=1,
             bias=True,
             dimension=D)
-        self.relu = ME.MinkowskiReLU(inplace=True)
 
 
     def forward(self, x):
@@ -142,5 +148,7 @@ class MinkUNetBackbone(ResNetBase):
         out = self.block8(out)
 
         # uno (feature dim from 8 -> 128)
-        out = self.final(out)
+        out = self.final_0(out)
+        out = self.relu(out)
+        out = self.final_1(out)
         return out

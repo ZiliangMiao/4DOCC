@@ -21,7 +21,7 @@ moco:  # mutual observation pretraining
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
-  feat_dim: 128 # feature dimension of each point
+  feat_dim: 256 # feature dimension of each point
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
   outside_scene_mask: True
@@ -30,7 +30,7 @@ moco:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 8
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   # mutual observation
@@ -48,7 +48,7 @@ moco:  # mutual observation pretraining
   weight_decay: 0.0001  # refer to UnO [1e-4]
 
   # device related
-  num_workers: 8
+  num_workers: 1
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
