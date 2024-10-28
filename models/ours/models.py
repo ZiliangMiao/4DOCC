@@ -33,7 +33,7 @@ class MutualObsPretrainNetwork(LightningModule):
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model)
         self.pe = PositionalEncoding(feat_dim=self.cfg_model["feat_dim"], pos_dim=self.cfg_model['pos_dim'])
-        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 256, 128, 64, 32, 16, self.n_mutual_cls])
+        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 128, 64, 32, 16, self.n_mutual_cls])
 
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
@@ -354,10 +354,7 @@ class BackgroundFieldMLP(nn.Module):
             ('linear4', nn.Linear(planes[3], planes[4])),
             # ('bn4', nn.BatchNorm1d(planes[4])),
             ('relu4', nn.ReLU(inplace=False)),
-            ('linear5', nn.Linear(planes[4], planes[5])),
-            # ('bn5', nn.BatchNorm1d(planes[5])),
-            ('relu5', nn.ReLU(inplace=False)),
-            ('final', nn.Linear(planes[5], planes[6])),
+            ('final', nn.Linear(planes[4], planes[5])),
             ('softmax', nn.Softmax(dim=1)),
         ]))
 
