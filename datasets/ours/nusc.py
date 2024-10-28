@@ -143,12 +143,12 @@ class NuscMoCoDataset(Dataset):
 
         # TODO: down-sample occ and free class
         num_ds_unk_samples = np.min((int(num_mo_occ * self.cfg_model['mo_samples_unk_pct'] / 100), num_mo_unk))
-        num_ds_free_samples = np.min((int(num_mo_free * self.cfg_model['mo_samples_free_pct'] / 100), num_mo_free))
+        num_ds_free_samples = np.min((int(num_mo_occ * self.cfg_model['mo_samples_free_pct'] / 100), num_mo_free))
         ds_mo_unk_idx = mo_unk_idx[random_sample(range(num_mo_unk), num_ds_unk_samples)]
         ds_mo_free_idx = mo_free_idx[random_sample(range(num_mo_free), num_ds_free_samples)]
 
         # TODO: occupied class weight
-        mo_confidence[mo_occ_idx] = mo_confidence[mo_occ_idx] * (num_ds_free_samples / num_mo_occ)
+        mo_confidence[mo_occ_idx] = mo_confidence[mo_occ_idx] * (self.cfg_model['mo_samples_free_pct'] / 100)
 
         # update down-sampled mutual obs samples
         ds_mo_sample_indices = torch.cat([ds_mo_unk_idx, ds_mo_free_idx, mo_occ_idx])
@@ -162,7 +162,7 @@ class NuscMoCoDataset(Dataset):
         mo_pts = ref_org + mo_depth.view(-1, 1) * rays_dir[mo_rays_idx]
         mo_pts_4d = torch.hstack((mo_pts, mo_ts.reshape(-1, 1)))
 
-        # TODO: ray level average
+        # TODO: ray average weight
         # count points num on rays
         num_mo_sample_per_ray = Counter(mo_rays_idx)
         # average
@@ -214,6 +214,9 @@ class NuscMoCoDataset(Dataset):
 
             # TODO: class weight
             co_occ_confidence = co_occ_confidence * (num_co_rays_free / num_co_rays_occ)
+            # TODO: ray avg weight
+            co_free_confidence = co_free_confidence * 1 / (num_co_rays_free + num_co_rays_occ)
+            co_occ_confidence = co_occ_confidence * 1 / (num_co_rays_free + num_co_rays_occ)
 
             # concat and append to list
             co_rays_idx = torch.cat((co_free_rays_idx, co_occ_rays_idx), dim=0)
@@ -222,11 +225,11 @@ class NuscMoCoDataset(Dataset):
             co_confidence = torch.cat((co_free_confidence, co_occ_confidence), dim=0)
 
             # TODO: shuffle
-            shuffle_idx = np.random.permutation(len(co_pts_4d))
-            co_rays_idx = co_rays_idx[shuffle_idx]
-            co_pts_4d = co_pts_4d[shuffle_idx]
-            co_labels = co_labels[shuffle_idx]
-            co_confidence = co_confidence[shuffle_idx]
+            # shuffle_idx = np.random.permutation(len(co_pts_4d))
+            # co_rays_idx = co_rays_idx[shuffle_idx]
+            # co_pts_4d = co_pts_4d[shuffle_idx]
+            # co_labels = co_labels[shuffle_idx]
+            # co_confidence = co_confidence[shuffle_idx]
             return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence)]
         else:
             return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence)]

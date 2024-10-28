@@ -77,12 +77,12 @@ class MinkUNetBackbone(ResNetBase):
         # final layer
         self.final_0 = ME.MinkowskiConvolution(
             self.PLANES[7] * self.BLOCK.expansion,
-            out_channels / 2,
+            int(out_channels / 2),
             kernel_size=1,
             bias=True,
             dimension=D)
         self.final_1 = ME.MinkowskiConvolution(
-            out_channels / 2,
+            int(out_channels / 2),
             out_channels,
             kernel_size=1,
             bias=True,
