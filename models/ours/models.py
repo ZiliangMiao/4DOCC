@@ -33,7 +33,7 @@ class MutualObsPretrainNetwork(LightningModule):
         # encoder and decoder
         self.encoder = MotionEncoder(self.cfg_model)
         self.pe = PositionalEncoding(feat_dim=self.cfg_model["feat_dim"], pos_dim=self.cfg_model['pos_dim'])
-        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"] * 2, planes=[256, 256, 128, 64, 32, 16, self.n_mutual_cls])
+        self.decoder = BackgroundFieldMLP(in_dim=self.cfg_model["feat_dim"], planes=[256, 256, 128, 64, 32, 16, self.n_mutual_cls])
 
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_mutual_cls, ignore_index=[])
@@ -83,7 +83,8 @@ class MutualObsPretrainNetwork(LightningModule):
             # mutual observation feats and labels
             mo_feats = feats[mo_rays_idx]
             mo_pe_feats = self.pe(mo_pts_4d)
-            mo_feats = torch.cat((mo_feats, mo_pe_feats), dim=1)
+            # mo_feats = torch.cat((mo_feats, mo_pe_feats), dim=1)
+            mo_feats = mo_feats + mo_pe_feats
             mo_feats_batch.append(mo_feats)
             mo_labels_batch.append(mo_labels)
             mo_confidence_batch.append(mo_confidence)
@@ -92,7 +93,8 @@ class MutualObsPretrainNetwork(LightningModule):
             if self.cfg_model['train_co_samples']:
                 co_feats = feats[co_rays_idx]
                 co_pe_feats = self.pe(co_pts_4d)
-                co_feats = torch.cat((co_feats, co_pe_feats), dim=1)
+                # co_feats = torch.cat((co_feats, co_pe_feats), dim=1)
+                co_feats = co_feats + co_pe_feats
                 co_feats_batch.append(co_feats)
                 co_labels_batch.append(co_labels)
                 co_confidence_batch.append(co_confidence)
