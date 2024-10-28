@@ -124,13 +124,16 @@ class MutualObsPretrainNetwork(LightningModule):
         # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_epoch, gamma=lr_decay)
         # return [optimizer], [scheduler]  # default scheduler interval is 'epoch'
 
-    def get_loss(self, probs, labels, confidence):
+    def get_loss(self, probs, labels, confidence, mean:bool):
         labels = labels.long()
         assert len(labels) == len(probs)
         log_prob = torch.log(probs.clamp(min=1e-8))
         loss_func = nn.NLLLoss(reduction='none')
         loss = loss_func(log_prob, labels)  # dtype of torch.nllloss must be torch.long
-        loss = torch.mean(loss * confidence)
+        if mean:
+            loss = torch.mean(loss * confidence)
+        else:
+            loss = torch.sum(loss * confidence)
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
@@ -145,15 +148,20 @@ class MutualObsPretrainNetwork(LightningModule):
         mo_labels = torch.cat(mo_labels_batch, dim=0)
         mo_pred_labels = torch.argmax(mo_probs, axis=1)
         mo_confidence = torch.cat(mo_confidence_batch, dim=0)
-        loss = self.get_loss(mo_probs, mo_labels, mo_confidence)
+        loss = self.get_loss(mo_probs, mo_labels, mo_confidence, mean=True)
+        self.log("mutual loss", loss.item(), on_step=True, prog_bar=True, logger=True)
+        # unk_mask = mo_labels == 0
+        # free_mask = mo_labels == 1
+        # occ_mask = mo_labels == 2
+        # loss_unk = self.get_loss(mo_probs[unk_mask], mo_labels[unk_mask], mo_confidence[unk_mask], mean=True)
+        # loss_free = self.get_loss(mo_probs[free_mask], mo_labels[free_mask], mo_confidence[free_mask], mean=True)
+        # loss_occ = self.get_loss(mo_probs[occ_mask], mo_labels[occ_mask], mo_confidence[occ_mask], mean=True)
 
         # metrics
         mo_conf_mat = self.ClassificationMetrics.compute_conf_mat(mo_pred_labels, mo_labels)
         self.epoch_mo_conf_mat += mo_conf_mat
         mo_iou = self.ClassificationMetrics.get_iou(mo_conf_mat)
         mo_unk_iou, mo_free_iou, mo_occ_iou = mo_iou[0], mo_iou[1], mo_iou[2]
-        # mo_acc = self.ClassificationMetrics.get_acc(conf_mat)
-        # mo_unk_acc, mo_free_acc, mo_occ_acc = mo_acc[0], mo_acc[1], mo_acc[2]
 
         # current observation occupancy prediction loss
         if self.cfg_model['train_co_samples']:
@@ -161,7 +169,12 @@ class MutualObsPretrainNetwork(LightningModule):
             co_labels = torch.cat(co_labels_batch, dim=0)
             co_pred_labels = torch.argmax(co_probs, axis=1)
             co_confidence = torch.cat(co_confidence_batch, dim=0)
-            co_loss = self.get_loss(co_probs, co_labels, co_confidence)
+            co_loss = self.get_loss(co_probs, co_labels, co_confidence, mean=True)
+            self.log("current loss", co_loss.item(), on_step=True, prog_bar=True, logger=True)
+            # free_mask = co_labels == 1
+            # occ_mask = co_labels == 2
+            # loss_co_free = self.get_loss(co_probs[free_mask], co_labels[free_mask], co_confidence[free_mask], mean=True)
+            # loss_co_occ = self.get_loss(co_probs[occ_mask], co_labels[occ_mask], co_confidence[occ_mask], mean=True)
 
             # loss
             loss = loss + co_loss

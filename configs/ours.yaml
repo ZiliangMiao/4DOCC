@@ -30,7 +30,7 @@ moco:  # mutual observation pretraining
 
   # training related
   num_epoch: 50
-  batch_size: 2
+  batch_size: 8
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   # mutual observation
@@ -39,8 +39,8 @@ moco:  # mutual observation pretraining
   mo_samples_unk_pct: 500 # 500% unknown mo samples, compared to occ samples
   # current observation
   train_co_samples: True
-  num_co_rays_free: 50
-  num_co_rays_occ: 10 # 20000 * 110 = 2,200,000 co samples for a scan
+  num_co_rays_free: 25
+  num_co_rays_occ: 5 # 20000 * 110 = 2,200,000 co samples for a scan
   # learning scheduler
   lr_start: 0.000005  # refer to UnO [8e-5]
   lr_max: 0.00005  # refer to UnO [8e-4]
@@ -48,7 +48,7 @@ moco:  # mutual observation pretraining
   weight_decay: 0.0001  # refer to UnO [1e-4]
 
   # device related
-  num_workers: 12
+  num_workers: 16
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
