@@ -1,4 +1,6 @@
 import os
+from collections import OrderedDict
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,7 +28,11 @@ class MosNetwork(LightningModule):
         # self.dt_prediction = self.cfg_model["time_interval"]
 
         # only encoder, no decoder
-        self.encoder = MOSModel(cfg_model, self.n_mos_cls)
+        if self.cfg_model['use_mlp_decoder']:
+            self.encoder = MOSModel(cfg_model, self.cfg_model['pretrain_featdim'])
+            self.decoder = MOSHead(in_dim=self.cfg_model['pretrain_featdim'], planes=[128, 64, 32, 16, self.n_mos_cls])
+        else:
+            self.encoder = MOSModel(cfg_model, self.n_mos_cls)
 
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_mos_cls, self.ignore_class_idx)
@@ -61,14 +67,19 @@ class MosNetwork(LightningModule):
         meta_batch, pcds_batch, _ = batch
 
         # encoder
-        softmax = nn.Softmax(dim=1)
         sparse_featmap = self.encoder(pcds_batch)
+
+        # decoder
+        softmax = nn.Softmax(dim=1)
         mos_probs_batch = []
         for batch_idx in range(len(pcds_batch)):
             coords = sparse_featmap.coordinates_at(batch_index=batch_idx)
             feats = sparse_featmap.features_at(batch_index=batch_idx)
             ref_time_mask = coords[:, -1] == 0
             mos_feats = feats[ref_time_mask]
+            # TODO: add a MLP decoder
+            if self.cfg_model['use_mlp_decoder']:
+                mos_feats = self.decoder(mos_feats)
             mos_feats[:, self.ignore_class_idx] = -float("inf")
             mos_probs = softmax(mos_feats)
             mos_probs_batch.append(mos_probs)
@@ -213,12 +224,11 @@ class MosNetwork(LightningModule):
 
 
 class MOSModel(nn.Module):
-    def __init__(self, cfg_model: dict, n_classes: int):
+    def __init__(self, cfg_model: dict, n_mos_cls: int):
         super().__init__()
 
         # backbone network
-        self.n_mos_cls = 3  # 0: static, 1: moving
-        self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=self.n_mos_cls, D=cfg_model['pos_dim'])
+        self.MinkUNet = MinkUNetBackbone(in_channels=1, out_channels=n_mos_cls, D=cfg_model['pos_dim'])
 
         dx = dy = dz = cfg_model["quant_size"]
         dt = 1  # TODO: should be cfg_model["time_interval"], handle different lidar frequency of kitti and nuscenes
@@ -242,6 +252,31 @@ class MOSModel(nn.Module):
         sparse_featmap = sparse_output.slice(tensor_field)
         sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
         return sparse_featmap
+
+
+class MOSHead(nn.Module):
+    def __init__(self, in_dim, planes, **kwargs):
+        super().__init__()
+        self.block = nn.Sequential(OrderedDict([
+            ('linear0', nn.Linear(in_dim, planes[0])),
+            ('relu0', nn.ReLU(inplace=False)),
+            ('linear1', nn.Linear(planes[0], planes[1])),
+            ('relu1', nn.ReLU(inplace=False)),
+            ('linear2', nn.Linear(planes[1], planes[2])),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('linear3', nn.Linear(planes[2], planes[3])),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('final', nn.Linear(planes[3], planes[4])),
+        ]))
+
+    def forward(self, x):
+        if type(x) is list:  # input batch data, not concatenated data
+            probs_list = []
+            for x_i in x:
+                probs_list.append(self.block(x_i))
+            return probs_list
+        else:
+            return self.block(x)
 
 
 

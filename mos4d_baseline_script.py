@@ -90,29 +90,23 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
         trainer.fit(model, train_dataloader)
 
 
-def load_pretrained_encoder(ckpt_path, model):
-    # if len(os.listdir(ckpt_dir)) > 0:
-    #     pattern = re.compile(r"model_epoch_(\d+).pth")
-    #     epochs = []
-    #     for f in os.listdir(ckpt_dir):
-    #         m = pattern.findall(f)
-    #         if len(m) > 0:
-    #             epochs.append(int(m[0]))
-    #     resume_epoch = max(epochs)
-    #     ckpt_path = f"{ckpt_dir}/model_epoch_{resume_epoch}.pth"
+def load_pretrained_encoder(ckpt_path, model, use_mlp_decoder:bool):
     print(f"Load pretrained encoder from checkpoint {ckpt_path}")
     checkpoint = torch.load(ckpt_path)
     pretrained_dict = checkpoint["state_dict"]
     model_dict = model.state_dict()
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and 'decoder' not in k}
 
-    # filter out unnecessary keys (generate new dict)
-    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-    if 'encoder.MinkUNet.final.kernel' in pretrained_dict.keys():
-        pretrained_dict.pop('encoder.MinkUNet.final.kernel')
-    if 'encoder.MinkUNet.final.bias' in pretrained_dict.keys():
-        pretrained_dict.pop('encoder.MinkUNet.final.bias')
-    if 'loss.weight' in pretrained_dict.keys():
-        pretrained_dict.pop('loss.weight')
+    if use_mlp_decoder:
+        if 'loss.weight' in pretrained_dict.keys():
+            pretrained_dict.pop('loss.weight')
+    else: # filter out unnecessary keys (generate new dict)
+        if 'encoder.MinkUNet.final.kernel' in pretrained_dict.keys():
+            pretrained_dict.pop('encoder.MinkUNet.final.kernel')
+        if 'encoder.MinkUNet.final.bias' in pretrained_dict.keys():
+            pretrained_dict.pop('encoder.MinkUNet.final.bias')
+        if 'loss.weight' in pretrained_dict.keys():
+            pretrained_dict.pop('loss.weight')
     # overwrite finetune model dict
     model_dict.update(pretrained_dict)
     # load the pretrained model dict
@@ -127,7 +121,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     pre_params = model_cfg["pretrain_params"]
     pre_version = model_cfg["pretrain_version"]
     pre_epoch = model_cfg["pretrain_epoch"]
-    pretrain_model_dir = f"./logs/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints" # TODO: rename
+    pretrain_model_dir = f"./logs/{pre_method}/{pre_dataset}/{pre_params}/version_{pre_version}/checkpoints"
     pretrain_ckpt_name = f"epoch={pre_epoch}.ckpt"
     pretrain_ckpt_path = os.path.join(pretrain_model_dir, pretrain_ckpt_name)
 
@@ -135,7 +129,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     dataset_name = model_cfg['dataset_name']
     assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
-    finetune_dir = f"./logs/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"  # TODO: rename
+    finetune_dir = f"./logs/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
     os.makedirs(finetune_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -191,7 +185,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         resume_ckpt_path = os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(finetune_model, train_dataloader, ckpt_path=resume_ckpt_path)
     else:
-        finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model)
+        finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model, model_cfg['use_mlp_decoder'])
         trainer.fit(finetune_model, train_dataloader)
 
 
@@ -265,7 +259,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='finetune')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()

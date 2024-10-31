@@ -81,12 +81,6 @@ class MinkUNetBackbone(ResNetBase):
             kernel_size=1,
             bias=True,
             dimension=D)
-        # self.final_1 = ME.MinkowskiConvolution(
-        #     int(out_channels / 2),
-        #     out_channels,
-        #     kernel_size=1,
-        #     bias=True,
-        #     dimension=D)
 
 
     def forward(self, x):
@@ -149,6 +143,4 @@ class MinkUNetBackbone(ResNetBase):
 
         # uno (feature dim from 8 -> 128)
         out = self.final(out)
-        # out = self.relu(out)
-        # out = self.final_1(out)
         return out
