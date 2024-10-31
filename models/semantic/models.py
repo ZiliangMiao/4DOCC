@@ -33,7 +33,7 @@ class SemanticNetwork(LightningModule):
 
         # encoder - decoder
         if self.cfg_model['use_mlp_decoder']:
-            self.encoder = SemanticHead(cfg_model, self.cfg_model['pretrain_featdim'])
+            self.encoder = SemanticModel(cfg_model, self.cfg_model['pretrain_featdim'])
             self.decoder = SemanticHead(in_dim=self.cfg_model['pretrain_featdim'], planes=[128, 64, 32, 16, self.n_cls])
         else:
             self.encoder = SemanticModel(cfg_model, self.n_cls)
