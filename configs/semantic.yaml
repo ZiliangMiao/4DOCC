@@ -5,6 +5,7 @@ train:
   downsample_pct: 10 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
+  use_mlp_decoder: False
 
   # data processing related
   n_input: 6
@@ -39,6 +40,8 @@ finetune:
   pretrain_params: "vs-0.1_t-3.0_bs-2"
   pretrain_version: 0
   pretrain_epoch: 49
+  pretrain_featdim: 128
+  use_mlp_decoder: True
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"

@@ -64,7 +64,7 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
         save_top_k=model_cfg['num_epoch'],
         mode="max",
         filename="{epoch}",
-        every_n_epochs=5,
+        every_n_epochs=10,
         save_last=True,
     )
 
@@ -259,7 +259,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='finetune')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()

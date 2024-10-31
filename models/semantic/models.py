@@ -1,4 +1,6 @@
 import os
+from collections import OrderedDict
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -29,8 +31,12 @@ class SemanticNetwork(LightningModule):
         with open("configs/semantic_learning_map.yaml", "r") as f:
             self.cfg_semantic = yaml.safe_load(f)
 
-        # only encoder, no decoder
-        self.encoder = SemanticModel(cfg_model, self.n_cls)
+        # encoder - decoder
+        if self.cfg_model['use_mlp_decoder']:
+            self.encoder = SemanticHead(cfg_model, self.cfg_model['pretrain_featdim'])
+            self.decoder = SemanticHead(in_dim=self.cfg_model['pretrain_featdim'], planes=[128, 64, 32, 16, self.n_cls])
+        else:
+            self.encoder = SemanticModel(cfg_model, self.n_cls)
 
         # metrics
         self.ClassificationMetrics = ClassificationMetrics(self.n_cls, self.ignore_class_idx)
@@ -68,6 +74,9 @@ class SemanticNetwork(LightningModule):
             feats = sparse_featmap.features_at(batch_index=batch_idx)
             ref_time_mask = coords[:, -1] == 0
             semantic_feats = feats[ref_time_mask]
+            # TODO: add a MLP decoder
+            if self.cfg_model['use_mlp_decoder']:
+                semantic_feats = self.decoder(semantic_feats)
             semantic_feats[:, self.ignore_class_idx] = -float("inf")
             semantic_probs = softmax(semantic_feats)
             semantic_probs_batch.append(semantic_probs)
@@ -196,6 +205,30 @@ class SemanticModel(nn.Module):
         sparse_featmap = sparse_output.slice(tensor_field)
         sparse_featmap.coordinates[:, 1:] = torch.mul(sparse_featmap.coordinates[:, 1:], self.quant)
         return sparse_featmap
+
+class SemanticHead(nn.Module):
+    def __init__(self, in_dim, planes, **kwargs):
+        super().__init__()
+        self.block = nn.Sequential(OrderedDict([
+            ('linear0', nn.Linear(in_dim, planes[0])),
+            ('relu0', nn.ReLU(inplace=False)),
+            ('linear1', nn.Linear(planes[0], planes[1])),
+            ('relu1', nn.ReLU(inplace=False)),
+            ('linear2', nn.Linear(planes[1], planes[2])),
+            ('relu2', nn.ReLU(inplace=False)),
+            ('linear3', nn.Linear(planes[2], planes[3])),
+            ('relu3', nn.ReLU(inplace=False)),
+            ('final', nn.Linear(planes[3], planes[4])),
+        ]))
+
+    def forward(self, x):
+        if type(x) is list:  # input batch data, not concatenated data
+            probs_list = []
+            for x_i in x:
+                probs_list.append(self.block(x_i))
+            return probs_list
+        else:
+            return self.block(x)
 
 
 

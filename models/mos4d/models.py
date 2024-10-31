@@ -27,7 +27,7 @@ class MosNetwork(LightningModule):
         self.ignore_class_idx = [0]  # ignore unknown class when calculating scores
         # self.dt_prediction = self.cfg_model["time_interval"]
 
-        # only encoder, no decoder
+        # encoder - decoder
         if self.cfg_model['use_mlp_decoder']:
             self.encoder = MOSModel(cfg_model, self.cfg_model['pretrain_featdim'])
             self.decoder = MOSHead(in_dim=self.cfg_model['pretrain_featdim'], planes=[128, 64, 32, 16, self.n_mos_cls])
