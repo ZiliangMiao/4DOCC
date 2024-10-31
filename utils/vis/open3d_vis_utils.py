@@ -59,7 +59,7 @@ occ_colormap = {
 }
 
 mos_colormap = {
-    0: (255 / 255, 255 / 255, 255 / 255),  # unknown: white
+    0: (155 / 255, 155 / 255, 155 / 255),  # unknown: white
     1: (63 / 255, 79 / 255, 153 / 255),  # tp (sta -> sta): blue #3F4F99
     2: (153 / 255, 50 / 255, 50 / 255),  # tn (mov -> mov): red #993232
     3: (63 / 255, 79 / 255, 153 / 255),  # fp (sta -> mov): blue #3F4F99

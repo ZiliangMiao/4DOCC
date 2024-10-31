@@ -140,9 +140,9 @@ def render_mos_samples(nusc, sd_toks_list, vis_cfg):
 
         # view settings
         baseline_vis.get_render_option().point_size = point_size
-        baseline_vis.get_render_option().background_color = (0 / 255, 0 / 255, 0 / 255)
+        baseline_vis.get_render_option().background_color = (255 / 255, 255 / 255, 255 / 255)
         ours_vis.get_render_option().point_size = point_size
-        ours_vis.get_render_option().background_color = (0 / 255, 0 / 255, 0 / 255)
+        ours_vis.get_render_option().background_color = (255 / 255, 255 / 255, 255 / 255)
 
         # view options
         baseline_view = baseline_vis.get_view_control()
