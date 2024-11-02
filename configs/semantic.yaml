@@ -2,7 +2,7 @@ train:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 10 # use 10% of training dataset to train the model
+  downsample_pct: 20 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
   use_mlp_decoder: False
@@ -30,7 +30,7 @@ train:
   weight_decay: 0.0001
 
   # device related
-  num_workers: 12
+  num_workers: 16
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
@@ -79,7 +79,7 @@ finetune:
 
 test:
   # 539, 549, 559, 569, 579, 589, 599
-  model_dir: './logs/semantic_baseline/semantic/10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch:  [279, 289, 299] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  model_dir: './logs/ours/moco_bg_500%unk(epoch-49)-semantic_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch:  [199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299]
   test_dataset: 'nuscenes'
   num_devices: 1
