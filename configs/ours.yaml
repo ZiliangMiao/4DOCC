@@ -35,8 +35,8 @@ moco:  # mutual observation pretraining
   num_cls: 3 # 0-unknown, 1-free, 2-occ
   # mutual observation
   train_bg_mo_samples: True # if True, only use background mutual observation samples for pre-training
-  mo_samples_free_pct: 500 # 500% free mo samples, compared to occ samples
-  mo_samples_unk_pct: 500 # 500% unknown mo samples, compared to occ samples
+  mo_samples_free_pct: 100 # 500% free mo samples, compared to occ samples
+  mo_samples_unk_pct: 100 # 500% unknown mo samples, compared to occ samples
   # current observation
   train_co_samples: True
   num_co_rays_free: 25
@@ -49,7 +49,7 @@ moco:  # mutual observation pretraining
 
   # device related
   num_workers: 16
-  num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+  num_devices: 2 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 # Background samples test
