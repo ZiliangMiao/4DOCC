@@ -421,12 +421,14 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
 if __name__ == '__main__':
     open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)
     pred_bg_dir = '../../logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1 (with iou sudden drop, up to 99 epoch)/predictions/epoch_99'
+
+
     pred_mos_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_179'
 
     # parameters
-    nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
+    nusc = NuScenes(dataroot="/home/ziliang/Datasets/nuScenes", version="v1.0-trainval")
     with open('../../configs/ours.yaml', 'r') as f:
-        cfg = yaml.safe_load(f)['bg_pretrain']
+        cfg = yaml.safe_load(f)['moco']
 
     # visualization
     source = 'all'

@@ -6,6 +6,9 @@ import click
 import yaml
 import copy
 import numpy as np
+from matplotlib import pyplot as plt
+from nuscenes.utils.splits import create_splits_logs
+from nuscenes.utils.geometry_utils import points_in_box
 from tqdm import tqdm
 import sys
 import logging
@@ -20,7 +23,7 @@ from nuscenes.nuscenes import NuScenes
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from models.mos4d.models import MosNetwork
-from datasets.nusc_utils import NuscDataloader
+from datasets.nusc_utils import NuscDataloader, split_logs_to_samples, get_input_sd_toks, get_transformed_pcd
 from datasets.mos4d.nusc import NuscMosDataset
 
 
@@ -252,6 +255,79 @@ def mos_test(cfg_test, cfg_dataset):
         # statistics
         logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
 
+def mov_pts_statistics(cfg_dataset, cfg_model):
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    split_logs = create_splits_logs('train', nusc)
+    split_logs_val = create_splits_logs('val', nusc)
+    split_logs = split_logs + split_logs_val
+    sample_toks = split_logs_to_samples(nusc, split_logs)
+    sample_to_sd_toks_dict = get_input_sd_toks(nusc, cfg_model, sample_toks)
+
+    mov_obj_num = 0
+    pts_in_mov_obj_list = []
+    for sample_tok in list(sample_to_sd_toks_dict.keys()):
+        # sample and sample data
+        sample = nusc.get('sample', sample_tok)
+        sd_tok = sample['data']['LIDAR_TOP']
+        sample_data = nusc.get('sample_data', sd_tok)
+
+        # point cloud
+        org, pcd, ts, valid_mask = get_transformed_pcd(nusc, cfg_model, sd_tok, sd_tok)
+
+        # labels
+        mos_labels_dir = os.path.join(cfg_dataset["nuscenes"]["root"], "mos_labels", cfg_dataset["nuscenes"]["version"])
+        mos_label_file = os.path.join(mos_labels_dir, sd_tok + "_mos.label")
+        mos_labels = torch.tensor(np.fromfile(mos_label_file, dtype=np.uint8))[valid_mask]
+
+        # number of points in moving object
+        _, bbox_list, _ = nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
+        for ann_tok, box in zip(sample['anns'], bbox_list):
+            ann = nusc.get('sample_annotation', ann_tok)
+            if ann['num_lidar_pts'] == 0: continue
+            obj_pts_mask = points_in_box(box, pcd[:, :3].T)
+            if np.sum(obj_pts_mask) == 0:  # not lidar points in obj bbox
+                continue
+            # gt and pred object labels
+            gt_obj_labels = mos_labels[obj_pts_mask]
+            mov_pts_mask = gt_obj_labels == 2
+            num_mov_pts = torch.sum(mov_pts_mask)
+            if num_mov_pts == 0:  # static object
+                continue
+            else:
+                mov_obj_num += 1
+                pts_in_mov_obj_list.append(num_mov_pts)
+
+    # histogram
+    fig_1 = plt.figure()
+    ax_1 = fig_1.gca()
+    hist_1 = ax_1.hist(pts_in_mov_obj_list, range=(0,400), bins=100, rwidth=0, align='left', log=True)
+    ax_1.set_xlabel("Number of points in moving objects")
+    ax_1.set_ylabel("Frequency (Num of moving objects)")
+    fig_1.savefig("./statistics_points_in_mov_obj_3.png", dpi=1000)
+
+    fig_2 = plt.figure()
+    ax_2 = fig_2.gca()
+    hist_2 = ax_2.hist(pts_in_mov_obj_list, range=(0, 200), bins=100, rwidth=0, align='left', log=True)
+    ax_2.set_xlabel("Number of points in moving objects")
+    ax_2.set_ylabel("Frequency (Num of moving objects)")
+    fig_2.savefig("./statistics_points_in_mov_obj_4.png", dpi=1000)
+
+    fig_3 = plt.figure()
+    ax_3 = fig_3.gca()
+    hist_3 = ax_3.hist(pts_in_mov_obj_list, range=(0, 200), bins=200, rwidth=0, align='left', log=True)
+    ax_3.set_xlabel("Number of points in moving objects")
+    ax_3.set_ylabel("Frequency (Num of moving objects)")
+    fig_3.savefig("./statistics_points_in_mov_obj_5.png", dpi=1000)
+
+    fig_4 = plt.figure()
+    ax_4 = fig_4.gca()
+    hist_4 = ax_4.hist(pts_in_mov_obj_list, range=(0, 400), bins=200, rwidth=0, align='left', log=True)
+    ax_4.set_xlabel("Number of points in moving objects")
+    ax_4.set_ylabel("Frequency (Num of moving objects)")
+    fig_4.savefig("./statistics_points_in_mov_obj_6.png", dpi=1000)
+
+    asd = 1
+
 
 if __name__ == "__main__":
     # deterministic
@@ -275,6 +351,8 @@ if __name__ == "__main__":
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
     else:
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
+
+    # mov_pts_statistics(dataset_cfg, cfg[args.mode])
 
     # training from scratch
     if args.mode == 'train':

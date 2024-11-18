@@ -1,8 +1,11 @@
 mos:  # moving object segmentation task, results visualization
   dataset_root: '/home/ziliang/Datasets_0/nuScenes'
   baseline_dir: '../../logs/mos_baseline/mos4d_shuffle/10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_179'
-  ours_dir: '../../logs/ours/mop_bg_100%unk_shuffle(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_439'
+#  baseline_dir: '/home/ziliang/Datasets_0/nuScenes/mos_labels/v1.0-trainval'
+#  baseline_dir: '../../logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_589'
+#  baseline_dir: '../../logs/ours/moco_51151_5e-5(epoch-29)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_589'
+  ours_dir: '../../logs/ours/moco_55151_5e-5(epoch-27)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_589'
   source: 'all' # 'all', 'given', 'singapore', 'boston'
   start_sample_idx: 0
-  point_size: 10
+  point_size: 8
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]

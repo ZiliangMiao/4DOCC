@@ -91,8 +91,8 @@ def render_mos_samples(nusc, sd_toks_list, vis_cfg):
         # labels
         gt_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
         gt_labels = np.fromfile(gt_labels_file, dtype=np.uint8)[valid_mask]
-        baseline_labels_file = os.path.join(baseline_dir, sd_tok + "_mos_pred.label")
-        baseline_labels = np.fromfile(baseline_labels_file, dtype=np.uint8)
+        baseline_labels_file = os.path.join(baseline_dir, sd_tok + "_mos_pred.label") # mos
+        baseline_labels = np.fromfile(baseline_labels_file, dtype=np.uint8) # valid mask
         ours_labels_file = os.path.join(ours_dir, sd_tok + "_mos_pred.label")
         ours_labels = np.fromfile(ours_labels_file, dtype=np.uint8)
 
@@ -139,10 +139,11 @@ def render_mos_samples(nusc, sd_toks_list, vis_cfg):
         ours_pts.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(ours_colors)).T)
 
         # view settings
+        bg_color = (220 / 255, 220 / 255, 220 / 255)
         baseline_vis.get_render_option().point_size = point_size
-        baseline_vis.get_render_option().background_color = (255 / 255, 255 / 255, 255 / 255)
+        baseline_vis.get_render_option().background_color = bg_color
         ours_vis.get_render_option().point_size = point_size
-        ours_vis.get_render_option().background_color = (255 / 255, 255 / 255, 255 / 255)
+        ours_vis.get_render_option().background_color = bg_color
 
         # view options
         baseline_view = baseline_vis.get_view_control()

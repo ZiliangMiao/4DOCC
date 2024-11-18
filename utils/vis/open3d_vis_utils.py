@@ -59,11 +59,11 @@ occ_colormap = {
 }
 
 mos_colormap = {
-    0: (155 / 255, 155 / 255, 155 / 255),  # unknown: white
-    1: (63 / 255, 79 / 255, 153 / 255),  # tp (sta -> sta): blue #3F4F99
-    2: (153 / 255, 50 / 255, 50 / 255),  # tn (mov -> mov): red #993232
-    3: (63 / 255, 79 / 255, 153 / 255),  # fp (sta -> mov): blue #3F4F99
-    4: (130 / 255, 49 / 255, 153 / 255),  # fn (mov -> sta): purple #823199
+    0: (120 / 255, 120 / 255, 120 / 255),  # unknown: gray
+    1: (21 / 255, 72 / 255, 190 / 255),  # tp (sta -> sta): blue #0357db
+    2: (190 / 255, 10 / 255, 1 / 255),  # tn (mov -> mov): red #DB2B15
+    3: (15 / 255, 192 / 255, 57 / 255),  # fp (sta -> mov): green #2CDC51
+    4: (159 / 255, 27 / 255, 195 / 255),  # fn (mov -> sta): purple #a707db
 }
 
 lidarseg_colormap = {  # RGB.
@@ -106,14 +106,18 @@ occ_color_func = np.vectorize(occ_colormap.get)
 mos_color_func = np.vectorize(mos_colormap.get)
 
 def get_confusion_color(gt_labels, pred_labels):
-    # confusion status mask
+    # confusion status mask (0: unk, 1: sta, 2:mov)
     unk_mask = gt_labels == 0
-    minus_labels = gt_labels - pred_labels
-    true_mask = np.logical_and(~unk_mask, minus_labels == 0)
-    tp_mask = np.logical_and(true_mask, gt_labels == 1)
-    tn_mask = np.logical_and(true_mask, gt_labels == 2)
-    fp_mask = np.logical_and(~unk_mask, minus_labels == -1)
-    fn_mask = np.logical_and(~unk_mask, minus_labels == 1)
+    tp_mask = np.logical_and(gt_labels == 1, pred_labels == 1)
+    tn_mask = np.logical_and(gt_labels == 2, pred_labels == 2)
+    fp_mask = np.logical_and(gt_labels == 1, pred_labels == 2)
+    fn_mask = np.logical_and(gt_labels == 2, pred_labels == 1)
+    # minus_labels = gt_labels - pred_labels
+    # true_mask = np.logical_and(~unk_mask, minus_labels == 0)
+    # tp_mask = np.logical_and(true_mask, gt_labels == 1)
+    # tn_mask = np.logical_and(true_mask, gt_labels == 2)
+    # fp_mask = np.logical_and(~unk_mask, minus_labels == -1)
+    # fn_mask = np.logical_and(~unk_mask, minus_labels == 1)
     # colors
     color_indices = np.zeros_like(pred_labels)
     color_indices[tp_mask] = 1
