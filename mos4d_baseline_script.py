@@ -2,6 +2,8 @@
 import argparse
 import re
 import os
+from os.path import split
+
 import click
 import yaml
 import copy
@@ -20,6 +22,9 @@ from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
 from nuscenes.nuscenes import NuScenes
+
+from datasets.kitti_utils import KittiDataloader
+from datasets.mos4d.kitti import KittiMOSDataset
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from models.mos4d.models import MosNetwork
@@ -30,12 +35,8 @@ from datasets.mos4d.nusc import NuscMosDataset
 def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     # params
     dataset_name = model_cfg['dataset_name']
-    assert dataset_name == 'nuscenes'  # TODO: only nuscenes dataset supported now
     downsample_pct = model_cfg['downsample_pct']
-    if model_cfg['shuffle']:
-        train_dir = f"./logs/mos_baseline/mos4d_shuffle/{downsample_pct}%{dataset_name}"
-    else:
-        train_dir = f"./logs/mos_baseline/mos4d/{downsample_pct}%{dataset_name}"
+    train_dir = f"./logs/mos_baseline/mos4d_shuffle/{downsample_pct}%{dataset_name}"
     os.makedirs(train_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
@@ -43,13 +44,24 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
-    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    if dataset_name == 'nuscenes':
+        nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+        train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
+        val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+        dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
+        dataloader.setup()
+        train_dataloader = dataloader.train_dataloader()
+        val_dataloader = dataloader.val_dataloader()
+    elif dataset_name == 'sekitti':
+        train_set = KittiMOSDataset(model_cfg, dataset_cfg, split='train') # 'train', 'val', 'test'
+        val_set = KittiMOSDataset(model_cfg, dataset_cfg, split='val')
+        dataloader = KittiDataloader(model_cfg, train_set, val_set, True)
+        dataloader.setup()
+        train_dataloader = dataloader.train_dataloader()
+        val_dataloader = dataloader.val_dataloader()
+    else:
+        train_dataloader = None
+        val_dataloader = None
 
     # model
     model = MosNetwork(model_cfg, True)
@@ -130,7 +142,6 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
 
     # fine-tuning params
     dataset_name = model_cfg['dataset_name']
-    assert dataset_name == 'nuscenes'
     downsample_pct = model_cfg['downsample_pct']
     finetune_dir = f"./logs/{pre_method}(epoch-{pre_epoch})-mos_finetune/{pre_dataset}-{downsample_pct}%{dataset_name}"
     os.makedirs(finetune_dir, exist_ok=True)
@@ -140,13 +151,24 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     finetune_model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
-    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    if dataset_name == 'nuscenes':
+        nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+        train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
+        val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+        dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
+        dataloader.setup()
+        train_dataloader = dataloader.train_dataloader()
+        val_dataloader = dataloader.val_dataloader()
+    elif dataset_name == 'sekitti':
+        train_set = KittiMOSDataset(model_cfg, dataset_cfg, split='train')  # 'train', 'val', 'test'
+        val_set = KittiMOSDataset(model_cfg, dataset_cfg, split='val')
+        dataloader = KittiDataloader(model_cfg, train_set, val_set, True)
+        dataloader.setup()
+        train_dataloader = dataloader.train_dataloader()
+        val_dataloader = dataloader.val_dataloader()
+    else:
+        train_dataloader = None
+        val_dataloader = None
 
     # load pre-trained encoder to fine-tuning model
     finetune_model = MosNetwork(model_cfg, True)
@@ -200,14 +222,25 @@ def mos_test(cfg_test, cfg_dataset):
     os.makedirs(log_dir, exist_ok=True)
 
     # dataloader
-    test_dataset = cfg_test['test_dataset']
-    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
-    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscMosDataset(nusc, cfg_model, cfg_dataset, 'val')
-    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
-    dataloader.setup()
-    test_dataloader = dataloader.test_dataloader()
+    dataset_name = cfg_test['test_dataset']
+    if dataset_name == 'nuscenes':
+        nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+        train_set = NuscMosDataset(nusc, cfg_model, dataset_cfg, 'train')
+        val_set = NuscMosDataset(nusc, cfg_model, dataset_cfg, 'val')
+        dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, True)
+        dataloader.setup()
+        test_dataloader = dataloader.test_dataloader()
+    elif dataset_name == 'sekitti':
+        train_set = KittiMOSDataset(cfg_model, dataset_cfg, split='train')  # 'train', 'val', 'test'
+        val_set = KittiMOSDataset(cfg_model, dataset_cfg, split='val')
+        dataloader = KittiDataloader(cfg_model, train_set, val_set, False)
+        dataloader.setup()
+        test_dataloader = dataloader.test_dataloader()
+    else:
+        nusc = None
+        train_set = None
+        val_set = None
+        test_dataloader = None
 
     for test_epoch in cfg_test["test_epoch"]:
         # logger
@@ -228,8 +261,15 @@ def mos_test(cfg_test, cfg_dataset):
         ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
         # model
-        model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc)
-        iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
+        if dataset_name == 'nuscenes':
+            model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc, metric_obj=cfg_test["metric_obj"])
+            iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
+        elif dataset_name == 'sekitti':
+            model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, metric_obj=cfg_test["metric_obj"])
+            iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
+        else:
+            model = None
+            iou_metric = None
 
         # predict
         trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
@@ -254,6 +294,7 @@ def mos_test(cfg_test, cfg_dataset):
 
         # statistics
         logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
+
 
 def mov_pts_statistics(cfg_dataset, cfg_model):
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
@@ -326,8 +367,6 @@ def mov_pts_statistics(cfg_dataset, cfg_model):
     ax_4.set_ylabel("Frequency (Num of moving objects)")
     fig_4.savefig("./statistics_points_in_mov_obj_6.png", dpi=1000)
 
-    asd = 1
-
 
 if __name__ == "__main__":
     # deterministic
@@ -349,8 +388,10 @@ if __name__ == "__main__":
     # dataset root path at different platform
     if args.autodl:
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/root/autodl-tmp' + dataset_cfg['sekitti']['root']
     else:
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/home/ziliang' + dataset_cfg['sekitti']['root']
 
     # mov_pts_statistics(dataset_cfg, cfg[args.mode])
 

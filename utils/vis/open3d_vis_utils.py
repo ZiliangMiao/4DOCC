@@ -60,10 +60,10 @@ occ_colormap = {
 
 mos_colormap = {
     0: (120 / 255, 120 / 255, 120 / 255),  # unknown: gray
-    1: (21 / 255, 72 / 255, 190 / 255),  # tp (sta -> sta): blue #0357db
+    1: (84 / 255, 101 / 255, 153 / 255),  # tp (sta -> sta): blue #0357db
     2: (190 / 255, 10 / 255, 1 / 255),  # tn (mov -> mov): red #DB2B15
-    3: (15 / 255, 192 / 255, 57 / 255),  # fp (sta -> mov): green #2CDC51
-    4: (159 / 255, 27 / 255, 195 / 255),  # fn (mov -> sta): purple #a707db
+    3: (51 / 255, 186 / 255, 80 / 255),  # fp (sta -> mov): green #2CDC51
+    4: (222 / 255, 173 / 255, 0 / 255),  # fn (mov -> sta): purple #a707db
 }
 
 lidarseg_colormap = {  # RGB.

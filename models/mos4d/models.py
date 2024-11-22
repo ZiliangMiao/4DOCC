@@ -47,14 +47,16 @@ class MosNetwork(LightningModule):
 
         # save predictions
         if not train_flag:
+            if self.cfg_model['dataset_name'] == 'nuscenes':
+                self.nusc = kwargs['nusc']
             self.model_dir = kwargs['model_dir']
             self.test_epoch = kwargs['test_epoch']
             self.test_logger = kwargs['test_logger']
-            self.nusc = kwargs['nusc']
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")
             os.makedirs(self.pred_dir, exist_ok=True)
 
             # metrics
+            self.metric_obj = kwargs['metric_obj']
             self.accumulated_conf_mat = torch.zeros(self.n_mos_cls, self.n_mos_cls)  # to calculate point-level avg. iou
             self.sample_iou_list = []  # to calculate sample-level avg. iou
             self.object_iou_list = []  # to calculate object-level avg. iou
@@ -77,7 +79,7 @@ class MosNetwork(LightningModule):
             feats = sparse_featmap.features_at(batch_index=batch_idx)
             ref_time_mask = coords[:, -1] == 0
             mos_feats = feats[ref_time_mask]
-            # TODO: add a MLP decoder
+            # TODO: task MLP head
             if self.cfg_model['use_mlp_decoder']:
                 mos_feats = self.decoder(mos_feats)
             mos_feats[:, self.ignore_class_idx] = -float("inf")
@@ -151,70 +153,89 @@ class MosNetwork(LightningModule):
             mos_labels = mos_labels.cpu()
             pred_labels = torch.argmax(mos_probs, axis=1).cpu()
 
-            # TODO: moving object detection rate
-            mov_obj_num = 0
-            det_mov_obj_cnt = 0
-            ref_time_mask = pcds_4d[:, -1] == 0
-            pcd = pcds_4d[ref_time_mask].cpu().numpy()
+            # TODO: mean moving object IoU
+            if self.metric_obj:
+                mov_obj_num = 0
+                det_mov_obj_cnt = 0
+                ref_time_mask = pcds_4d[:, -1] == 0
+                pcd = pcds_4d[ref_time_mask].cpu().numpy()
+                sample_data = self.nusc.get('sample_data', sd_tok)
+                sample = self.nusc.get("sample", sample_data['sample_token'])
+                _, bbox_list, _ = self.nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
+                for ann_tok, box in zip(sample['anns'], bbox_list):
+                    ann = self.nusc.get('sample_annotation', ann_tok)
+                    if ann['num_lidar_pts'] == 0: continue
+                    obj_pts_mask = points_in_box(box, pcd[:, :3].T)
+                    if np.sum(obj_pts_mask) == 0:  # not lidar points in obj bbox
+                        continue
+                    # gt and pred object labels
+                    gt_obj_labels = mos_labels[obj_pts_mask]
+                    mov_pts_mask = gt_obj_labels == 2
+                    if torch.sum(mov_pts_mask) == 0:  # static object
+                        continue
+                    else:
+                        mov_obj_num += 1
 
-            sample_data = self.nusc.get('sample_data', sd_tok)
-            sample = self.nusc.get("sample", sample_data['sample_token'])
-            _, bbox_list, _ = self.nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
-            for ann_tok, box in zip(sample['anns'], bbox_list):
-                ann = self.nusc.get('sample_annotation', ann_tok)
-                if ann['num_lidar_pts'] == 0: continue
-                obj_pts_mask = points_in_box(box, pcd[:, :3].T)
-                if np.sum(obj_pts_mask) == 0:  # not lidar points in obj bbox
-                    continue
-                # gt and pred object labels
-                gt_obj_labels = mos_labels[obj_pts_mask]
-                mov_pts_mask = gt_obj_labels == 2
-                if torch.sum(mov_pts_mask) == 0:  # static object
-                    continue
-                else:
-                    mov_obj_num += 1
+                    # metric-1: object-level detection rate
+                    pred_obj_labels = pred_labels[obj_pts_mask]
+                    tp_mask = torch.logical_and(mov_pts_mask, gt_obj_labels == pred_obj_labels)
+                    if torch.sum(tp_mask) >= 1:  # TODO: need a percentage threshold
+                        det_mov_obj_cnt += 1
+
+                    # metric-2: object-level iou
+                    obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_labels, gt_obj_labels)
+                    obj_iou = self.ClassificationMetrics.get_iou(obj_conf_mat)
+                    obj_mov_iou = obj_iou[2].item()
+                    self.object_iou_list.append(obj_mov_iou)
 
                 # metric-1: object-level detection rate
-                pred_obj_labels = pred_labels[obj_pts_mask]
-                tp_mask = torch.logical_and(mov_pts_mask, gt_obj_labels == pred_obj_labels)
-                if torch.sum(tp_mask) >= 1:  # TODO: need a percentage threshold
-                    det_mov_obj_cnt += 1
+                self.det_mov_obj_cnt += det_mov_obj_cnt
+                self.mov_obj_num += mov_obj_num
+                det_rate = det_mov_obj_cnt / (mov_obj_num + 1e-15)
 
-                # metric-2: object-level iou
-                obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_labels, gt_obj_labels)
-                obj_iou = self.ClassificationMetrics.get_iou(obj_conf_mat)
-                obj_mov_iou = obj_iou[2].item()
-                self.object_iou_list.append(obj_mov_iou)
+                # metric-3: sample-level iou
+                sample_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mos_labels)
+                sample_iou = self.ClassificationMetrics.get_iou(sample_conf_mat)
+                sample_mov_iou = sample_iou[2].item()
 
-            # metric-1: object-level detection rate
-            self.det_mov_obj_cnt += det_mov_obj_cnt
-            self.mov_obj_num += mov_obj_num
-            det_rate = det_mov_obj_cnt / (mov_obj_num + 1e-15)
+                num_mov_pts = sample_conf_mat[2][0] + sample_conf_mat[2][1] + sample_conf_mat[2][2]
+                if num_mov_pts != 0:
+                    self.sample_iou_list.append(sample_mov_iou)
+                else:
+                    self.no_mov_sample_num += 1
 
-            # metric-3: sample-level iou
-            sample_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mos_labels)
-            sample_iou = self.ClassificationMetrics.get_iou(sample_conf_mat)
-            sample_mov_iou = sample_iou[2].item()
+                # metric-4: point-level iou
+                self.accumulated_conf_mat += sample_conf_mat
 
-            num_mov_pts = sample_conf_mat[2][0] + sample_conf_mat[2][1] + sample_conf_mat[2][2]
-            # num_sta_pts = sample_conf_mat[1][0] + sample_conf_mat[1][1] + sample_conf_mat[1][2]
-            # num_unk_pts = sample_conf_mat[0][0] + sample_conf_mat[0][1] + sample_conf_mat[0][2]
-            # assert len(mos_probs) == num_mov_pts + num_sta_pts + num_unk_pts
-            if num_mov_pts != 0:
-                self.sample_iou_list.append(sample_mov_iou)
+                # save predicted labels
+                mos_pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mos_pred.label")
+                pred_labels = torch.argmax(mos_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
+                pred_labels.tofile(mos_pred_file)
+
+                # logger
+                self.test_logger.info(f"Val sd tok: %s, Sample IoU: %.3f, Moving obj num: %d, Det rate: %.3f", sd_tok, sample_mov_iou * 100, mov_obj_num, det_rate * 100)
             else:
-                self.no_mov_sample_num += 1
+                # metric-3: sample-level iou
+                sample_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, mos_labels)
+                sample_iou = self.ClassificationMetrics.get_iou(sample_conf_mat)
+                sample_mov_iou = sample_iou[2].item()
 
-            # metric-4: point-level iou
-            self.accumulated_conf_mat += sample_conf_mat
+                num_mov_pts = sample_conf_mat[2][0] + sample_conf_mat[2][1] + sample_conf_mat[2][2]
+                if num_mov_pts != 0:
+                    self.sample_iou_list.append(sample_mov_iou)
+                else:
+                    self.no_mov_sample_num += 1
 
-            # save predicted labels
-            mos_pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mos_pred.label")
-            pred_labels = torch.argmax(mos_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
-            pred_labels.tofile(mos_pred_file)
+                # metric-4: point-level iou
+                self.accumulated_conf_mat += sample_conf_mat
 
-            # logger
-            self.test_logger.info(f"Val sd tok: %s, Sample IoU: %.3f, Moving obj num: %d, Det rate: %.3f", sd_tok, sample_mov_iou * 100, mov_obj_num, det_rate * 100)
+                # save predicted labels
+                mos_pred_file = os.path.join(self.pred_dir, f"{sd_tok}_mos_pred.label")
+                pred_labels = torch.argmax(mos_probs, dim=1).type(torch.uint8).detach().cpu().numpy()
+                pred_labels.tofile(mos_pred_file)
+
+                # logger
+                self.test_logger.info(f"Val sd tok: %s, Sample IoU: %.3f", sd_tok, sample_mov_iou * 100)
         torch.cuda.empty_cache()
 
 

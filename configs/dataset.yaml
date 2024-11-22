@@ -2,23 +2,10 @@
 nuscenes: # ours label
   root: "/Datasets_0/nuScenes"  # /root/autodl-tmp/Datasets/nuScenes /home/user/Datasets/nuScenes
   version: "v1.0-trainval" # "v1.0-mini"
-SEKITTI:
-  PATH: "/home/user/Datasets/SeKITTI/sequences" # labeled by PRPonn, seq 00-21
-  SEMANTIC_CONFIG_FILE: "../config/semantic-kitti-mos.yaml"
-  POSES: "poses.txt" # Name of the pose file provided in each sequence folder (OPTIONS: FastLIO2 and poses provided by dataset)
-  LIDAR_NAME: "velodyne"
-  TRAIN: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
-  VAL: [8]
-  TEST: [8]
-KITTITRA:
-  PATH: "./data/KITTITra/sequences" # labeled by PRPonn, seq 19
-  LIDAR_NAME: "velodyne"
-KITTITRA_M:
-  PATH: "./data/KITTITra_M/sequences" # labeled by MaRS, seq 00, 01-20
-  LIDAR_NAME: "velodyne"
-APOLLO: # labeled by PRPonn, seq 00-04
-  PATH: "./data/Apollo/sequences"
-  LIDAR_NAME: "velodyne"
-WAYMO_M: # labeled by MaRS, seq ?00-43 (NOT ORG IDX)
-  PATH: "./data/Waymo_M/sequences"
-  LIDAR_NAME: "lidar"
+sekitti:
+  root: "/Datasets_0/SeKITTI/dataset/sequences" # labeled by PRPonn, seq 00-21
+  poses: "poses.txt"
+  lidar: "velodyne"
+  train: [0] # [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
+  val: [8]
+  test: [8]
