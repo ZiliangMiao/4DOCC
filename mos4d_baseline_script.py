@@ -227,7 +227,7 @@ def mos_test(cfg_test, cfg_dataset):
         nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
         train_set = NuscMosDataset(nusc, cfg_model, dataset_cfg, 'train')
         val_set = NuscMosDataset(nusc, cfg_model, dataset_cfg, 'val')
-        dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, True)
+        dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
         dataloader.setup()
         test_dataloader = dataloader.test_dataloader()
     elif dataset_name == 'sekitti':
@@ -374,7 +374,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
     args = parser.parse_args()

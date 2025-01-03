@@ -22,7 +22,6 @@ class NuscDataloader(LightningDataModule):
         self.test_loader = None
         self.train_iter = None
         self.val_iter = None
-        self.test_iter = None
 
     def prepare_data(self):
         pass
@@ -68,7 +67,6 @@ class NuscDataloader(LightningDataModule):
             print("Loaded {:d} training and {:d} validation samples.".format(len(self.train_set), len(self.val_set)))
         else:  # test (use validation set)
             self.test_loader = val_loader
-            self.test_iter = iter(self.test_loader)
             print("Loaded {:d} test samples.".format(len(self.val_set)))
 
     def train_dataloader(self):
