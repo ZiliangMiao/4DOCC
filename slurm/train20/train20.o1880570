@@ -1,0 +1,24 @@
+==========================================
+SLURM_JOB_ID        = 1880570
+SLURM_NODELIST      = SPG-5-14
+SLURM_NTASKS        = 1
+SLURM_CPUS_PER_TASK = 
+This SLURM script is running on host SPG-5-14
+Working directory is /scr/u/miaozl/Projects/4DOCC/slurm/train20
+==========================================
+Submission Directory :  /scr/u/miaozl/Projects/4DOCC/slurm/train20
+Submission Host      :  hpc2021
+Job User             :  miaozl
+Job ID               :  1880570
+Job Name             :  train20
+Queue                :  l40s
+Node(s) allocated    :  SPG-5-14
+Number of Node(s)    :  1
+Number of CPU Task(s):  1
+Number of Process(s) :  1
+Task(s) per Node     :  1
+CPU(s) per Task      : 
+Task ID              : 
+===========================================================
+Job Start  Time is 2025/01/07 -- 00:04:48
+Job Finish Time is 2025/01/07 -- 00:05:06

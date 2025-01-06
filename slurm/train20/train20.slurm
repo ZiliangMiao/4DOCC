@@ -7,13 +7,14 @@
 # Uncomment these two lines if you want e-mail to be sent
 #SBATCH --mail-type=END,FAIL                    ## Email notification type: BEGIN,END,FAIL,ALL
 #SBATCH --mail-user=miaozl@connect.hku.hk                ## Email that notifications will be sent to
+# Partition and Nodes
+#SBATCH --partition=l40s
 #SBATCH --nodes=1                               ## Number of compute node(s)
 #SBATCH --ntasks-per-node=1                     ## Number of process(es) per compute node
-#SBATCH --time=36:00:00                         ## Runtime in D-HH:MM/HH:MM:SS/MM:SS
-#SBATCH --cpus-per-task=16
+#SBATCH --time=72:00:00                         ## Runtime in D-HH:MM/HH:MM:SS/MM:SS
+#SBATCH --cpus-per-gpu=24
 #SBATCH --mem-per-cpu=2048MB                              ## Total memory over all of the cores(in MB)
 #SBATCH --gres=gpu:1
-#SBATCH --exclusive
 
 echo "Submission Directory : " $SLURM_SUBMIT_DIR
 echo "Submission Host      : " $SLURM_SUBMIT_HOST
@@ -32,13 +33,13 @@ echo "Task ID              : " $SLURM_ARRAY_TASK_ID
 echo ===========================================================
 echo "Job Start  Time is `date "+%Y/%m/%d -- %H:%M:%S"`"
 
-cd /home/miaozl/Projects/4DOCC/;
+cd /scr/u/miaozl/Projects/4DOCC/;
 OUTFILE=${SLURM_JOB_NAME}.${SLURM_JOB_ID}
 
-source /home/miaozl/.bashrc;
+source ~/.bashrc;
 conda activate moco;
 
-python mos4d_baseline_script.py --mode "train" --resume_version 1 --mars True
+python mos4d_baseline_script.py --mode "train" --hpc True
 
 mv ${OUTFILE} ${SLURM_SUBMIT_DIR}
 

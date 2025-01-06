@@ -1,0 +1,11 @@
+/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/MinkowskiEngine-0.5.4-py3.8-linux-x86_64.egg/MinkowskiEngine/__init__.py:36: UserWarning: The environment variable `OMP_NUM_THREADS` not set. MinkowskiEngine will automatically set `OMP_NUM_THREADS=16`. If you want to set `OMP_NUM_THREADS` manually, please export it on the command line before running a python script. e.g. `export OMP_NUM_THREADS=12; python your_program.py`. It is recommended to set it below 24.
+  warnings.warn(
+Traceback (most recent call last):
+  File "mos4d_baseline_script.py", line 421, in <module>
+    mos4d_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
+  File "mos4d_baseline_script.py", line 42, in mos4d_baseline_train
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/nuscenes/nuscenes.py", line 62, in __init__
+    assert osp.exists(self.table_root), 'Database version not found: {}'.format(self.table_root)
+AssertionError: Database version not found: /lustre1/g/mech_mars/Datasets_0/nuScenes/v1.0-trainval
+mv: cannot stat 'train20.1880570': No such file or directory
