@@ -1,0 +1,53 @@
+
+CondaError: Run 'conda init' before 'conda activate'
+
+/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/MinkowskiEngine-0.5.4-py3.8-linux-x86_64.egg/MinkowskiEngine/__init__.py:36: UserWarning: The environment variable `OMP_NUM_THREADS` not set. MinkowskiEngine will automatically set `OMP_NUM_THREADS=16`. If you want to set `OMP_NUM_THREADS` manually, please export it on the command line before running a python script. e.g. `export OMP_NUM_THREADS=12; python your_program.py`. It is recommended to set it below 24.
+  warnings.warn(
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+HPU available: False, using: 0 HPUs
+Traceback (most recent call last):
+  File "mos4d_baseline_script.py", line 406, in <module>
+    mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
+  File "mos4d_baseline_script.py", line 214, in mos_finetune
+    trainer.fit(finetune_model, train_dataloader)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/pytorch_lightning/trainer/trainer.py", line 544, in fit
+    call._call_and_handle_interrupt(
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/pytorch_lightning/trainer/call.py", line 43, in _call_and_handle_interrupt
+    return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/pytorch_lightning/strategies/launchers/subprocess_script.py", line 99, in launch
+    self.cluster_environment.validate_settings(num_devices=self.num_processes, num_nodes=self.num_nodes)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/lightning_fabric/plugins/environments/slurm.py", line 163, in validate_settings
+    raise ValueError(
+ValueError: You set `devices=2` in Lightning, but the number of tasks per node configured in SLURM `--ntasks-per-node=1` does not match. HINT: Set `devices=1`.
+Exception in thread Thread-2:
+Traceback (most recent call last):
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/threading.py", line 932, in _bootstrap_inner
+    self.run()
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/threading.py", line 870, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/torch/utils/data/_utils/pin_memory.py", line 54, in _pin_memory_loop
+    do_one_step()
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/torch/utils/data/_utils/pin_memory.py", line 31, in do_one_step
+    r = in_queue.get(timeout=MP_STATUS_CHECK_INTERVAL)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/queues.py", line 116, in get
+    return _ForkingPickler.loads(res)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/site-packages/torch/multiprocessing/reductions.py", line 495, in rebuild_storage_fd
+    fd = df.detach()
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/resource_sharer.py", line 57, in detach
+    with _resource_sharer.get_connection(self._id) as conn:
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/resource_sharer.py", line 87, in get_connection
+    c = Client(address, authkey=process.current_process().authkey)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/connection.py", line 509, in Client
+    deliver_challenge(c, authkey)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/connection.py", line 740, in deliver_challenge
+    response = connection.recv_bytes(256)        # reject large message
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/connection.py", line 414, in _recv_bytes
+    buf = self._recv(4)
+  File "/home/miaozl/miniconda3/envs/moco/lib/python3.8/multiprocessing/connection.py", line 379, in _recv
+    chunk = read(handle, remaining)
+ConnectionResetError: [Errno 104] Connection reset by peer
+mv: cannot stat 'ft20.295': No such file or directory
