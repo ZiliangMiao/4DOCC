@@ -397,6 +397,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, default=False)
+    parser.add_argument('--mars', type=bool, help="mars server", default=False)
     args = parser.parse_args()
 
     # load config
@@ -409,6 +410,9 @@ if __name__ == "__main__":
     if args.autodl:
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
         dataset_cfg['sekitti']['root'] = '/root/autodl-tmp' + dataset_cfg['sekitti']['root']
+    elif args.mars:
+        dataset_cfg['nuscenes']['root'] = '/home/miaozl' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/home/miaozl' + dataset_cfg['sekitti']['root']
     else:
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
         dataset_cfg['sekitti']['root'] = '/home/ziliang' + dataset_cfg['sekitti']['root']

@@ -1,0 +1,16 @@
+Submission Directory :  /home/miaozl/Projects/4DOCC/slurm/train20
+Submission Host      :  MaRS-GPU-server
+Job User             :  miaozl
+Job ID               :  312
+Job Name             :  train20
+Queue                :  main
+Node(s) allocated    :  MaRS-GPU-server
+Number of Node(s)    :  1
+Number of CPU Task(s):  1
+Number of Process(s) :  1
+Task(s) per Node     :  1
+CPU(s) per Task      :  16
+Task ID              : 
+===========================================================
+Job Start  Time is 2025/01/05 -- 16:17:06
+Job Finish Time is 2025/01/05 -- 16:17:06
