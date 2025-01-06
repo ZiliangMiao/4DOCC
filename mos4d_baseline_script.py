@@ -1,19 +1,12 @@
 # base
 import argparse
-import re
 import os
-from os.path import split
-
-import click
 import pandas as pd
 import yaml
-import copy
 import numpy as np
 from matplotlib import pyplot as plt
 from nuscenes.utils.splits import create_splits_logs
 from nuscenes.utils.geometry_utils import points_in_box
-from tqdm import tqdm
-import sys
 import logging
 from datetime import datetime
 # torch
@@ -396,8 +389,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
-    parser.add_argument('--autodl', type=bool, default=False)
+    parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
     parser.add_argument('--mars', type=bool, help="mars server", default=False)
+    parser.add_argument('--hpc', type=bool, help="hpc server", default=False)
     args = parser.parse_args()
 
     # load config
@@ -413,6 +407,9 @@ if __name__ == "__main__":
     elif args.mars:
         dataset_cfg['nuscenes']['root'] = '/home/miaozl' + dataset_cfg['nuscenes']['root']
         dataset_cfg['sekitti']['root'] = '/home/miaozl' + dataset_cfg['sekitti']['root']
+    elif args.hpc:
+        dataset_cfg['nuscenes']['root'] = '/lustre1/g/mech_mars' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/lustre1/g/mech_mars' + dataset_cfg['sekitti']['root']
     else:
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
         dataset_cfg['sekitti']['root'] = '/home/ziliang' + dataset_cfg['sekitti']['root']
