@@ -5,6 +5,7 @@ import os
 from os.path import split
 
 import click
+import pandas as pd
 import yaml
 import copy
 import numpy as np
@@ -241,6 +242,15 @@ def mos_test(cfg_test, cfg_dataset):
         train_set = None
         val_set = None
         test_dataloader = None
+    
+    # create excel file
+    excel_file = os.path.join(log_dir, 'metrics.xlsx')
+    if not os.path.exists(excel_file):
+        # set column names
+        df = pd.DataFrame(columns=['epoch', 'obj iou', 'iou'])
+        df.to_excel(excel_file, index=False)
+    else:
+        df = pd.read_excel(excel_file)
 
     for test_epoch in cfg_test["test_epoch"]:
         # logger
@@ -294,6 +304,16 @@ def mos_test(cfg_test, cfg_dataset):
 
         # statistics
         logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
+
+        # append new row to dataframe
+        new_row = pd.DataFrame({
+            'epoch': [test_epoch],
+            'obj iou': [obj_iou_mean * 100], 
+            'iou': [point_iou[2].item() * 100]
+        })
+        df = pd.concat([df, new_row], ignore_index=True)
+        # save the updated dataframe to excel
+        df.to_excel(excel_file, index=False)        
 
 
 def mov_pts_statistics(cfg_dataset, cfg_model):

@@ -35,7 +35,7 @@ train:
 
 
 finetune:
-  pretrain_method: "ours/moco_51151_5e-5" # 'ours/moco'
+  pretrain_method: "ours/moco_55151_5e-5" # 'ours/moco'
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-8"
   pretrain_version: 0
@@ -64,7 +64,7 @@ finetune:
   outside_scene_mask_ub: True
 
   # training related
-  num_epoch: 300
+  num_epoch: 600
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001  # refer to mos4d [1e-4]
@@ -73,13 +73,13 @@ finetune:
   weight_decay: 0.0001 # refer to mos4d [1e-4]
 
   # device related
-  num_workers: 16
+  num_workers: 24
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 test:
-  metric_obj: False
-  model_dir: './logs/mos_baseline/mos4d_shuffle/10%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  metric_obj: True
+  model_dir: './logs/ours/moco_55151_5e-5(epoch-29)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_1'
+  test_epoch: [529, 539] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
   test_dataset: 'nuscenes'
   num_devices: 1
