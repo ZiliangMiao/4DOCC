@@ -1,16 +1,16 @@
 train:
   # dataset related
-  dataset_name: "nuscenes" # "sekitti", "nuscenes"
+  dataset_name: "sekitti" # "sekitti", "nuscenes"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 10 # use 10% of training dataset to train the model
+  downsample_pct: 100 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
   use_mlp_decoder: False
 
   # data processing related
   n_input: 6
-  n_skip: 0 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  n_skip: 4 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
+  time_interval: 0.1 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   pos_dim: 4 # x, y, z, t
@@ -21,8 +21,8 @@ train:
   outside_scene_mask_ub: True
 
   # training related
-  num_epoch: 600
-  batch_size: 4
+  num_epoch: 300
+  batch_size: 2
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
   lr_epoch: 1
@@ -30,23 +30,23 @@ train:
   weight_decay: 0.0001
 
   # device related
-  num_workers: 16
+  num_workers: 24
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 finetune:
-  pretrain_method: "ours/moco_51151_5e-5" # 'ours/moco'
+  pretrain_method: "ours/moco_55151_5e-5" # 'ours/moco'
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-8"
   pretrain_version: 0
-  pretrain_epoch: 29
+  pretrain_epoch: 49
   pretrain_featdim: 128
   use_mlp_decoder: True
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 10 # use 10% of training dataset to train the model
+  downsample_pct: 20 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
@@ -64,7 +64,7 @@ finetune:
   outside_scene_mask_ub: True
 
   # training related
-  num_epoch: 300
+  num_epoch: 400
   batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001  # refer to mos4d [1e-4]
@@ -73,13 +73,13 @@ finetune:
   weight_decay: 0.0001 # refer to mos4d [1e-4]
 
   # device related
-  num_workers: 16
+  num_workers: 24
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
 test:
   metric_obj: True
-  model_dir: './logs/mos_baseline/mos4d_shuffle/10%nuscenes/vs-0.1_t-3.0_bs-4/version_1'
-  test_epoch: [389, 399, 409, 419, 429] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  model_dir: '/home/ziliang/Projects/4DOCC/logs/ours/moco_55151_5e-5(epoch-49)-mos_finetune/100%nuscenes-20%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [309, 319, 329, 339, 349, 359, 369, 379, 389, 399] # 469, 479, 489, 499 # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
   test_dataset: 'nuscenes'
   num_devices: 1

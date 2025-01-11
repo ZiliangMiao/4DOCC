@@ -10,382 +10,31 @@ import yaml
 from collections import defaultdict
 from nuscenes import NuScenes
 from tqdm import tqdm
-import datasets.nusc_utils as nusc_utils
+import datasets.kitti_utils as kitti_utils
 from nuscenes.utils.geometry_utils import points_in_box
 from utils.vis.open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
 from utils.vis.open3d_vis_utils import draw_box
 import matplotlib.pyplot as plt
 
 
-def draw_while_preprocessing(nusc, cfg, sample_tok, depth, labels, query_rays_idx, key_rays_indices, key_meta_info, vis_q_min, vis_k_min):
-    vis_obj_idx = 0  # nonlocal variable: moving object index
-    vis_ray_idx = 0  # nonlocal variable: ray index of moving object points which have background samples
-    view_init = True
-    skip_flag = True
-    cam_params = None
-    mov_obj_num = 0
-    ray_num = 0
-
-    # vis sample data
-    sample = nusc.get('sample', sample_tok)
-    sd_tok = sample['data']['LIDAR_TOP']
-
-    # open3d vis
-    vis = open3d.visualization.VisualizerWithKeyCallback()
-    vis.create_window(window_name='ray intersection points', width=3840, height=2160, left=0, top=0)
-    def draw(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, cam_params, view_init, mov_obj_num, ray_num
-        # get key sample data tokens
-        sample_data = nusc.get('sample_data', sd_tok)
-        sample_token = sample_data['sample_token']
-        sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = nusc_utils.get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
-
-        # get query rays and key rays
-        query_org, query_pts, query_ts, filter_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
-        query_dir = F.normalize(query_pts - query_org, p=2, dim=1)  # unit vector
-        key_rays_org_list = []
-        key_rays_ts_list = []
-        key_rays_pts_list = []
-        key_mos_labels_list = []
-        for key_sd_tok in key_sd_toks_list:
-            key_org, key_pts, key_ts, key_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
-            key_rays_org_list.append(key_org)
-            key_rays_pts_list.append(key_pts)
-            key_rays_ts_list.append(key_ts)
-            key_mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, key_sd_tok + "_mos.label")
-            key_mos_labels = np.fromfile(key_mos_labels_file, dtype=np.uint8)[key_mask]
-            key_mos_labels_list.append(key_mos_labels)
-
-        # load gt and pred mos labels
-        gt_mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
-        gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
-
-        # load gt bg samples
-        query_ray_idx_unq = np.unique(query_rays_idx)
-        key_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.uint32) * meta[0] for meta in key_meta_info])
-
-        # vis nusc sample, moving object bboxes
-        anns_toks = sample['anns']
-        _, boxes, _ = nusc.get_sample_data(sd_tok, selected_anntokens=anns_toks, use_flat_vehicle_coordinates=False)
-        obj_boxes_list = []
-        obj_ray_indices_list = []
-        for ann_tok, box in zip(anns_toks, boxes):
-            ann = nusc.get('sample_annotation', ann_tok)
-            if ann['num_lidar_pts'] == 0: continue
-            obj_pts_mask = points_in_box(box, query_pts[:, :3].T)
-            if np.sum(obj_pts_mask) == 0: continue
-            gt_obj_labels = gt_mos_labels[obj_pts_mask]
-            mov_pts_mask = gt_obj_labels == 2
-            if np.sum(mov_pts_mask) == 0:
-                continue
-            else:
-                obj_pts_mask = points_in_box(box, query_pts[:, :3].T)
-                obj_pts_idx_list = np.where(obj_pts_mask)[0].tolist()
-                ray_idx_list = list(set(obj_pts_idx_list) & set(query_ray_idx_unq))  # only a part of rays have bg samples
-                if len(ray_idx_list) == 0: continue
-                obj_boxes_list.append(box)
-                obj_ray_indices_list.append(ray_idx_list)
-
-        ################################################################################################################
-        # draw static geometries: query lidar orgs, key lidar orgs
-        vis.clear_geometries()
-        axis_size = 2.0
-        axis_query = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size * 2, origin=query_org)
-        vis.add_geometry(axis_query)
-        for key_rays_org, key_rays_ts in zip(key_rays_org_list, key_rays_ts_list):
-            axis_key = open3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size + key_rays_ts * 0.1, origin=key_rays_org)
-            vis.add_geometry(axis_key)
-
-        # draw query pcd
-        pcd = open3d.geometry.PointCloud()
-        pcd.points = open3d.utility.Vector3dVector(query_pts)
-        pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(gt_mos_labels)).T)  # static color
-        pcd_down = pcd.voxel_down_sample(voxel_size=0.10)  # point cloud downsample
-        vis.add_geometry(pcd_down)
-        ################################################################################################################
-
-        if len(obj_ray_indices_list) == 0:
-            print(f"Sample have no moving objects.")
-            return None
-        else:
-            mov_obj_num = len(obj_ray_indices_list)
-            ray_num = len(obj_ray_indices_list[vis_obj_idx])
-            print(f"Sample: {sd_tok}, Moving object index: {vis_obj_idx} / {mov_obj_num - 1}, Ray index: {vis_ray_idx} / {ray_num - 1}")
-            print(f"Query ray index: {obj_ray_indices_list[vis_obj_idx][vis_ray_idx]}")
-
-        # draw moving object bboxes
-        box = obj_boxes_list[vis_obj_idx]
-        draw_box(vis, [box])
-
-        # draw query ray point [vis_ray_idx]
-        obj_ray_idx = obj_ray_indices_list[vis_obj_idx][vis_ray_idx]
-        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
-        obj_point_sphere = obj_point_sphere.translate(query_pts[obj_ray_idx], relative=False)
-        obj_point_sphere.paint_uniform_color(mos_color_func(gt_mos_labels[obj_ray_idx]))
-        vis.add_geometry(obj_point_sphere)
-
-        # draw query ray
-        query_lineset = open3d.geometry.LineSet()
-        vertex_query = np.vstack((query_org, query_pts[obj_ray_idx]))
-        lines_query = [[0, 1]]
-        color_query = np.tile((234 / 255, 51 / 255, 35 / 255), (1, 1))
-        query_lineset.points = open3d.utility.Vector3dVector(vertex_query)
-        query_lineset.lines = open3d.utility.Vector2iVector(lines_query)
-        query_lineset.colors = open3d.utility.Vector3dVector(color_query)
-        vis.add_geometry(query_lineset)
-
-        # get ray samples
-        samples_mask = query_rays_idx == obj_ray_idx
-        sample_depth = depth[samples_mask]
-        sample_pts = query_org + np.broadcast_to(query_dir[obj_ray_idx], (len(sample_depth), 3)) * sample_depth.reshape(-1, 1)
-
-        # voxel down sampling for vis
-        sample_pcd = open3d.geometry.PointCloud()
-        sample_pcd.points = open3d.utility.Vector3dVector(sample_pts)
-        _, _, idx_list = sample_pcd.voxel_down_sample_and_trace(voxel_size=0.05, min_bound=query_org, max_bound=query_pts[obj_ray_idx] * 2)
-        down_idx = np.stack([i[0] for i in idx_list])
-
-        # key rays
-        key_sensors_indices = key_sensors_indices[samples_mask][down_idx]
-        sample_key_rays_indices = key_rays_indices[samples_mask][down_idx]
-        key_pts_list = []
-        key_mos_list = []
-        for i in range(len(sample_key_rays_indices)):
-            key_sensor_idx = key_sensors_indices[i]
-            key_ray_idx = sample_key_rays_indices[i]
-            key_pts_list.append(key_rays_pts_list[key_sensor_idx][key_ray_idx])
-            key_mos_list.append(key_mos_labels_list[key_sensor_idx][key_ray_idx])
-        key_pts = np.stack(key_pts_list)
-        key_mos = np.array(key_mos_list)
-
-        sample_pts = sample_pts[down_idx]
-        gt_labels = labels[samples_mask][down_idx]
-
-        # draw bg points and rays to sample points
-        lineset_key = open3d.geometry.LineSet()
-        vertex_key = np.vstack((np.stack(key_rays_org_list), key_pts, sample_pts))
-        lines_key = []
-        lineset_corr = open3d.geometry.LineSet()  # sample point to corresponding key point
-        vertex_corr = np.vstack((key_pts, sample_pts))
-        lines_corr = []
-        for i in range(len(sample_pts)):
-            # TODO: vis q min and k min
-            q_min = vis_q_min[samples_mask][down_idx][i]
-            q_min_point = query_org.cpu().numpy() + q_min.reshape(-1, 1) * query_dir[query_rays_idx][samples_mask][down_idx][i].cpu().numpy()
-            q_min_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.2, resolution=200)
-            q_min_sphere = q_min_sphere.translate(q_min_point.ravel(), relative=False)
-            q_min_sphere.paint_uniform_color([1, 1, 1])
-            vis.add_geometry(q_min_sphere)
-            k_min = vis_k_min[samples_mask][down_idx][i]
-            a = key_rays_pts_list[key_sensors_indices[i]][sample_key_rays_indices[i]]
-            b = key_rays_org_list[key_sensors_indices[i]]
-            key_dir = F.normalize(a - b, p=2, dim=0).cpu().numpy()
-            k_min_point = key_rays_org_list[key_sensors_indices[i]].cpu().numpy() + k_min.reshape(-1, 1) * key_dir
-            k_min_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.2, resolution=200)
-            k_min_sphere = k_min_sphere.translate(k_min_point.ravel(), relative=False)
-            k_min_sphere.paint_uniform_color([1, 1, 1])
-            vis.add_geometry(k_min_sphere)
-
-            # sample point
-            sample_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.1, resolution=200)
-            sample_sphere = sample_sphere.translate(sample_pts[i], relative=False)
-            sample_sphere.paint_uniform_color(occ_color_func(gt_labels[i]))
-            vis.add_geometry(sample_sphere)
-
-            # corresponding key point
-            key_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
-            key_sphere = key_sphere.translate(key_pts[i], relative=False)
-            key_sphere.paint_uniform_color(mos_color_func(key_mos[i]))
-            vis.add_geometry(key_sphere)
-
-            # key rays org to bg point
-            lines_key.append([key_sensors_indices[i], i + len(key_rays_org_list)])
-            # lines_key.append([key_sensors_indices[i], i + len(key_rays_org_list) + len(sample_pts)])
-            lines_corr.append([i, i + len(key_pts)])
-
-        color_key = np.tile((1, 1, 1), (len(lines_key), 1))
-        lineset_key.points = open3d.utility.Vector3dVector(vertex_key)
-        lineset_key.lines = open3d.utility.Vector2iVector(lines_key)
-        lineset_key.colors = open3d.utility.Vector3dVector(color_key)
-        vis.add_geometry(lineset_key)
-        color_corr = np.tile((0.114, 0.875, 0), (len(lines_key), 1))
-        lineset_corr.points = open3d.utility.Vector3dVector(vertex_corr)
-        lineset_corr.lines = open3d.utility.Vector2iVector(lines_corr)
-        lineset_corr.colors = open3d.utility.Vector3dVector(color_corr)
-        vis.add_geometry(lineset_corr)
-
-        # open3d view option
-        vis.get_render_option().point_size = 7.0
-        vis.get_render_option().background_color = (0 / 255, 0 / 255, 0 / 255)
-        view_ctrl = vis.get_view_control()
-        if view_init:
-            view_ctrl.set_front((0.0, 0.0, 1.0))
-            view_ctrl.set_lookat((0.33837080335515901, -2.223431055221385, 2.6541285514831543))
-            view_ctrl.set_up((0.0, 1.0, 0.0))
-            view_ctrl.set_zoom((0.19999999999999959))
-            cam_params = view_ctrl.convert_to_pinhole_camera_parameters()
-            view_init = False
-        view_ctrl.convert_from_pinhole_camera_parameters(cam_params, allow_arbitrary=True)
-        while True:
-            cam_params = view_ctrl.convert_to_pinhole_camera_parameters()
-            # print(cam_params.extrinsic)
-            vis.poll_events()
-            vis.update_renderer()
-
-    def render_next_obj(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag, mov_obj_num
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_obj_idx += 1
-            if vis_obj_idx >= mov_obj_num:
-                vis_obj_idx = mov_obj_num - 1
-            draw(vis)
-
-    def render_prev_obj(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_obj_idx -= 1
-            if vis_obj_idx <= 0:
-                vis_obj_idx = 0
-            draw(vis)
-
-    def render_next_ray(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag, ray_num
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_ray_idx += 1
-            if vis_ray_idx >= ray_num:
-                vis_ray_idx = ray_num - 1
-            draw(vis)
-
-    def render_prev_ray(vis):
-        nonlocal vis_ray_idx, skip_flag
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_ray_idx -= 1
-            if vis_ray_idx <= 0:
-                vis_ray_idx = 0
-            draw(vis)
-
-    # render keyboard control
-    vis.register_key_callback(ord('D'), render_next_obj)
-    vis.register_key_callback(ord('A'), render_prev_obj)
-    vis.register_key_callback(ord('C'), render_next_ray)
-    vis.register_key_callback(ord('Z'), render_prev_ray)
-    vis.run()
-
-
-def load_rays(nusc, cfg, query_sd_tok, key_sd_toks_list):
+def load_rays(cfg, path_to_seq, query_scan_idx, key_scans_list):
     # get query rays
-    org_query, pts_query, ts_query, query_valid_mask = nusc_utils.get_transformed_pcd(nusc, cfg, query_sd_tok, query_sd_tok)  # cpu
+    org_query, pts_query, ts_query, query_valid_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
+                                                                                       query_scan_idx, query_scan_idx)  # cpu
     query_rays = QueryRays(org_query.cuda(), pts_query.cuda(), ts_query)  # cuda
 
     # get key rays
     key_rays_list = []
-    # query_rays_ints_idx_list, key_rays_ints_idx_list = [], []
-    for key_idx, key_sd_tok in enumerate(key_sd_toks_list):
-        org_key, pts_key, ts_key, key_valid_mask = nusc_utils.get_transformed_pcd(nusc, cfg, query_sd_tok, key_sd_tok)  # cpu
+    for key_scan_idx in key_scans_list:
+        org_key, pts_key, ts_key, key_valid_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
+                                                                                   query_scan_idx, key_scan_idx)  # cpu
         key_rays = KeyRays(org_key.cuda(), pts_key.cuda(), ts_key)  # cuda
         key_rays_list.append(key_rays)  # cuda
-        # query_rays_ints_idx, key_rays_ints_idx = key_rays.find_ints_rays(cfg, query_rays)  # cuda
-
-        # append
-        # query_rays_ints_idx_list.append(query_rays_ints_idx)
-        # key_rays_ints_idx_list.append(key_rays_ints_idx)
 
     # clear cuda memory
     # del query_rays_ints_idx, key_rays_ints_idx
     # torch.cuda.empty_cache()
     return query_rays, key_rays_list
-
-
-def get_mutual_sd_toks_dict(nusc, sample_toks: List[str], cfg):
-    key_sd_toks_dict = {}
-    for ref_sample_tok in sample_toks:
-        ref_sample = nusc.get("sample", ref_sample_tok)
-        ref_sd_tok = ref_sample['data']['LIDAR_TOP']
-        ref_ts = ref_sample['timestamp'] / 1e6
-        sample_sd_toks_list = []
-
-        # future sample data
-        skip_cnt = 0
-        num_next_samples = 0
-        sample = ref_sample
-        while num_next_samples < cfg["n_input"]:
-            if sample['next'] != "":
-                sample = nusc.get("sample", sample['next'])
-                if skip_cnt < cfg["n_skip"]:
-                    skip_cnt += 1
-                    continue
-                # add input sample data token
-                sample_sd_toks_list.append(sample["data"]["LIDAR_TOP"])
-                skip_cnt = 0
-                num_next_samples += 1
-            else:
-                break
-        if len(sample_sd_toks_list) == cfg["n_input"]:  # TODO: add one, to get full insert sample datas
-            sample_sd_toks_list = sample_sd_toks_list[::-1]  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5
-        else:
-            continue
-
-        # history sample data
-        sample_sd_toks_list.append(ref_sample["data"]["LIDAR_TOP"])
-        skip_cnt = 0  # already skip 0 samples
-        num_prev_samples = 1  # already sample 1 lidar sample data
-        sample = ref_sample
-        while num_prev_samples < cfg["n_input"] + 1:
-            if sample['prev'] != "":
-                sample = nusc.get("sample", sample['prev'])
-                if skip_cnt < cfg["n_skip"]:
-                    skip_cnt += 1
-                    continue
-                # add input sample data token
-                sample_sd_toks_list.append(sample["data"]["LIDAR_TOP"])  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5 | 0.0, -0.5, -1.0, -1.5, -2.0, -2.5, (-3.0)
-                skip_cnt = 0
-                num_prev_samples += 1
-            else:
-                break
-
-        # full samples, add sample data and inserted sample data to dict
-        if len(sample_sd_toks_list) == cfg["n_input"] * 2 + 1:
-            key_sd_toks_list = []
-            key_ts_list = []
-            for i in range(len(sample_sd_toks_list) - 1):
-                sample_data = nusc.get('sample_data', sample_sd_toks_list[i])
-                # get all sample data between two samples
-                sd_toks_between_samples = [sample_data['token']]
-                while sample_data['prev'] != "" and sample_data['prev'] != sample_sd_toks_list[i+1]:
-                    sample_data = nusc.get("sample_data", sample_data['prev'])
-                    sd_toks_between_samples.append(sample_data['token'])
-                # select several sample data as sample data insert
-                n_idx = int(len(sd_toks_between_samples) / cfg['n_sd_per_sample'])
-                for j in range(cfg['n_sd_per_sample']):
-                    key_sd_tok = sd_toks_between_samples[n_idx * j]
-                    key_sample_data = nusc.get('sample_data', key_sd_tok)
-                    key_ts = key_sample_data['timestamp'] / 1e6
-                    key_sd_toks_list.append(key_sd_tok)
-                    key_ts_list.append(key_ts - ref_ts)
-                # add to dict
-                if len(key_sd_toks_list) == cfg['n_input'] * 2 * cfg['n_sd_per_sample']:
-                    key_sd_toks_list.remove(ref_sd_tok)
-                    key_sd_toks_dict[ref_sample_tok] = key_sd_toks_list
-    return key_sd_toks_dict
 
 
 def get_occupancy_label(ray_depth, point_depth):
@@ -905,81 +554,99 @@ class QueryRays(object):
 if __name__ == '__main__':
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--autodl', type=bool, default=False)
-    parser.add_argument('--start', type=int, default=0)
+    parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
+    parser.add_argument('--mars', type=bool, help="mars server", default=False)
+    parser.add_argument('--hpc', type=bool, help="hpc server", default=False)
     args = parser.parse_args()
 
-    # load nusc dataset
+    # configs
+    with open('configs/dataset.yaml', 'r') as f:
+        cfg_dataset = yaml.safe_load(f)['sekitti']
+    # load kitti dataset
     if args.autodl:
-        nusc = NuScenes(dataroot="/root/autodl-tmp/Datasets/nuScenes", version="v1.0-trainval")
+        cfg_dataset['root'] = "/root/autodl-tmp/" + cfg_dataset['root']
+    elif args.mars:
+        cfg_dataset['root'] = "/home/miaozl" + cfg_dataset['root']
+    elif args.hpc:
+        cfg_dataset['root'] = "/lustre1/g/mech_mars" + cfg_dataset['root']
     else:
-        nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
-
+        cfg_dataset['root'] = "/home/ziliang" + cfg_dataset['root']
     with open('configs/ours.yaml', 'r') as f:
-        cfg = yaml.safe_load(f)['bg_pretrain']
+        cfg = yaml.safe_load(f)['moco']
 
     # get key sample data tokens
-    sample_toks_all = [sample['token'] for sample in nusc.sample]
-    key_sd_toks_dict = nusc_utils.get_mutual_sd_toks_dict(nusc, sample_toks_all, cfg)
+    seq_list = cfg_dataset['train'] + cfg_dataset['val']
+    for seq_idx in seq_list:
+        seqstr = "{0:02d}".format(int(seq_idx))
+        path_to_seq = os.path.join(cfg_dataset['root'], seqstr)
+        scan_files, label_files = kitti_utils.load_files(os.path.join(path_to_seq, cfg_dataset['lidar']),
+                                                         cfg_dataset['root'], seq_idx)  # load all scans in a seq
+        scans_idx_list = [scan_file.split(cfg_dataset['lidar'] + "/")[1].split(".")[0] for scan_file in scan_files]
+        key_scans_idx_dict = kitti_utils.get_mutual_scans_dict(scans_idx_list, path_to_seq, cfg)
 
-    # loop query rays
-    num_valid_samples = 0
-    num_valid_rays_per_scan = []
-    num_samples_per_scan = []
-    unk_pct_per_scan = []
-    free_pct_per_scan = []
-    occ_pct_per_scan = []
-    for query_sample_idx, query_sample_tok in tqdm(enumerate(key_sd_toks_dict.keys())):
-        if query_sample_idx < args.start:
-            continue
-        key_sd_toks_list = key_sd_toks_dict[query_sample_tok]
+        # loop query rays
+        num_valid_samples = 0
+        num_valid_rays_per_scan = []
+        num_samples_per_scan = []
+        unk_pct_per_scan = []
+        free_pct_per_scan = []
+        occ_pct_per_scan = []
+        for query_scan_idx, key_scans_list in tqdm(zip(key_scans_idx_dict.keys(), key_scans_idx_dict.values())):
+            # get rays
+            query_rays, key_rays_list = load_rays(cfg, path_to_seq, query_scan_idx, key_scans_list)  # cuda
 
-        # get rays
-        query_sample = nusc.get('sample', query_sample_tok)
-        query_sd_tok = query_sample['data']['LIDAR_TOP']
-        query_rays, key_rays_list = load_rays(nusc, cfg, query_sd_tok, key_sd_toks_list)  # cuda
+            # calculate intersection points
+            depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info = query_rays.cal_ints_points(cfg, key_rays_list, query_scan_idx)
+            if labels is not None:
+                # statistics
+                num_valid_rays_per_scan.append(query_rays.num_valid_rays_per_scan)  # int
+                num_samples_per_scan.append(query_rays.num_samples_per_scan)  # int
+                unk_pct_per_scan.append(query_rays.unk_pct_per_scan)  # cuda tensor
+                free_pct_per_scan.append(query_rays.free_pct_per_scan)  # cuda tensor
+                occ_pct_per_scan.append(query_rays.occ_pct_per_scan)  # cuda tensor
+                num_valid_samples += 1
 
-        # calculate intersection points
-        depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info = query_rays.cal_ints_points(cfg, key_rays_list, query_sample_tok)
-        if labels is not None:
-            # statistics
-            num_valid_rays_per_scan.append(query_rays.num_valid_rays_per_scan)  # int
-            num_samples_per_scan.append(query_rays.num_samples_per_scan)  # int
-            unk_pct_per_scan.append(query_rays.unk_pct_per_scan)  # cuda tensor
-            free_pct_per_scan.append(query_rays.free_pct_per_scan)  # cuda tensor
-            occ_pct_per_scan.append(query_rays.occ_pct_per_scan)  # cuda tensor
-            num_valid_samples += 1
+                # to numpy format
+                depth = depth.cpu().numpy()
+                depth_fp16 = depth.astype(np.float16)
+                labels = labels.cpu().numpy()
+                labels_uint8 = labels.astype(np.uint8)
+                confidence = confidence.cpu().numpy()
+                confidence_fp16 = confidence.astype(np.float16)
+                query_rays_idx = query_rays_idx.cpu().numpy()
+                query_rays_idx_uint16 = query_rays_idx.astype(np.uint16)
+                key_rays_idx = key_rays_idx.cpu().numpy()
+                key_rays_idx_uint16 = key_rays_idx.astype(np.uint16)
+                key_meta_info = key_meta_info.cpu().numpy()
+                key_meta_info_uint32 = key_meta_info.astype(np.uint32)
 
-            # to numpy format
-            depth = depth.cpu().numpy()
-            depth_fp16 = depth.astype(np.float16)
-            labels = labels.cpu().numpy()
-            labels_uint8 = labels.astype(np.uint8)
-            confidence = confidence.cpu().numpy()
-            confidence_fp16 = confidence.astype(np.float16)
-            query_rays_idx = query_rays_idx.cpu().numpy()
-            query_rays_idx_uint16 = query_rays_idx.astype(np.uint16)
-            key_rays_idx = key_rays_idx.cpu().numpy()
-            key_rays_idx_uint16 = key_rays_idx.astype(np.uint16)
-            key_meta_info = key_meta_info.cpu().numpy()
-            key_meta_info_uint32 = key_meta_info.astype(np.uint32)
+                # save labels
+                labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
+                os.makedirs(labels_folder, exist_ok=True)
+                depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
+                labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
+                confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
+                query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
+                key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
+                key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
 
-            # save labels
-            labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
-            os.makedirs(labels_folder, exist_ok=True)
-            depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
-            labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
-            confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
-            query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
-            key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
-            key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
+                # clear cuda memory
+                del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list
+                torch.cuda.empty_cache()
+            else:
+                print(f"Sample data tok {query_sd_tok}, index {query_scan_idx} do not have valid background points")
 
-            # clear cuda memory
-            del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list
-            torch.cuda.empty_cache()
-        else:
-            print(f"Sample data tok {query_sd_tok}, index {query_sample_idx} do not have valid background points")
+
+
+
+
+
+
+
+
+
     print(f"Number of valid samples: {num_valid_samples} / number of all samples {len(sample_toks_all)}")
+
 
     # histogram statistics
     num_valid_rays_per_scan = np.stack(num_valid_rays_per_scan)
