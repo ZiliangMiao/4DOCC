@@ -127,14 +127,13 @@ def get_transformed_pcd(cfg, path_to_seq, ref_scan_idx, scan_idx):
 
     if cfg["transform"]:
         curr_pose = poses[scan_idx]
-        ref_pose = poses[ref_scan_idx] # TODO: why -1?
-        pcd_tf = transform_point_cloud(pcd, curr_pose, ref_pose)
+        ref_pose = poses[ref_scan_idx]
+        points_tf = transform_point_cloud(pcd, curr_pose, ref_pose)  # curr point cloud, at {ref lidar} frame
     # true relative timestamp
     ts_rela = timestamps_list[scan_idx] - timestamps_list[ref_scan_idx]
 
     # transformed sensor origin and points, at {ref lidar} frame
     origin_tf = torch.tensor(curr_pose[:3, 3], dtype=torch.float32)  # curr sensor location, at {ref lidar} frame
-    points_tf = torch.tensor(pcd_tf, dtype=torch.float32)  # curr point cloud, at {ref lidar} frame
 
     # filter ego points and outside scene bbox points
     valid_mask = torch.squeeze(torch.full((len(points_tf), 1), True))
