@@ -217,295 +217,222 @@ class QueryRays(object):
         key_rays_idx_list = []
         key_meta_info_list = []
 
-        # # TODO: for vis while preprocessing
-        # vis_depth_list = []
-        # vis_labels_list = []
-        # vis_query_rays_idx_list = []
-        # vis_key_rays_idx_list = []
-        # vis_key_meta_info_list = []
-        # vis_q_min = []
-        # vis_k_min = []
-        # ###################################
-
         for key_sensor_idx, key_rays in enumerate(key_rays_list):
-            ######################################## intersection points ###############################################
             # query org to key org vector
-            query_key_org_vec = key_rays.get_org_vec(self.get_ray_start(), self.get_ray_size())  # cuda
-            query_rays_dir = self.get_ray_dir()  # cuda
             key_rays_dir = key_rays.get_ray_dir()  # cuda
-
-            # cal reference plane normal vector: unit vector (query_rays_size, 3)
-            ref_plane_norm = torch.cross(query_rays_dir, query_key_org_vec)  # cuda
 
             # TODO: time -> space, cuda out of memory
             split_size = 8
-            ref_plane_norm_split = torch.split(ref_plane_norm, int(len(ref_plane_norm)/split_size), dim=0)
-            del ref_plane_norm
+            query_rays_dir_split = torch.split(self.get_ray_dir(), int(self.get_ray_size()/split_size), dim=0)
 
-            # calculate cos of key_rays to reference plane: (query_rays_size, key_rays_size)
+            # loop each split
             dvg_ang = cfg['dvg_ang']  # rad
             query_ray_idx_start = 0
-            ray_ints_mask_split = []
-            query_rays_ints_idx_split = []
-            key_rays_ints_idx_split = []
-            for ref_plane_norm in ref_plane_norm_split:
+            for query_rays_dir in query_rays_dir_split:
+                ######################################## intersection points ###########################################
+                # cal reference plane normal vector: unit vector (query_rays_size, 3)
+                query_key_org_vec = key_rays.get_org_vec(self.get_ray_start(), len(query_rays_dir))  # cuda
+                ref_plane_norm = torch.cross(query_rays_dir, query_key_org_vec)  # cuda
+                del query_key_org_vec
+
+                # calculate cos of key_rays to reference plane: (query_rays_size / split_size, key_rays_size)
                 key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir.T)  # cuda
+                del ref_plane_norm
+                print("key rays to ref plane", key_rays_to_ref_plane.shape)
 
                 # get intersection rays
                 ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
                                                   key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
                 del key_rays_to_ref_plane
-                print(ray_ints_mask.shape)
+                print("ray ints mask", ray_ints_mask.shape)
 
                 # intersection ray index
                 ray_ints_idx = torch.where(ray_ints_mask)  # cuda
-                query_rays_ints_idx = ray_ints_idx[0] + query_ray_idx_start # cuda
+                query_rays_ints_idx = ray_ints_idx[0]  # cuda
                 key_rays_ints_idx = ray_ints_idx[1]  # cuda
-                query_ray_idx_start += len(ref_plane_norm) # update query ray index start
-
-                # append to split list
-                ray_ints_mask_split.append(ray_ints_mask)
-                query_rays_ints_idx_split.append(query_rays_ints_idx)
-                key_rays_ints_idx_split.append(key_rays_ints_idx)
                 del ray_ints_idx
 
-            # concat split list
-            query_rays_ints_idx = torch.cat(query_rays_ints_idx_split, dim=0)
-            key_rays_ints_idx = torch.cat(key_rays_ints_idx_split, dim=0)
+                # common perpendicular line
+                ints_query_rays_dir = query_rays_dir[query_rays_ints_idx]  # cuda
+                ints_key_rays_dir = key_rays_dir[key_rays_ints_idx]  # cuda
+                com_norm = torch.cross(ints_query_rays_dir, ints_key_rays_dir)  # cuda
 
-            # common perpendicular line
-            ints_query_rays_dir = query_rays_dir[query_rays_ints_idx]  # cuda
-            ints_key_rays_dir = key_rays_dir[key_rays_ints_idx]  # cuda
-            com_norm = torch.cross(ints_query_rays_dir, ints_key_rays_dir)  # cuda
+                # intersection points
+                rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_rays_ints_idx), 3))  # cuda
+                q = (torch.sum(torch.cross(rays_org_vec, ints_key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
+                k = (torch.sum(torch.cross(rays_org_vec, ints_query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
+                valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= cfg['max_range']),
+                                                    torch.logical_and(k >= 0, k <= cfg['max_range']))  # cuda
+                query_rays_ints_idx = query_rays_ints_idx[valid_ints_mask]  # cuda
+                key_rays_ints_idx = key_rays_ints_idx[valid_ints_mask]  # cuda
+                q_valid = q[valid_ints_mask]  # cuda
+                k_valid = k[valid_ints_mask]  # cuda
 
-            # intersection points
-            rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_rays_ints_idx), 3))  # cuda
-            q = (torch.sum(torch.cross(rays_org_vec, ints_key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
-            k = (torch.sum(torch.cross(rays_org_vec, ints_query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
-            valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= cfg['max_range']),
-                                                torch.logical_and(k >= 0, k <= cfg['max_range']))  # cuda
-            query_rays_ints_idx = query_rays_ints_idx[valid_ints_mask]  # cuda
-            key_rays_ints_idx = key_rays_ints_idx[valid_ints_mask]  # cuda
-            q_valid = q[valid_ints_mask]  # cuda
-            k_valid = k[valid_ints_mask]  # cuda
+                # calculate occupancy label of the ints pts (0: unknown, 1: free, 2:occupied) TODO: with measurement confidence
+                key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_rays_ints_idx])  # cuda
+                ints_labels, ints_confidence, ints_confident_mask = get_occupancy_label(ray_depth=key_ray_depth, point_depth=k_valid)
+                ints_depth = q_valid[ints_confident_mask]
+                query_rays_ints_idx = query_rays_ints_idx[ints_confident_mask] + query_ray_idx_start # TODO: split, add start index
+                key_rays_ints_idx = key_rays_ints_idx[ints_confident_mask]
 
-            # calculate occupancy label of the ints pts (0: unknown, 1: free, 2:occupied) TODO: with measurement confidence
-            key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_rays_ints_idx])  # cuda
-            ints_labels, ints_confidence, ints_confident_mask = get_occupancy_label(ray_depth=key_ray_depth, point_depth=k_valid)
-            ints_depth = q_valid[ints_confident_mask]
-            query_rays_ints_idx = query_rays_ints_idx[ints_confident_mask]
-            key_rays_ints_idx = key_rays_ints_idx[ints_confident_mask]
+                # clear cuda memory
+                del k_valid, q_valid, valid_ints_mask, k, q, com_norm, ints_key_rays_dir, ints_query_rays_dir, rays_org_vec, ints_confident_mask, key_ray_depth
+                torch.cuda.empty_cache()
+                ########################################################################################################
 
-            # clear cuda memory
-            del k_valid, q_valid, valid_ints_mask, k, q, com_norm, ints_key_rays_dir, ints_query_rays_dir, key_rays_to_ref_plane, ref_plane_norm, rays_org_vec, query_key_org_vec, ints_confident_mask, key_ray_depth
-            torch.cuda.empty_cache()
-            ############################################################################################################
+                ########################################## parallel points #############################################
+                # TODO: isosceles triangle approximation (point to line distance -> base length)
+                dvg_ang = cfg['dvg_ang']
+                ray_ang = torch.matmul(query_rays_dir, key_rays.get_ray_dir().T)  # cuda
+                ray_ang = torch.clip(ray_ang, min=-1, max=1)  # cuda, inner product of two unit vector > 1...
+                ray_para_mask = torch.logical_and(torch.logical_and(ray_ang > -1, ray_ang < 1),
+                                                  ray_ang >= np.cos(dvg_ang))
+                ray_para_mask = torch.logical_and(ray_ints_mask, ray_para_mask)
+                ray_para_idx = torch.where(ray_para_mask)
+                query_rays_para_idx = ray_para_idx[0]
+                key_rays_para_idx = ray_para_idx[1]
 
-            ########################################## parallel points #################################################
-            # TODO: isosceles triangle approximation (point to line distance -> base length)
-            dvg_ang = cfg['dvg_ang']
-            ray_ang = torch.matmul(self.get_ray_dir(), key_rays.get_ray_dir().T)  # cuda
-            ray_ang = torch.clip(ray_ang, min=-1, max=1)  # cuda, inner product of two unit vector > 1...
-            ray_para_mask = torch.logical_and(torch.logical_and(ray_ang > -1, ray_ang < 1),
-                                              ray_ang >= np.cos(dvg_ang))
-            ray_para_mask = torch.logical_and(ray_ints_mask, ray_para_mask)
-            ray_para_idx = torch.where(ray_para_mask)
-            query_rays_para_idx = ray_para_idx[0]
-            key_rays_para_idx = ray_para_idx[1]
+                # common perpendicular line
+                para_query_rays_dir = query_rays_dir[query_rays_para_idx]  # cuda
+                para_key_rays_dir = key_rays_dir[key_rays_para_idx]  # cuda
+                para_com_norm = torch.cross(para_query_rays_dir, para_key_rays_dir)  # cuda
 
-            # common perpendicular line
-            para_query_rays_dir = query_rays_dir[query_rays_para_idx]  # cuda
-            para_key_rays_dir = key_rays_dir[key_rays_para_idx]  # cuda
-            para_com_norm = torch.cross(para_query_rays_dir, para_key_rays_dir)  # cuda
+                # para rays intersection points
+                rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(para_com_norm), 3))  # cuda
+                com_norm_dot_prod = torch.sum(para_com_norm * para_com_norm, dim=1)
+                q_para = (torch.sum(torch.cross(rays_org_vec, para_key_rays_dir) * para_com_norm, dim=1) / com_norm_dot_prod)  # cuda
+                k_para = (torch.sum(torch.cross(rays_org_vec, para_query_rays_dir) * para_com_norm, dim=1) / com_norm_dot_prod)  # cuda
 
-            # para rays intersection points
-            rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(para_com_norm), 3))  # cuda
-            com_norm_dot_prod = torch.sum(para_com_norm * para_com_norm, dim=1)
-            q_para = (torch.sum(torch.cross(rays_org_vec, para_key_rays_dir) * para_com_norm, dim=1) / com_norm_dot_prod)  # cuda
-            k_para = (torch.sum(torch.cross(rays_org_vec, para_query_rays_dir) * para_com_norm, dim=1) / com_norm_dot_prod)  # cuda
+                # update
+                valid_para_mask_0 = torch.sign(q_para) * torch.sign(k_para) > 0
+                q_para = q_para[valid_para_mask_0]
+                k_para = k_para[valid_para_mask_0]
+                query_rays_para_idx = query_rays_para_idx[valid_para_mask_0]
+                key_rays_para_idx = key_rays_para_idx[valid_para_mask_0]
 
-            # # check whether the intersection point is the same point
-            # q_pts = self.get_ray_start() + q_para.reshape(-1, 1) * self.get_ray_dir()[query_rays_para_idx]
-            # k_pts = key_rays.get_ray_start() + k_para.reshape(-1, 1) * key_rays.get_ray_dir()[key_rays_para_idx]
-            # same_pts = torch.where(q_pts == k_pts)
-            # ########################################################
+                # TODO: inverse solution, leg length threshold
+                fw_mask = torch.logical_and(q_para >= 0, k_para >= 0)  # para rays intersect at forward side
+                bw_mask = torch.logical_and(q_para < 0, k_para < 0)  # para rays intersect at backward side
 
-            # update
-            valid_para_mask_0 = torch.sign(q_para) * torch.sign(k_para) > 0
-            q_para = q_para[valid_para_mask_0]
-            k_para = k_para[valid_para_mask_0]
-            query_rays_para_idx = query_rays_para_idx[valid_para_mask_0]
-            key_rays_para_idx = key_rays_para_idx[valid_para_mask_0]
+                # where the intersection begins (at query ray)
+                # TODO: numerator and denominator for forward and backward cases
+                ang_cos = ray_ang[tuple((query_rays_para_idx, key_rays_para_idx))]
+                sin_half_ang = torch.sqrt((1 - ang_cos) / 2)
+                tan_half_ang = np.tan(dvg_ang / 2)
+                fw_numerator = q_para[fw_mask] * (sin_half_ang[fw_mask] + tan_half_ang) - k_para[fw_mask] * tan_half_ang
+                fw_denominator = sin_half_ang[fw_mask] + 2 * tan_half_ang
+                bw_numerator = q_para[bw_mask] * (-sin_half_ang[bw_mask] + tan_half_ang) - k_para[bw_mask] * tan_half_ang
+                bw_denominator = -sin_half_ang[bw_mask] + 2 * tan_half_ang
 
-            # TODO: inverse solution, leg length threshold
-            fw_mask = torch.logical_and(q_para >= 0, k_para >= 0)  # para rays intersect at forward side
-            bw_mask = torch.logical_and(q_para < 0, k_para < 0)  # para rays intersect at backward side
-            # fw_idx = torch.where(fw_mask)
-            # bw_idx = torch.where(bw_mask)
+                x_q_min = torch.ones(len(q_para)).cuda() * 100
+                # TODO: logic 1: d = r_q + r_k
+                x_q_min_1 = torch.ones(len(q_para)).cuda() * 100
+                x_q_min_1[fw_mask] = fw_numerator / fw_denominator
+                x_q_min_1[bw_mask] = bw_numerator / bw_denominator
+                x_k_min_1 = k_para - q_para + x_q_min_1
+                valid_para_mask_1 = torch.logical_and(torch.logical_and(x_q_min_1 >= 0, x_q_min_1 <= cfg['max_range']),
+                                                      torch.logical_and(x_k_min_1 >= 0, x_k_min_1 <= cfg['max_range']))
+                # update global x_q_min and x_k_min
+                update_mask = torch.logical_and(valid_para_mask_1, x_q_min_1 <= x_q_min)
+                x_q_min[update_mask] = x_q_min_1[update_mask]
 
-            # where the intersection begins (at query ray)
-            # TODO: numerator and denominator for forward and backward cases
-            ang_cos = ray_ang[tuple((query_rays_para_idx, key_rays_para_idx))]
-            sin_half_ang = torch.sqrt((1 - ang_cos) / 2)
-            tan_half_ang = np.tan(dvg_ang / 2)
-            fw_numerator = q_para[fw_mask] * (sin_half_ang[fw_mask] + tan_half_ang) - k_para[fw_mask] * tan_half_ang
-            fw_denominator = sin_half_ang[fw_mask] + 2 * tan_half_ang
-            bw_numerator = q_para[bw_mask] * (-sin_half_ang[bw_mask] + tan_half_ang) - k_para[bw_mask] * tan_half_ang
-            bw_denominator = -sin_half_ang[bw_mask] + 2 * tan_half_ang
+                # TODO: logic 2: d = r_k
+                x_q_min_2 = torch.ones(len(q_para)).cuda() * 100
+                x_q_min_2[fw_mask] = fw_numerator / (fw_denominator - tan_half_ang)
+                x_q_min_2[bw_mask] = bw_numerator / (bw_denominator - tan_half_ang)
+                x_k_min_2 = k_para - q_para + x_q_min_2
+                valid_para_mask_2 = torch.logical_and(torch.logical_and(x_q_min_2 >= 0, x_q_min_2 <= cfg['max_range']),
+                                                      torch.logical_and(x_k_min_2 >= 0, x_k_min_2 <= cfg['max_range']))
+                # update global x_q_min and x_k_min
+                update_mask = torch.logical_and(valid_para_mask_2, x_q_min_2 <= x_q_min)
+                x_q_min[update_mask] = x_q_min_2[update_mask]
 
-            x_q_min = torch.ones(len(q_para)).cuda() * 100
-            # TODO: logic 1: d = r_q + r_k
-            x_q_min_1 = torch.ones(len(q_para)).cuda() * 100
-            x_q_min_1[fw_mask] = fw_numerator / fw_denominator
-            x_q_min_1[bw_mask] = bw_numerator / bw_denominator
-            x_k_min_1 = k_para - q_para + x_q_min_1
-            valid_para_mask_1 = torch.logical_and(torch.logical_and(x_q_min_1 >= 0, x_q_min_1 <= cfg['max_range']),
-                                                  torch.logical_and(x_k_min_1 >= 0, x_k_min_1 <= cfg['max_range']))
-            # update global x_q_min and x_k_min
-            update_mask = torch.logical_and(valid_para_mask_1, x_q_min_1 <= x_q_min)
-            x_q_min[update_mask] = x_q_min_1[update_mask]
+                # TODO: logic 3: d = r_k - r_q
+                x_q_min_3 = torch.ones(len(q_para)).cuda() * 100
+                x_q_min_3[fw_mask] = fw_numerator / (fw_denominator - 2 * tan_half_ang)
+                x_q_min_3[bw_mask] = bw_numerator / (bw_denominator - 2 * tan_half_ang)
+                x_k_min_3 = k_para - q_para + x_q_min_3
+                valid_para_mask_3 = torch.logical_and(torch.logical_and(x_q_min_3 >= 0, x_q_min_3 <= cfg['max_range']),
+                                                      torch.logical_and(x_k_min_3 >= 0, x_k_min_3 <= cfg['max_range']))
+                # update global x_q_min and x_k_min
+                update_mask = torch.logical_and(valid_para_mask_3, x_q_min_3 <= x_q_min)
+                x_q_min[update_mask] = x_q_min_3[update_mask]
 
-            # TODO: logic 2: d = r_k
-            x_q_min_2 = torch.ones(len(q_para)).cuda() * 100
-            x_q_min_2[fw_mask] = fw_numerator / (fw_denominator - tan_half_ang)
-            x_q_min_2[bw_mask] = bw_numerator / (bw_denominator - tan_half_ang)
-            x_k_min_2 = k_para - q_para + x_q_min_2
-            valid_para_mask_2 = torch.logical_and(torch.logical_and(x_q_min_2 >= 0, x_q_min_2 <= cfg['max_range']),
-                                                  torch.logical_and(x_k_min_2 >= 0, x_k_min_2 <= cfg['max_range']))
-            # update global x_q_min and x_k_min
-            update_mask = torch.logical_and(valid_para_mask_2, x_q_min_2 <= x_q_min)
-            x_q_min[update_mask] = x_q_min_2[update_mask]
+                # TODO: logic 4: d = r_q
+                x_q_min_4 = torch.ones(len(q_para)).cuda() * 100
+                x_q_min_4[fw_mask] = (q_para[fw_mask] * (sin_half_ang[fw_mask])) / (fw_denominator - tan_half_ang)
+                x_q_min_4[bw_mask] = (q_para[bw_mask] * -sin_half_ang[bw_mask]) / (bw_denominator - tan_half_ang)
+                x_k_min_4 = k_para - q_para + x_q_min_4
+                valid_para_mask_4 = torch.logical_and(torch.logical_and(x_q_min_4 >= 0, x_q_min_4 <= cfg['max_range']),
+                                                      torch.logical_and(x_k_min_4 >= 0, x_k_min_4 <= cfg['max_range']))
+                # update global x_q_min and x_k_min
+                update_mask = torch.logical_and(valid_para_mask_4, x_q_min_4 <= x_q_min)
+                x_q_min[update_mask] = x_q_min_4[update_mask]
 
-            # TODO: logic 3: d = r_k - r_q
-            x_q_min_3 = torch.ones(len(q_para)).cuda() * 100
-            x_q_min_3[fw_mask] = fw_numerator / (fw_denominator - 2 * tan_half_ang)
-            x_q_min_3[bw_mask] = bw_numerator / (bw_denominator - 2 * tan_half_ang)
-            x_k_min_3 = k_para - q_para + x_q_min_3
-            valid_para_mask_3 = torch.logical_and(torch.logical_and(x_q_min_3 >= 0, x_q_min_3 <= cfg['max_range']),
-                                                  torch.logical_and(x_k_min_3 >= 0, x_k_min_3 <= cfg['max_range']))
-            # update global x_q_min and x_k_min
-            update_mask = torch.logical_and(valid_para_mask_3, x_q_min_3 <= x_q_min)
-            x_q_min[update_mask] = x_q_min_3[update_mask]
+                # TODO: logic 5: d = 0
+                x_q_min_5 = q_para
+                x_k_min_5 = k_para
+                valid_para_mask_5 = torch.logical_and(torch.logical_and(x_q_min_5 >= 0, x_q_min_5 <= cfg['max_range']),
+                                                      torch.logical_and(x_k_min_5 >= 0, x_k_min_5 <= cfg['max_range']))
+                # update global x_q_min and x_k_min
+                update_mask = torch.logical_and(valid_para_mask_5, x_q_min_5 <= x_q_min)
+                x_q_min[update_mask] = x_q_min_5[update_mask]
+                x_k_min = k_para - q_para + x_q_min
 
-            # TODO: logic 4: d = r_q
-            x_q_min_4 = torch.ones(len(q_para)).cuda() * 100
-            x_q_min_4[fw_mask] = (q_para[fw_mask] * (sin_half_ang[fw_mask])) / (fw_denominator - tan_half_ang)
-            x_q_min_4[bw_mask] = (q_para[bw_mask] * -sin_half_ang[bw_mask]) / (bw_denominator - tan_half_ang)
-            x_k_min_4 = k_para - q_para + x_q_min_4
-            valid_para_mask_4 = torch.logical_and(torch.logical_and(x_q_min_4 >= 0, x_q_min_4 <= cfg['max_range']),
-                                                  torch.logical_and(x_k_min_4 >= 0, x_k_min_4 <= cfg['max_range']))
-            # update global x_q_min and x_k_min
-            update_mask = torch.logical_and(valid_para_mask_4, x_q_min_4 <= x_q_min)
-            x_q_min[update_mask] = x_q_min_4[update_mask]
+                # TODO: all valid
+                valid_para_mask = torch.logical_or(valid_para_mask_1, valid_para_mask_2)
+                valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_3)
+                valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_4)
+                valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_5)
 
-            # TODO: logic 5: d = 0
-            x_q_min_5 = q_para
-            x_k_min_5 = k_para
-            valid_para_mask_5 = torch.logical_and(torch.logical_and(x_q_min_5 >= 0, x_q_min_5 <= cfg['max_range']),
-                                                  torch.logical_and(x_k_min_5 >= 0, x_k_min_5 <= cfg['max_range']))
-            # update global x_q_min and x_k_min
-            update_mask = torch.logical_and(valid_para_mask_5, x_q_min_5 <= x_q_min)
-            x_q_min[update_mask] = x_q_min_5[update_mask]
-            x_k_min = k_para - q_para + x_q_min
+                # update
+                q_para = q_para[valid_para_mask]
+                k_para = k_para[valid_para_mask]
+                query_rays_para_idx = query_rays_para_idx[valid_para_mask]
+                key_rays_para_idx = key_rays_para_idx[valid_para_mask]
+                x_q_min = x_q_min[valid_para_mask]
+                x_k_min = x_k_min[valid_para_mask]
 
-            # TODO: all valid
-            valid_para_mask = torch.logical_or(valid_para_mask_1, valid_para_mask_2)
-            valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_3)
-            valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_4)
-            valid_para_mask = torch.logical_or(valid_para_mask, valid_para_mask_5)
+                # select samples
+                query_ray_depth = self.get_ray_depth(self.get_ray_end())[query_rays_para_idx]
+                key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end())[key_rays_para_idx]
+                x_q = torch.cat((query_ray_depth, query_ray_depth / 2, (query_ray_depth + x_q_min) / 2), dim=0)
+                x_k = torch.cat((key_ray_depth, key_ray_depth / 2, (key_ray_depth + x_k_min) / 2), dim=0)
+                x_k_prime = x_q + (k_para - q_para).repeat(3)
+                x_q_prime = x_k + (q_para - k_para).repeat(3)
+                x_q = torch.cat((x_q, x_q_prime), dim=0)
+                x_k = torch.cat((x_k_prime, x_k), dim=0)
+                valid_sample_mask = torch.logical_and(x_q >= x_q_min.repeat(6), x_k >= x_k_min.repeat(6))
 
-            # TODO: debug
-            # if len(torch.where(query_rays_para_idx[valid_para_mask_1] == 596)[0]) != 0:
-            #     a = torch.where(query_rays_para_idx[valid_para_mask_1] == 596)[0]
-            #     q_min = x_q_min_1[valid_para_mask_1][a]
-            #     k_min = x_k_min_1[valid_para_mask_1][a]
-            #
-            #     q_min_glb = x_q_min[valid_para_mask_1][a]
-            #     k_min_glb = x_k_min[valid_para_mask_1][a]
-            #
-            #     d = (q_para[valid_para_mask_1][a] - q_min) * sin_half_ang[valid_para_mask_1][a]
-            #     r_q = q_min * tan_half_ang
-            #     r_k = k_min * tan_half_ang
-            #     x = 1
-            #
-            # if len(torch.where(query_rays_para_idx[valid_para_mask_2] == 541)[0]) != 0:
-            #     b = torch.where(query_rays_para_idx[valid_para_mask_2] == 541)[0]
-            #
-            #     q_min = x_q_min_2[valid_para_mask_2][b]
-            #     k_min = x_k_min_2[valid_para_mask_2][b]
-            #
-            #     q_min_glb = x_q_min[valid_para_mask_2][b]
-            #     k_min_glb = x_k_min[valid_para_mask_2][b]
-            #
-            #     q_para = q_para[valid_para_mask_2][b]
-            #     sin_half_ang = sin_half_ang[valid_para_mask_2][b]
-            #     d = (q_para - q_min) * sin_half_ang
-            #     r_q = q_min * tan_half_ang
-            #     r_k = k_min * tan_half_ang
-            #     x = 1
-            # if len(torch.where(query_rays_para_idx[valid_para_mask_3] == 596)[0]) != 0:
-            #     c = torch.where(query_rays_para_idx[valid_para_mask_3] == 596)[0]
-            # if len(torch.where(query_rays_para_idx[valid_para_mask_4] == 596)[0]) != 0:
-            #     d = torch.where(query_rays_para_idx[valid_para_mask_4] == 596)[0]
-            # if len(torch.where(query_rays_para_idx[valid_para_mask_5] == 596)[0]) != 0:
-            #     e = torch.where(query_rays_para_idx[valid_para_mask_5] == 596)[0]
-            ##############
+                # save labels
+                ray_depth = key_ray_depth.repeat(6)[valid_sample_mask]
+                key_sample_depth = x_k[valid_sample_mask]
+                para_labels, para_confidence, para_confident_mask = get_occupancy_label(ray_depth=ray_depth, point_depth=key_sample_depth)
+                para_depth = x_q[valid_sample_mask][para_confident_mask]
+                query_rays_para_idx = query_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask] + query_ray_idx_start # TODO: add query ray start index, due to query ray split
+                key_rays_para_idx = key_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask]
 
-            # update
-            q_para = q_para[valid_para_mask]
-            k_para = k_para[valid_para_mask]
-            query_rays_para_idx = query_rays_para_idx[valid_para_mask]
-            key_rays_para_idx = key_rays_para_idx[valid_para_mask]
-            x_q_min = x_q_min[valid_para_mask]
-            x_k_min = x_k_min[valid_para_mask]
+                # TODO: update query ray index start (due to query ray split)
+                query_ray_idx_start += len(query_rays_dir)
 
-            # select samples
-            query_ray_depth = self.get_ray_depth(self.get_ray_end())[query_rays_para_idx]
-            key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end())[key_rays_para_idx]
-            x_q = torch.cat((query_ray_depth, query_ray_depth / 2, (query_ray_depth + x_q_min) / 2), dim=0)
-            x_k = torch.cat((key_ray_depth, key_ray_depth / 2, (key_ray_depth + x_k_min) / 2), dim=0)
-            x_k_prime = x_q + (k_para - q_para).repeat(3)
-            x_q_prime = x_k + (q_para - k_para).repeat(3)
-            x_q = torch.cat((x_q, x_q_prime), dim=0)
-            x_k = torch.cat((x_k_prime, x_k), dim=0)
-            valid_sample_mask = torch.logical_and(x_q >= x_q_min.repeat(6), x_k >= x_k_min.repeat(6))
+                # dictionary: query ray index -> points list
+                depth = torch.cat((ints_depth, para_depth), dim=0)  # depth on query ray
+                labels = torch.cat((ints_labels, para_labels), dim=0)  # occupancy labels
+                confidence = torch.cat((ints_confidence, para_confidence), dim=0)  # confidence of the labels
+                query_rays_idx = torch.cat((query_rays_ints_idx, query_rays_para_idx), dim=0)
+                key_rays_idx = torch.cat((key_rays_ints_idx, key_rays_para_idx), dim=0)
 
-            # save labels
-            ray_depth = key_ray_depth.repeat(6)[valid_sample_mask]
-            key_sample_depth = x_k[valid_sample_mask]
-            para_labels, para_confidence, para_confident_mask = get_occupancy_label(ray_depth=ray_depth, point_depth=key_sample_depth)
-            para_depth = x_q[valid_sample_mask][para_confident_mask]
-            query_rays_para_idx = query_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask]
-            key_rays_para_idx = key_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask]
+                # append to list
+                depth_list.append(depth.cpu())
+                labels_list.append(labels.cpu())
+                confidence_list.append(confidence.cpu())
+                query_rays_idx_list.append(query_rays_idx.cpu())
+                key_rays_idx_list.append(key_rays_idx.cpu())
+                key_meta_info_list.append([key_sensor_idx, len(labels)])
 
-            # # TODO: for vis while preprocessing
-            # vis_depth_list.append(para_depth)
-            # vis_labels_list.append(para_labels)
-            # vis_query_rays_idx_list.append(query_rays_para_idx)
-            # vis_key_rays_idx_list.append(key_rays_para_idx)
-            # vis_key_meta_info_list.append([key_sensor_idx, len(para_labels)])
-            # vis_q_min.append(x_q_min.repeat(6)[valid_sample_mask][para_confident_mask])
-            # vis_k_min.append(x_k_min.repeat(6)[valid_sample_mask][para_confident_mask])
-            # ###################################
-
-            # dictionary: query ray index -> points list
-            depth = torch.cat((ints_depth, para_depth), dim=0)  # depth on query ray
-            labels = torch.cat((ints_labels, para_labels), dim=0)  # occupancy labels
-            confidence = torch.cat((ints_confidence, para_confidence), dim=0)  # confidence of the labels
-            query_rays_idx = torch.cat((query_rays_ints_idx, query_rays_para_idx), dim=0)
-            key_rays_idx = torch.cat((key_rays_ints_idx, key_rays_para_idx), dim=0)
-
-            # append to list
-            depth_list.append(depth)
-            labels_list.append(labels)
-            confidence_list.append(confidence)
-            query_rays_idx_list.append(query_rays_idx)
-            key_rays_idx_list.append(key_rays_idx)
-            key_meta_info_list.append([key_sensor_idx, len(labels)])
-
-            # clear cuda memory
-            del ray_ints_mask, key_rays_idx, query_rays_idx, confidence, labels, depth, ray_ang, key_rays_ints_idx, key_rays_dir, ints_labels, ints_depth, ints_confidence
-            torch.cuda.empty_cache()
+                # clear cuda memory
+                del ray_ints_mask, key_rays_idx, query_rays_idx, confidence, labels, depth, ray_ang, key_rays_ints_idx, ints_labels, ints_depth, ints_confidence
+                torch.cuda.empty_cache()
 
         if len(labels_list) == 0:
             return None
@@ -528,18 +455,6 @@ class QueryRays(object):
             self.unk_pct_per_scan = (num_unk / len(labels)) * 100
             self.free_pct_per_scan = (num_free / len(labels)) * 100
             self.occ_pct_per_scan = (num_occ / len(labels)) * 100
-
-            # # TODO: vis while preprocessing ############################################################################
-            # vis_depth = torch.cat(vis_depth_list).cpu().numpy()
-            # vis_labels = torch.cat(vis_labels_list).cpu().numpy()
-            # vis_query_rays_idx = torch.cat(vis_query_rays_idx_list).cpu().numpy()
-            # vis_key_rays_idx = torch.cat(vis_key_rays_idx_list).cpu().numpy()
-            # vis_key_meta_info = torch.tensor(vis_key_meta_info_list).cpu().numpy()
-            # vis_q_min = torch.cat(vis_q_min).cpu().numpy()
-            # vis_k_min = torch.cat(vis_k_min).cpu().numpy()
-            # draw_while_preprocessing(nusc, cfg, query_sample_tok, vis_depth, vis_labels, vis_query_rays_idx,
-            #                          vis_key_rays_idx, vis_key_meta_info, vis_q_min, vis_k_min)
-            # ############################################################################################################
             return depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info
 
 
