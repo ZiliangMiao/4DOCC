@@ -244,20 +244,33 @@ class QueryRays(object):
 
             # calculate cos of key_rays to reference plane: (query_rays_size, key_rays_size)
             dvg_ang = cfg['dvg_ang']  # rad
+            query_ray_idx_start = 0
             ray_ints_mask_split = []
+            query_rays_ints_idx_split = []
+            key_rays_ints_idx_split = []
             for ref_plane_norm in ref_plane_norm_split:
                 key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir.T)  # cuda
+
                 # get intersection rays
                 ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
                                                   key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
-                ray_ints_mask_split.append(ray_ints_mask)
-                del key_rays_to_ref_plane, ray_ints_mask
-            ray_ints_mask = torch.cat(ray_ints_mask_split, dim=0)
+                del key_rays_to_ref_plane
 
-            # intersection ray index
-            ray_ints_idx = torch.where(ray_ints_mask)  # cuda
-            query_rays_ints_idx = ray_ints_idx[0]  # cuda
-            key_rays_ints_idx = ray_ints_idx[1]  # cuda
+                # intersection ray index
+                ray_ints_idx = torch.where(ray_ints_mask)  # cuda
+                query_rays_ints_idx = ray_ints_idx[0] + query_ray_idx_start # cuda
+                key_rays_ints_idx = ray_ints_idx[1]  # cuda
+                query_ray_idx_start += len(ref_plane_norm) # update query ray index start
+
+                # append to split list
+                ray_ints_mask_split.append(ray_ints_mask)
+                query_rays_ints_idx_split.append(query_rays_ints_idx)
+                key_rays_ints_idx_split.append(key_rays_ints_idx)
+                del ray_ints_idx
+
+            # concat split list
+            query_rays_ints_idx = torch.cat(query_rays_ints_idx_split, dim=0)
+            key_rays_ints_idx = torch.cat(key_rays_ints_idx_split, dim=0)
 
             # common perpendicular line
             ints_query_rays_dir = query_rays_dir[query_rays_ints_idx]  # cuda
