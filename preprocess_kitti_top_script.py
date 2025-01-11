@@ -22,10 +22,6 @@ def load_rays(cfg, path_to_seq, query_scan_idx, key_scans_list):
                                                                                    query_scan_idx, key_scan_idx)  # cpu
         key_rays = KeyRays(org_key.cuda(), pts_key.cuda(), ts_key)  # cuda
         key_rays_list.append(key_rays)  # cuda
-
-    # clear cuda memory
-    # del query_rays_ints_idx, key_rays_ints_idx
-    # torch.cuda.empty_cache()
     return query_rays, key_rays_list
 
 
@@ -213,26 +209,7 @@ class QueryRays(object):
         # unit vec: from key org to query org
         return torch.broadcast_to(F.normalize(self.ray_start - org_key, p=2, dim=0), (ray_size, 3))
 
-    def get_mutual_obs_samples(self, cfg, key_rays_list):
-        """
-        Generate mutual observation samples for pre-training.
-
-        Args:
-            cfg:
-            key_rays_list:
-
-        Returns:
-
-        """
-        asd = 1
-
-    def get_ints_rays(self):
-        asd = 1
-
-    def get_para_rays(self):
-        asd = 1
-
-    def cal_ints_points(self, cfg, key_rays_list: list, query_sample_tok):
+    def cal_ints_points(self, cfg, key_rays_list: list, query_scan_idx):
         depth_list = []
         labels_list = []
         confidence_list = []
@@ -260,13 +237,22 @@ class QueryRays(object):
             # cal reference plane normal vector: unit vector (query_rays_size, 3)
             ref_plane_norm = torch.cross(query_rays_dir, query_key_org_vec)  # cuda
 
-            # calculate cos of key_rays to reference plane: (query_rays_size, key_rays_size)
-            key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir.T)  # cuda
+            # TODO: time -> space, cuda out of memory
+            split_size = 8
+            ref_plane_norm_split = torch.split(ref_plane_norm, int(len(ref_plane_norm)/split_size), dim=0)
+            del ref_plane_norm
 
-            # get intersection rays
+            # calculate cos of key_rays to reference plane: (query_rays_size, key_rays_size)
             dvg_ang = cfg['dvg_ang']  # rad
-            ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
-                                              key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
+            ray_ints_mask_split = []
+            for ref_plane_norm in ref_plane_norm_split:
+                key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir.T)  # cuda
+                # get intersection rays
+                ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
+                                                  key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
+                ray_ints_mask_split.append(ray_ints_mask)
+                del key_rays_to_ref_plane, ray_ints_mask
+            ray_ints_mask = torch.stack(ray_ints_mask_split, dim=0)
 
             # intersection ray index
             ray_ints_idx = torch.where(ray_ints_mask)  # cuda
