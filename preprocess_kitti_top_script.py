@@ -252,7 +252,7 @@ class QueryRays(object):
                                                   key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
                 ray_ints_mask_split.append(ray_ints_mask)
                 del key_rays_to_ref_plane, ray_ints_mask
-            ray_ints_mask = torch.stack(ray_ints_mask_split, dim=1)
+            ray_ints_mask = torch.cat(ray_ints_mask_split, dim=0)
 
             # intersection ray index
             ray_ints_idx = torch.where(ray_ints_mask)  # cuda
