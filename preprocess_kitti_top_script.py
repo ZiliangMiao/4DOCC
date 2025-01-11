@@ -238,7 +238,7 @@ class QueryRays(object):
             ref_plane_norm = torch.cross(query_rays_dir, query_key_org_vec)  # cuda
 
             # TODO: time -> space, cuda out of memory
-            split_size = 4
+            split_size = 8
             ref_plane_norm_split = torch.split(ref_plane_norm, int(len(ref_plane_norm)/split_size), dim=0)
             del ref_plane_norm
 
@@ -255,6 +255,7 @@ class QueryRays(object):
                 ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
                                                   key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
                 del key_rays_to_ref_plane
+                print(ray_ints_mask.shape)
 
                 # intersection ray index
                 ray_ints_idx = torch.where(ray_ints_mask)  # cuda
