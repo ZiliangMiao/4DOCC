@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from models.ours.models import MutualObsPretrainNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
-from datasets.nusc_utils import NuscDataloader
+from datasets.nusc_loader import NuscDataloader
 from datasets.ours.nusc import NuscMoCoDataset
 # lib
 from utils.deterministic import set_deterministic

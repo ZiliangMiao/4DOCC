@@ -20,7 +20,7 @@ from nuscenes.nuscenes import NuScenes
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from models.semantic.models import SemanticNetwork
-from datasets.nusc_utils import NuscDataloader
+from datasets.nusc_loader import NuscDataloader
 from datasets.semantic.nusc import NuscSemanticDataset
 
 

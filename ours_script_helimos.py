@@ -15,12 +15,12 @@ from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # models
-from models.ours.models import MotionPretrainNetwork
+from models.ours.models import MutualObsPretrainNetwork
 from models.mos4d.models import MosNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
-from datasets.nusc_utils import NuscDataloader
-from datasets.ours.nusc import NuscBgDataset
+from datasets.nusc_loader import NuscDataloader
+from datasets.ours.nusc import NuscMoCoDataset
 from datasets.helimos.helimos import HeLiMOSDataloader, HeLiMOSDataset
 from datasets.mos4d.nusc import NuscMosDataset
 # lib
@@ -30,7 +30,7 @@ from utils.metrics import ClassificationMetrics
 
 def statistics(cfg_model, cfg_dataset):
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    nuscenes = NuscBgDataset(nusc, cfg_model, cfg_dataset, "train")
+    nuscenes = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, "train")
     num_occ_percentage_per_ray = []
     num_occ_total = 0
     num_free_total = 0
@@ -97,15 +97,15 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
 
     # dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscBgDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscBgDataset(nusc, model_cfg, dataset_cfg, 'val')
+    train_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'train')
+    val_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'val')
     dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
 
     # pretrain model
-    pretrain_model = MotionPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
+    pretrain_model = MutualObsPretrainNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -257,14 +257,14 @@ def bg_test(cfg_test, cfg_dataset):
 
     # model
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
-    model = MotionPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
+    model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
     # dataloader
     test_dataset = cfg_test['test_dataset']
     assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscBgDataset(nusc, cfg_model, cfg_dataset, 'val')
+    train_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'train')
+    val_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'val')
     dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()

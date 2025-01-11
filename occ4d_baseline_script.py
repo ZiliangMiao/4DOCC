@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from models.occ4d.models import Occ4dNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
-from datasets.nusc_utils import NuscDataloader
+from datasets.nusc_loader import NuscDataloader
 from datasets.occ4d.nusc import NuscOcc4dDataset
 # lib
 from utils.deterministic import set_deterministic
