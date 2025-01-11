@@ -585,7 +585,7 @@ if __name__ == '__main__':
         key_scans_idx_dict = kitti_utils.get_mutual_scans_dict(scans_idx_list, path_to_seq, cfg)
 
         # loop query rays
-        num_valid_samples = 0
+        num_valid_scans = 0
         num_valid_rays_per_scan = []
         num_samples_per_scan = []
         unk_pct_per_scan = []
@@ -604,7 +604,7 @@ if __name__ == '__main__':
                 unk_pct_per_scan.append(query_rays.unk_pct_per_scan)  # cuda tensor
                 free_pct_per_scan.append(query_rays.free_pct_per_scan)  # cuda tensor
                 occ_pct_per_scan.append(query_rays.occ_pct_per_scan)  # cuda tensor
-                num_valid_samples += 1
+                num_valid_scans += 1
 
                 # to numpy format
                 depth = depth.cpu().numpy()
@@ -621,76 +621,74 @@ if __name__ == '__main__':
                 key_meta_info_uint32 = key_meta_info.astype(np.uint32)
 
                 # save labels
-                labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
+                labels_folder = os.path.join(path_to_seq, 'top_labels')
                 os.makedirs(labels_folder, exist_ok=True)
-                depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
-                labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
-                confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
-                query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
-                key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
-                key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
+                depth_fp16.tofile(os.path.join(labels_folder, query_scan_idx + "_depth.bin"))
+                labels_uint8.tofile(os.path.join(labels_folder, query_scan_idx + "_labels.bin"))
+                confidence_fp16.tofile(os.path.join(labels_folder, query_scan_idx + "_confidence.bin"))
+                query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_scan_idx + "_rays_idx.bin"))
+                key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_scan_idx + "_key_rays_idx.bin"))
+                key_meta_info_uint32.tofile(os.path.join(labels_folder, query_scan_idx + "_key_meta.bin"))
 
                 # clear cuda memory
                 del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list
                 torch.cuda.empty_cache()
             else:
-                print(f"Sample data tok {query_sd_tok}, index {query_scan_idx} do not have valid background points")
+                print(f"Scan index {query_scan_idx} do not have valid temporal overlapping points.")
+            print(f"Seq: {seq_idx} has {num_valid_scans} valid scans / {len(key_scans_idx_dict.keys())} all scans.")
 
+        # histogram statistics
+        num_valid_rays_per_scan = np.stack(num_valid_rays_per_scan)
+        num_samples_per_scan = np.stack(num_samples_per_scan)
+        unk_pct_per_scan = torch.stack(unk_pct_per_scan).cpu().numpy()
+        free_pct_per_scan = torch.stack(free_pct_per_scan).cpu().numpy()
+        occ_pct_per_scan = torch.stack(occ_pct_per_scan).cpu().numpy()
+        num_valid_rays_per_scan.tofile("./num_valid_rays_per_scan_int64.bin")
+        num_samples_per_scan.tofile("./num_samples_per_scan_int64.bin")
+        unk_pct_per_scan.tofile("./unk_pct_per_scan_float32.bin")
+        free_pct_per_scan.tofile("./free_pct_per_scan_float32.bin")
+        occ_pct_per_scan.tofile("./occ_pct_per_scan_float32.bin")
 
+        # save histgram statistics
+        fig, axs = plt.subplots(2, 3, figsize=(30, 20))
+        fig.suptitle('kitti top samples histgram statistics')
 
+        axs[0, 0].hist(num_valid_rays_per_scan, bins=50, rwidth=0.8, color='skyblue', alpha=0.9)
+        axs[0, 0].set_title('Valid Rays per Scan')
+        axs[0, 0].set_xlabel("Number of Valid Rays")
+        axs[0, 0].set_ylabel("Frequency (Number of Scans)")
+        axs[0, 0].grid(True, alpha=0.3)
 
+        axs[0, 1].hist(num_samples_per_scan, bins=100, rwidth=0.8, color='lightgreen', alpha=0.9)
+        axs[0, 1].set_title('TOP Samples per Scan')
+        axs[0, 1].set_xlabel("Num of Valid TOP Samples")
+        axs[0, 1].set_ylabel("Frequency (Number of Scans)")
+        axs[0, 1].grid(True, alpha=0.3)
 
+        axs[1, 0].hist(unk_pct_per_scan, bins=50, rwidth=0.8, color='salmon', alpha=0.9)
+        axs[1, 0].set_title('Unknown Samples Pct per Scan')
+        axs[1, 0].set_xlabel("Unknown Samples Pct.")
+        axs[1, 0].set_ylabel("Frequency (Number of Scans)")
+        axs[1, 0].grid(True, alpha=0.3)
 
+        axs[1, 1].hist(free_pct_per_scan, bins=50, rwidth=0.8, color='purple', alpha=0.9)
+        axs[1, 1].set_title('Free Samples Pct per Scan')
+        axs[1, 1].set_xlabel("Free Samples Pct.")
+        axs[1, 1].set_ylabel("Frequency (Number of Scans)")
+        axs[1, 1].grid(True, alpha=0.3)
 
+        axs[1, 2].hist(occ_pct_per_scan, bins=50, rwidth=0.8, color='orange', alpha=0.9)
+        axs[1, 2].set_title('Occupied Samples Pct per Scan')
+        axs[1, 2].set_xlabel("Occupied Samples Pct.")
+        axs[1, 2].set_ylabel("Frequency (Number of Scans)")
+        axs[1, 2].grid(True, alpha=0.3)
 
+        # axs[1, 2].hist(cyc_wo_spd_list, bins=100, range=(0,2), log=False, color='brown', alpha=0.9)
+        # axs[1, 2].set_title('cycle without rider')
+        # axs[1, 2].set_xlabel('speed (m/s)')
+        # axs[1, 2].set_ylabel('frequency')
+        # axs[1, 2].grid(True, alpha=0.3)
 
-
-    print(f"Number of valid samples: {num_valid_samples} / number of all samples {len(sample_toks_all)}")
-
-
-    # histogram statistics
-    num_valid_rays_per_scan = np.stack(num_valid_rays_per_scan)
-    num_samples_per_scan = np.stack(num_samples_per_scan)
-    unk_pct_per_scan = torch.stack(unk_pct_per_scan).cpu().numpy()
-    free_pct_per_scan = torch.stack(free_pct_per_scan).cpu().numpy()
-    occ_pct_per_scan = torch.stack(occ_pct_per_scan).cpu().numpy()
-    num_valid_rays_per_scan.tofile("./num_valid_rays_per_scan_int64.bin")
-    num_samples_per_scan.tofile("./num_samples_per_scan_int64.bin")
-    unk_pct_per_scan.tofile("./unk_pct_per_scan_float32.bin")
-    free_pct_per_scan.tofile("./free_pct_per_scan_float32.bin")
-    occ_pct_per_scan.tofile("./occ_pct_per_scan_float32.bin")
-
-    fig_1 = plt.figure()
-    ax_1 = fig_1.gca()
-    ax_1.hist(num_valid_rays_per_scan, bins=50, rwidth=0.8, align='left')
-    ax_1.set_xlabel("Num of valid rays per scan")
-    ax_1.set_ylabel("Frequency (Num of scans)")
-    fig_1.savefig("./statistics_valid_rays_per_scan.png", dpi=1000)
-
-    fig_2 = plt.figure()
-    ax_2 = fig_2.gca()
-    ax_2.hist(num_samples_per_scan, bins=100, rwidth=0.8, align='left')
-    ax_2.set_xlabel("Num of valid mutual observation samples")
-    ax_2.set_ylabel("Frequency (Num of scans)")
-    fig_2.savefig("./statistics_mutual_obs_samples_per_scan.png", dpi=1000)
-
-    fig_3 = plt.figure()
-    ax_3 = fig_3.gca()
-    ax_3.hist(unk_pct_per_scan, bins=50, rwidth=0.8, align='left')
-    ax_3.set_xlabel("Unknown samples pct.")
-    ax_3.set_ylabel("Frequency (Num of scans)")
-    fig_3.savefig("./statistics_unknown_samples_pct_per_scan.png", dpi=1000)
-
-    fig_4 = plt.figure()
-    ax_4 = fig_4.gca()
-    ax_4.hist(free_pct_per_scan, bins=50, rwidth=0.8, align='left')
-    ax_4.set_xlabel("Free samples pct.")
-    ax_4.set_ylabel("Frequency (Num of scans)")
-    fig_4.savefig("./statistics_free_samples_pct_per_scan.png", dpi=1000)
-
-    fig_5 = plt.figure()
-    ax_5 = fig_5.gca()
-    ax_5.hist(occ_pct_per_scan, bins=50, rwidth=0.8, align='left')
-    ax_5.set_xlabel("Occupied samples pct.")
-    ax_5.set_ylabel("Frequency (Num of scans)")
-    fig_5.savefig("./statistics_occupied_samples_pct_per_scan.png", dpi=1000)
+        plt.tight_layout()
+        plt.savefig(f'seq_{seq_idx}_top_samples_statistics.png', dpi=1000)
+        plt.close()
