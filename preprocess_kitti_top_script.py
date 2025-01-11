@@ -1,19 +1,11 @@
 import argparse
 import os
-import time
-from typing import List
-import open3d
 import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
-from collections import defaultdict
-from nuscenes import NuScenes
 from tqdm import tqdm
 import datasets.kitti_utils as kitti_utils
-from nuscenes.utils.geometry_utils import points_in_box
-from utils.vis.open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
-from utils.vis.open3d_vis_utils import draw_box
 import matplotlib.pyplot as plt
 
 
