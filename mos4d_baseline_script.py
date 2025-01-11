@@ -17,12 +17,13 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
 from nuscenes.nuscenes import NuScenes
 
-from datasets.kitti_utils import KittiDataloader
+from datasets.kitti_loader import KittiDataloader
 from datasets.mos4d.kitti import KittiMOSDataset
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from models.mos4d.models import MosNetwork
-from datasets.nusc_utils import NuscDataloader, split_logs_to_samples, get_input_sd_toks, get_transformed_pcd
+from datasets.nusc_loader import NuscDataloader
+from datasets.nusc_utils import split_logs_to_samples, get_input_sd_toks, get_transformed_pcd
 from datasets.mos4d.nusc import NuscMosDataset
 
 
