@@ -87,7 +87,7 @@ class KittiMOSDataset(Dataset):
             pcd = torch.tensor(pcd.reshape((-1, 4)))[:, :3]
             if self.cfg_model["transform"]:
                 curr_pose = poses[scan_idx]
-                ref_pose = poses[-1]
+                ref_pose = poses[-1] # TODO ? -1 or 0
                 pcd_ref = transform_point_cloud(pcd, curr_pose, ref_pose)
 
                 # add timestamp (0, -1, -2, ...)

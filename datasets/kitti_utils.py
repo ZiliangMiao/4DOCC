@@ -135,6 +135,20 @@ def load_calib(calib_path):
     return np.array(T_cam_velo)
 
 
+def load_timestamp(path_to_seq):
+    timestamp_file = os.path.join(path_to_seq, "times.txt")
+    timestamp_list = []
+    try:
+        with open(timestamp_file, "r") as f:
+            lines = f.readlines()
+            for line in lines:
+                timestamp = float(line.split("\n")[0])
+                timestamp_list.append(timestamp)
+    except FileNotFoundError:
+        print("Timestamps are not avaialble.")
+    return timestamp_list
+
+
 def read_kitti_poses(path_to_seq):
     pose_file = os.path.join(path_to_seq, "poses.txt")
     calib_file = os.path.join(path_to_seq, "calib.txt")
@@ -181,6 +195,39 @@ def load_files(folder, dataset_root, seq_idx):
     return file_paths, label_paths
 
 
+def get_transformed_pcd(cfg, path_to_seq, ref_scan_idx, scan_idx):
+    # get pcd
+    pcd_file = os.path.join(path_to_seq, "velodyne", str(ref_scan_idx).zfill(6) + ".bin")
+    pcd = np.fromfile(pcd_file, dtype=np.float32)
+    pcd = torch.tensor(pcd.reshape((-1, 4)))[:, :3]
+    # get pose
+    poses = read_kitti_poses(path_to_seq)
+    # get timestamps
+    timestamps_list = load_timestamp(path_to_seq)
+
+    if cfg["transform"]:
+        curr_pose = poses[scan_idx]
+        ref_pose = poses[ref_scan_idx] # TODO: why -1?
+        pcd_tf = transform_point_cloud(pcd, curr_pose, ref_pose)
+    # true relative timestamp
+    ts_rela = timestamps_list[scan_idx] - timestamps_list[ref_scan_idx]
+
+    # transformed sensor origin and points, at {ref lidar} frame
+    origin_tf = torch.tensor(curr_pose[:3, 3], dtype=torch.float32)  # curr sensor location, at {ref lidar} frame
+    points_tf = torch.tensor(pcd_tf, dtype=torch.float32)  # curr point cloud, at {ref lidar} frame
+
+    # filter ego points and outside scene bbox points
+    valid_mask = torch.squeeze(torch.full((len(points_tf), 1), True))
+    if cfg['ego_mask']:
+        ego_mask = get_ego_mask(points_tf)
+        valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+    if cfg['outside_scene_mask']:
+        outside_scene_mask = get_outside_scene_mask(points_tf, cfg["scene_bbox"], cfg['outside_scene_mask_z'], cfg['outside_scene_mask_ub'])
+        valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+    points_tf = points_tf[valid_mask]
+    return origin_tf, points_tf, ts_rela, valid_mask
+
+
 def get_ego_mask(pcd):  # mask the points of ego vehicle: x [-0.8, 0.8], y [-1.5, 2.5]
     # kitti car: length (4.084 m), width (1.730 m), height (1.562 m)
     # https://www.cvlibs.net/datasets/kitti/setup.php
@@ -206,12 +253,12 @@ def get_outside_scene_mask(pcd, scene_bbox, mask_z: bool, upper_bound: bool):  #
     return ~inside_scene_mask
 
 
-def transform_point_cloud(past_point_clouds, from_pose, to_pose):
+def transform_point_cloud(pcd, from_pose, to_pose):
     transformation = torch.Tensor(np.linalg.inv(to_pose) @ from_pose)
-    NP = past_point_clouds.shape[0]
-    xyz1 = torch.hstack([past_point_clouds, torch.ones(NP, 1)]).T
-    past_point_clouds = (transformation @ xyz1).T[:, :3]
-    return past_point_clouds
+    NP = pcd.shape[0]
+    xyz1 = torch.hstack([pcd, torch.ones(NP, 1)]).T
+    pcd = (transformation @ xyz1).T[:, :3]
+    return pcd
 
 
 def load_mos_labels(filename):
@@ -223,3 +270,76 @@ def load_mos_labels(filename):
     mos_labels[semantic_labels > 250] = 2  # Moving
     mos_labels = torch.tensor(mos_labels.astype(dtype=np.uint8).reshape(-1))
     return mos_labels
+
+
+def get_mutual_scans_dict(seq_scans_list, path_to_seq, cfg):
+    key_sd_toks_dict = {}
+    timestamps_list = load_timestamp(path_to_seq)
+    scan_idx_min = 0
+    scan_idx_max = len(seq_scans_list) - 1
+    for scan_str in seq_scans_list:
+        ref_scan_idx =int(scan_str)
+        ref_ts = timestamps_list[ref_scan_idx]
+        scans_list = []
+
+        # future sample data
+        skip_cnt = 0
+        num_next_scans = 0
+        scan_idx = ref_scan_idx
+        while num_next_scans < cfg["n_input"]:
+            if scan_idx + 1 <= scan_idx_max:
+                scan_idx = scan_idx + 1
+                if skip_cnt < cfg["n_skip"]:
+                    skip_cnt += 1
+                    continue
+                # add input sample data token
+                scans_list.append(scan_idx)
+                skip_cnt = 0
+                num_next_scans += 1
+            else:
+                break
+        if len(scans_list) == cfg["n_input"]:  # TODO: add one, to get full insert sample datas
+            scans_list = scans_list[::-1]  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5
+        else:
+            continue
+
+        # history sample data
+        scans_list.append(ref_scan_idx)
+        skip_cnt = 0  # already skip 0 samples
+        num_prev_samples = 1  # already sample 1 lidar sample data
+        scan_idx = ref_scan_idx
+        while num_prev_samples < cfg["n_input"] + 1:
+            if scan_idx - 1 >= scan_idx_min:
+                scan_idx -= 1
+                if skip_cnt < cfg["n_skip"]:
+                    skip_cnt += 1
+                    continue
+                # add input sample data token
+                scans_list.append(scan_idx)  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5 | 0.0, -0.5, -1.0, -1.5, -2.0, -2.5, (-3.0)
+                skip_cnt = 0
+                num_prev_samples += 1
+            else:
+                break
+
+        # full samples, add sample data and inserted sample data to dict
+        if len(scans_list) == cfg["n_input"] * 2 + 1:
+            key_scans_list = []
+            key_ts_list = []
+            for i in range(len(scans_list) - 1):
+                scan_idx = scans_list[i]
+                sd_between_scans = [scan_idx]
+                while scan_idx - 1 >= scan_idx_min and scan_idx - 1 != scans_list[i+1]:
+                    scan_idx = scan_idx - 1
+                    sd_between_scans.append(scan_idx)
+                # select several sample data as sample data insert
+                n_idx = int(len(sd_between_scans) / cfg['n_sd_per_sample'])
+                for j in range(cfg['n_sd_per_sample']):
+                    key_scan = sd_between_scans[n_idx * j]
+                    key_ts = timestamps_list[scan_idx]
+                    key_scans_list.append(key_scan)
+                    key_ts_list.append(key_ts - ref_ts)
+                # add to dict
+                if len(key_scans_list) == cfg['n_input'] * 2 * cfg['n_sd_per_sample']:
+                    key_scans_list.remove(ref_scan_idx)
+                    key_sd_toks_dict[ref_scan_idx] = key_scans_list
+    return key_sd_toks_dict
