@@ -13,14 +13,20 @@ def load_rays(cfg, path_to_seq, query_scan_idx, key_scans_list):
     # get query rays
     org_query, pts_query, ts_query, query_valid_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
                                                                                        query_scan_idx, query_scan_idx)  # cpu
-    query_rays = QueryRays(org_query.cuda(), pts_query.cuda(), ts_query)  # cuda
+    # TODO: uniform downsample
+    pts_query_ds = pts_query[::cfg['uni_ds']]
+    # construct query rays
+    query_rays = QueryRays(org_query.cuda(), pts_query_ds.cuda(), ts_query)  # cuda
 
     # get key rays
     key_rays_list = []
     for key_scan_idx in key_scans_list:
         org_key, pts_key, ts_key, key_valid_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
                                                                                    query_scan_idx, key_scan_idx)  # cpu
-        key_rays = KeyRays(org_key.cuda(), pts_key.cuda(), ts_key)  # cuda
+        # TODO: uniform downsample
+        pts_key_ds = pts_key[::cfg['uni_ds']]
+        # construct key rays
+        key_rays = KeyRays(org_key.cuda(), pts_key_ds.cuda(), ts_key)  # cuda
         key_rays_list.append(key_rays)  # cuda
     return query_rays, key_rays_list
 
@@ -222,7 +228,7 @@ class QueryRays(object):
             key_rays_dir = key_rays.get_ray_dir()  # cuda
 
             # TODO: time -> space, cuda out of memory
-            split_size = 8
+            split_size = cfg['split_size']
             query_rays_dir_split = torch.split(self.get_ray_dir(), int(self.get_ray_size()/split_size), dim=0)
 
             # loop each split
@@ -238,13 +244,11 @@ class QueryRays(object):
                 # calculate cos of key_rays to reference plane: (query_rays_size / split_size, key_rays_size)
                 key_rays_to_ref_plane = torch.matmul(ref_plane_norm, key_rays_dir.T)  # cuda
                 del ref_plane_norm
-                print("key rays to ref plane", key_rays_to_ref_plane.shape)
 
                 # get intersection rays
                 ray_ints_mask = torch.logical_and(key_rays_to_ref_plane >= np.cos(np.pi / 2 + dvg_ang / 2),
                                                   key_rays_to_ref_plane <= np.cos(np.pi / 2 - dvg_ang / 2))
                 del key_rays_to_ref_plane
-                print("ray ints mask", ray_ints_mask.shape)
 
                 # intersection ray index
                 ray_ints_idx = torch.where(ray_ints_mask)  # cuda
@@ -268,11 +272,13 @@ class QueryRays(object):
                 q_valid = q[valid_ints_mask]  # cuda
                 k_valid = k[valid_ints_mask]  # cuda
 
-                # calculate occupancy label of the ints pts (0: unknown, 1: free, 2:occupied) TODO: with measurement confidence
+                # calculate occupancy label of the ints pts (0: unknown, 1: free, 2:occupied)
                 key_ray_depth = key_rays.get_ray_depth(key_rays.get_ray_end()[key_rays_ints_idx])  # cuda
                 ints_labels, ints_confidence, ints_confident_mask = get_occupancy_label(ray_depth=key_ray_depth, point_depth=k_valid)
                 ints_depth = q_valid[ints_confident_mask]
-                query_rays_ints_idx = query_rays_ints_idx[ints_confident_mask] + query_ray_idx_start # TODO: split, add start index
+
+                # TODO: split, add start index; times uniform downsample rate
+                query_rays_ints_idx = (query_rays_ints_idx[ints_confident_mask] + query_ray_idx_start) * cfg['uni_ds']
                 key_rays_ints_idx = key_rays_ints_idx[ints_confident_mask]
 
                 # clear cuda memory
@@ -409,7 +415,8 @@ class QueryRays(object):
                 key_sample_depth = x_k[valid_sample_mask]
                 para_labels, para_confidence, para_confident_mask = get_occupancy_label(ray_depth=ray_depth, point_depth=key_sample_depth)
                 para_depth = x_q[valid_sample_mask][para_confident_mask]
-                query_rays_para_idx = query_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask] + query_ray_idx_start # TODO: add query ray start index, due to query ray split
+                # TODO: split, add start index; times uniform downsample rate
+                query_rays_para_idx = (query_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask] + query_ray_idx_start) * cfg['uni_ds']
                 key_rays_para_idx = key_rays_para_idx.repeat(6)[valid_sample_mask][para_confident_mask]
 
                 # TODO: update query ray index start (due to query ray split)
@@ -499,6 +506,7 @@ if __name__ == '__main__':
         free_pct_per_scan = []
         occ_pct_per_scan = []
         for query_scan_idx, key_scans_list in tqdm(zip(key_scans_idx_dict.keys(), key_scans_idx_dict.values())):
+            print("query scan index: " + str(query_scan_idx))
             # get rays
             query_rays, key_rays_list = load_rays(cfg, path_to_seq, query_scan_idx, key_scans_list)  # cuda
 
@@ -530,12 +538,13 @@ if __name__ == '__main__':
                 # save labels
                 labels_folder = os.path.join(path_to_seq, 'top_labels')
                 os.makedirs(labels_folder, exist_ok=True)
-                depth_fp16.tofile(os.path.join(labels_folder, query_scan_idx + "_depth.bin"))
-                labels_uint8.tofile(os.path.join(labels_folder, query_scan_idx + "_labels.bin"))
-                confidence_fp16.tofile(os.path.join(labels_folder, query_scan_idx + "_confidence.bin"))
-                query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_scan_idx + "_rays_idx.bin"))
-                key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_scan_idx + "_key_rays_idx.bin"))
-                key_meta_info_uint32.tofile(os.path.join(labels_folder, query_scan_idx + "_key_meta.bin"))
+                depth_fp16.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_depth.bin"))
+                labels_uint8.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_labels.bin"))
+                confidence_fp16.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_confidence.bin"))
+                query_rays_idx_uint16.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_rays_idx.bin"))
+                key_rays_idx_uint16.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_key_rays_idx.bin"))
+                key_meta_info_uint32.tofile(os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_key_meta.bin"))
+                print("save top labels: " + os.path.join(labels_folder, str(query_scan_idx).zfill(6) + "_labels.bin"))
 
                 # clear cuda memory
                 del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list

@@ -142,7 +142,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     os.makedirs(finetune_dir, exist_ok=True)
     quant_size = model_cfg['quant_size']
     batch_size = model_cfg['batch_size']
-    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + (model_cfg['n_input'] - 1) * model_cfg['n_skip'] * model_cfg['time_interval'], 2)
+    time = round(model_cfg['n_input'] * model_cfg['time_interval'] + model_cfg['n_input'] * model_cfg['n_skip'] * model_cfg['time_interval'], 2)
     finetune_model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
@@ -308,6 +308,8 @@ def mos_test(cfg_test, cfg_dataset):
         df = pd.concat([df, new_row], ignore_index=True)
         # save the updated dataframe to excel
         df.to_excel(excel_file, index=False)        
+
+
 
 
 def mov_pts_statistics(cfg_dataset, cfg_model):

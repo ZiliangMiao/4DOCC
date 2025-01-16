@@ -8,6 +8,8 @@ moco:  # mutual observation pretraining
   augmentation: True
 
   # pre-processing
+  split_size: 2
+  uni_ds: 4
   max_range: 100 # sqrt(70^2 + 70^2 + 4.5^2)
   dvg_ang: 0.0030 # beam divergence angle (Velodyne HDL-32E: 0.003 (horizontal), 0.0012 (vertical))
   occ_thrd: 0.105361  # -ln(0.9)

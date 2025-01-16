@@ -1,19 +1,22 @@
 mos:  # moving object segmentation task, results visualization
 # nuScenes vis:
-  baseline_dir: '/home/ziliang/Datasets_0/nuScenes/mos_labels/v1.0-trainval/'
-  occ4d_dir: '../../logs/forecast_baseline/occ4d(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_309'
-  uno_dir: '../../logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_179'
-  ours_dir: '../../logs/ours/moco_55151_5e-5(epoch-27)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_589'
+#  baseline_dir: '/home/ziliang/Datasets_0/nuScenes/mos_labels/v1.0-trainval/'
+#  occ4d_dir: '../../logs/forecast_baseline/occ4d(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_309'
+#  uno_dir: '../../logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_179'
+#  ours_dir: '../../logs/ours/moco_55151_5e-5(epoch-27)-mos_finetune/100%nuscenes-10%nuscenes/vs-0.1_t-3.0_bs-4/version_0/predictions/epoch_589'
 
 # SemanticKITTI vis:
-#  baseline_dir: '../../logs/mos_baseline/mos4d_shuffle/10%sekitti/vs-0.1_t-3.0_bs-2/version_0/predictions/epoch_269' # 4dmos
+  baseline_dir: '../../logs/mos_baseline/mos4d_shuffle/50%sekitti/vs-0.1_t-3.0_bs-2/version_0/predictions/epoch_269' # 4dmos
+  occ4d_dir:
+  uno_dir:
+  ours_dir:
 #  occ4d_dir: '../../logs/forecast_baseline/occ4d(epoch-49)-mos_finetune/100%nuscenes-10%sekitti/vs-0.1_t-2.6_bs-2/version_0/predictions/epoch_269' # 4d-occ
 #  uno_dir: '../../logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-10%sekitti/vs-0.1_t-2.6_bs-2/version_0/predictions/epoch_59' # uno
 #  ours_dir: '../../logs/ours/moco_51151_5e-5(epoch-49)-mos_finetune/100%nuscenes-10%sekitti/vs-0.1_t-2.6_bs-2/version_0/predictions/epoch_149'
 
 # others
-  dataset_root: '/home/ziliang/Datasets_0/nuScenes'
+  dataset_root: '/home/ziliang/Datasets_0/SeKITTI'
   source: 'all' # 'all', 'given', 'singapore', 'boston'
-  start_sample_idx: 439
-  point_size: 10
+  start_sample_idx: 0
+  point_size: 5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5]

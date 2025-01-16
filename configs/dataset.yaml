@@ -6,6 +6,7 @@ sekitti:
   root: "/Datasets_0/SeKITTI/dataset/sequences" # labeled by PRPonn, seq 00-21
   poses: "poses.txt"
   lidar: "velodyne"
-  train: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10] # [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
+  train: [0] # [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
   val: [8]
   test: [8]
+  vis: [0]
