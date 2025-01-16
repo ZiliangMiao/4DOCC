@@ -129,8 +129,8 @@ def render_mos_samples(vis_dataset, vis_cfg, vis_gt):
         gt_labels = gt_labels[valid_mask]
 
         # todo: uniform downsample
-        # pcd = pcd[::2]
-        # gt_labels = gt_labels[::2]
+        pcd = pcd[::6]
+        gt_labels = gt_labels[::6]
 
         # origin
         # axis_pcd = open3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])

@@ -117,7 +117,7 @@ def load_files(folder, dataset_root, seq_idx):
 
 def get_transformed_pcd(cfg, path_to_seq, ref_scan_idx, scan_idx):
     # get pcd
-    pcd_file = os.path.join(path_to_seq, "velodyne", str(ref_scan_idx).zfill(6) + ".bin")
+    pcd_file = os.path.join(path_to_seq, "velodyne", str(scan_idx).zfill(6) + ".bin")
     pcd = np.fromfile(pcd_file, dtype=np.float32)
     pcd = torch.tensor(pcd.reshape((-1, 4)))[:, :3]
     # get pose
@@ -194,71 +194,37 @@ def load_mos_labels(filename):
 def get_mutual_scans_dict(seq_scans_list, path_to_seq, cfg):
     key_sd_toks_dict = {}
     timestamps_list = load_timestamp(path_to_seq)
-    scan_idx_min = 0
-    scan_idx_max = len(seq_scans_list) - 1
-    for scan_str in seq_scans_list:
-        ref_scan_idx =int(scan_str)
-        ref_ts = timestamps_list[ref_scan_idx]
-        scans_list = []
 
-        # future sample data
-        skip_cnt = 0
-        num_next_scans = 0
-        scan_idx = ref_scan_idx
-        while num_next_scans < cfg["n_input"]:
-            if scan_idx + 1 <= scan_idx_max:
-                scan_idx = scan_idx + 1
-                if skip_cnt < cfg["n_skip"]:
-                    skip_cnt += 1
-                    continue
-                # add input sample data token
-                scans_list.append(scan_idx)
-                skip_cnt = 0
-                num_next_scans += 1
-            else:
-                break
-        if len(scans_list) == cfg["n_input"]:  # TODO: add one, to get full insert sample datas
-            scans_list = scans_list[::-1]  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5
-        else:
+    # for scan skip, determine the valid scans
+    valid_scans = []
+    skip_cnt = 0
+    for i in range(len(seq_scans_list)):
+        if skip_cnt < cfg["n_skip"]:
+            skip_cnt += 1
             continue
+        skip_cnt = 0
+        valid_scans.append(int(seq_scans_list[i]))
 
-        # history sample data
-        scans_list.append(ref_scan_idx)
-        skip_cnt = 0  # already skip 0 samples
-        num_prev_samples = 1  # already sample 1 lidar sample data
-        scan_idx = ref_scan_idx
-        while num_prev_samples < cfg["n_input"] + 1:
-            if scan_idx - 1 >= scan_idx_min:
-                scan_idx -= 1
-                if skip_cnt < cfg["n_skip"]:
-                    skip_cnt += 1
-                    continue
-                # add input sample data token
-                scans_list.append(scan_idx)  # 3.0, 2.5, 2.0, 1.5, 1.0, 0.5 | 0.0, -0.5, -1.0, -1.5, -2.0, -2.5, (-3.0)
-                skip_cnt = 0
-                num_prev_samples += 1
-            else:
+    past_scans = []
+    past_scans_cnt = 0
+    for i, scan_idx in enumerate(valid_scans):
+        # get input scans
+        if past_scans_cnt < cfg["n_input"] - 1:
+            past_scans.append(scan_idx)
+            past_scans_cnt += 1
+            continue
+        if past_scans_cnt == cfg["n_input"] - 1:
+            if i >= len(valid_scans):
                 break
+            ref_scan_idx = valid_scans[i]
+            ref_ts = timestamps_list[ref_scan_idx]
 
-        # full samples, add sample data and inserted sample data to dict
-        if len(scans_list) == cfg["n_input"] * 2 + 1:
-            key_scans_list = []
-            key_ts_list = []
-            for i in range(len(scans_list) - 1):
-                scan_idx = scans_list[i]
-                sd_between_scans = [scan_idx]
-                while scan_idx - 1 >= scan_idx_min and scan_idx - 1 != scans_list[i+1]:
-                    scan_idx = scan_idx - 1
-                    sd_between_scans.append(scan_idx)
-                # select several sample data as sample data insert
-                n_idx = int(len(sd_between_scans) / cfg['n_sd_per_sample'])
-                for j in range(cfg['n_sd_per_sample']):
-                    key_scan = sd_between_scans[n_idx * j]
-                    key_ts = timestamps_list[scan_idx]
-                    key_scans_list.append(key_scan)
-                    key_ts_list.append(key_ts - ref_ts)
-                # add to dict
-                if len(key_scans_list) == cfg['n_input'] * 2 * cfg['n_sd_per_sample']:
-                    key_scans_list.remove(ref_scan_idx)
-                    key_sd_toks_dict[ref_scan_idx] = key_scans_list
+            # get future scans
+            future_scans = valid_scans[i+1:i+6]
+            if len(future_scans) < 5:
+                continue
+            if len(future_scans) == 5:
+                key_sd_toks_dict[ref_scan_idx] = past_scans + future_scans
+                past_scans = []
+                past_scans_cnt = 0
     return key_sd_toks_dict
