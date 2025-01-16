@@ -1,16 +1,17 @@
 import argparse
 import os
 from collections import defaultdict
+from random import sample
 
 import yaml
 import torch
 import torch.nn.functional as F
+
+from datasets.kitti_utils import load_mos_labels
 from utils.vis.open3d_vis_utils import draw_box, get_vis_sd_toks
 import open3d
 import numpy as np
-from nuscenes import NuScenes
-from nuscenes.utils.geometry_utils import points_in_box
-import datasets.nusc_utils as nusc_utils
+import datasets.kitti_utils as kitti_utils
 
 # color utils
 from open3d_vis_utils import occ_color_func, mos_color_func, get_confusion_color
@@ -104,89 +105,69 @@ class LineMesh(object):
             vis.remove_geometry(cylinder)
 
 
-def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color: bool):
-    vis_sample_idx = 0  # nonlocal variable: sample index
-    vis_obj_idx = 0  # nonlocal variable: moving object index
+def draw_mov_obj_background(cfg, path_to_seq, key_scans_idx_dict):
+    vis_scan_idx = 0  # nonlocal variable: sample index
     vis_ray_idx = 0  # nonlocal variable: ray index of moving object points which have background samples
     view_init = True
     skip_flag = True
     cam_params = None
-    mov_obj_num = 0
     ray_num = 0
+    ref_scans_list = list(key_scans_idx_dict.keys())
 
     # open3d vis
     vis = open3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(window_name='ray intersection points', width=3840, height=2160, left=0, top=0)
 
     def draw(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, cam_params, view_init, mov_obj_num, ray_num
+        nonlocal vis_scan_idx, vis_ray_idx, cam_params, view_init, ray_num
         # get key sample data tokens
-        sd_tok = sd_toks_list[vis_sample_idx]
-        sample_data = nusc.get('sample_data', sd_tok)
-        sample_token = sample_data['sample_token']
-        sample = nusc.get("sample", sample_token)
-        key_sd_toks_list = nusc_utils.get_mutual_sd_toks_dict(nusc, [sample_token], cfg)[sample_token]
+        ref_scan_idx = ref_scans_list[vis_scan_idx]
 
         # get query rays and key rays
-        query_org, query_pts, query_ts, filter_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, sd_tok)
+        query_org, query_pts, query_ts, query_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
+                                                                                      ref_scan_idx, ref_scan_idx)
+
+        # todo: uniform downsample
+        uni_ds = int(cfg['uni_ds'])
+        query_pts = query_pts[::uni_ds]
+        query_mask = query_mask[::uni_ds]
+
         query_dir = F.normalize(query_pts - query_org, p=2, dim=1)  # unit vector
         key_rays_org_list = []
         key_rays_ts_list = []
         key_rays_pts_list = []
         key_mos_labels_list = []
-        for key_sd_tok in key_sd_toks_list:
-            key_org, key_pts, key_ts, key_mask = nusc_utils.get_transformed_pcd(nusc, cfg, sd_tok, key_sd_tok)
+        for key_scan_idx in key_scans_idx_dict[ref_scan_idx]:
+            # load pcds of key scans
+            key_org, key_pts, key_ts, key_mask = kitti_utils.get_transformed_pcd(cfg, path_to_seq,
+                                                                                      ref_scan_idx, key_scan_idx)
+
+            # todo: uniform downsample
+            key_pts = key_pts[::cfg['uni_ds']]
+            key_mask = key_mask[::cfg['uni_ds']]
+
             key_rays_org_list.append(key_org)
             key_rays_pts_list.append(key_pts)
             key_rays_ts_list.append(key_ts)
-            key_mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, key_sd_tok + "_mos.label")
-            key_mos_labels = np.fromfile(key_mos_labels_file, dtype=np.uint8)[key_mask]
+
+            # load mos labels of key scans
+            key_labels_file = os.path.join(path_to_seq, "labels", str(key_scan_idx).zfill(6) + ".label")
+            key_mos_labels = load_mos_labels(key_labels_file).numpy()[::uni_ds][key_mask]
             key_mos_labels_list.append(key_mos_labels)
 
-        # load predicted labels
-        if conf_color:
-            # load predicted bg labels
-            pred_bg_labels_file = os.path.join(pred_bg_dir, sd_tok + "_bg_pred.label")
-            pred_bg_labels = np.fromfile(pred_bg_labels_file, dtype=np.uint8)
-            # load predicted mos labels
-            pred_mos_labels_file = os.path.join(pred_mos_dir, sd_tok + "_mos_pred.label")
-            pred_mos_labels = np.fromfile(pred_mos_labels_file, dtype=np.uint8)
+        # load gt mos labels
+        query_labels_file = os.path.join(path_to_seq, "labels", str(ref_scan_idx).zfill(6) + ".label")
+        query_mos_labels = load_mos_labels(query_labels_file).numpy()[::uni_ds][query_mask]
+        mov_rays_idx_list = np.where(query_mos_labels == 2)
 
-        # load gt and pred mos labels
-        gt_mos_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
-        gt_mos_labels = np.fromfile(gt_mos_labels_file, dtype=np.uint8)[filter_mask]
-
-        # load gt bg samples
-        samples_dir = os.path.join(nusc.dataroot, "mutual_obs_labels", nusc.version)
-        depth = np.fromfile(os.path.join(samples_dir, sd_tok + "_depth.bin"), dtype=np.float16)
-        labels = np.fromfile(os.path.join(samples_dir, sd_tok + "_labels.bin"), dtype=np.uint8)
-        query_rays_idx = np.fromfile(os.path.join(samples_dir, sd_tok + "_rays_idx.bin"), dtype=np.uint16)
-        query_ray_idx_unq = np.unique(query_rays_idx)
-        key_rays_indices = np.fromfile(os.path.join(samples_dir, sd_tok + "_key_rays_idx.bin"), dtype=np.uint16)
-        key_meta = np.fromfile(os.path.join(samples_dir, sd_tok + "_key_meta.bin"), dtype=np.uint32).reshape(-1, 2)
+        # load gt top samples
+        samples_dir = os.path.join(path_to_seq, "top_labels")
+        depth = np.fromfile(os.path.join(samples_dir, str(ref_scan_idx).zfill(6) + "_depth.bin"), dtype=np.float16)
+        labels = np.fromfile(os.path.join(samples_dir, str(ref_scan_idx).zfill(6) + "_labels.bin"), dtype=np.uint8)
+        query_rays_idx = np.fromfile(os.path.join(samples_dir, str(ref_scan_idx).zfill(6) + "_rays_idx.bin"), dtype=np.uint16)
+        key_rays_indices = np.fromfile(os.path.join(samples_dir, str(ref_scan_idx).zfill(6) + "_key_rays_idx.bin"), dtype=np.uint16)
+        key_meta = np.fromfile(os.path.join(samples_dir, str(ref_scan_idx).zfill(6) + "_key_meta.bin"), dtype=np.uint32).reshape(-1, 2)
         key_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.uint32) * meta[0] for meta in key_meta])
-
-        # vis nusc sample, moving object bboxes
-        anns_toks = sample['anns']
-        _, boxes, _ = nusc.get_sample_data(sd_tok, selected_anntokens=anns_toks, use_flat_vehicle_coordinates=False)
-        obj_boxes_list = []
-        obj_ray_indices_list = []
-        for ann_tok, box in zip(anns_toks, boxes):
-            ann = nusc.get('sample_annotation', ann_tok)
-            if ann['num_lidar_pts'] == 0: continue
-            obj_pts_mask = points_in_box(box, query_pts[:, :3].T)
-            if np.sum(obj_pts_mask) == 0: continue
-            gt_obj_labels = gt_mos_labels[obj_pts_mask]
-            mov_pts_mask = gt_obj_labels == 2
-            if np.sum(mov_pts_mask) == 0:
-                continue
-            else:
-                obj_pts_mask = points_in_box(box, query_pts[:, :3].T)
-                obj_pts_idx_list = np.where(obj_pts_mask)[0].tolist()
-                ray_idx_list = list(set(obj_pts_idx_list) & set(query_ray_idx_unq))  # only a part of rays have bg samples
-                if len(ray_idx_list) == 0: continue
-                obj_boxes_list.append(box)
-                obj_ray_indices_list.append(ray_idx_list)
 
         ################################################################################################################
         # draw static geometries: query lidar orgs, key lidar orgs
@@ -201,40 +182,14 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         # draw query pcd
         pcd = open3d.geometry.PointCloud()
         pcd.points = open3d.utility.Vector3dVector(query_pts)
-        if conf_color:
-            mos_confusion_color_indices = get_confusion_color(gt_mos_labels, pred_mos_labels)
-            pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(mos_confusion_color_indices)).T)
-        else:
-            pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(gt_mos_labels)).T)  # static color
+        pcd.colors = open3d.utility.Vector3dVector(np.array(mos_color_func(query_mos_labels)).T)  # static color
         pcd_down = pcd.voxel_down_sample(voxel_size=0.10)  # point cloud downsample
         vis.add_geometry(pcd_down)
         ################################################################################################################
 
-        if len(obj_ray_indices_list) == 0:
-            print(f"Sample idx: {vis_sample_idx}, have no moving objects.")
-            return None
-        else:
-            mov_obj_num = len(obj_ray_indices_list)
-            ray_num = len(obj_ray_indices_list[vis_obj_idx])
-            print(f"Sample idx: {vis_sample_idx} / {len(sd_toks_list) - 1}, Moving object index: {vis_obj_idx} / {mov_obj_num - 1}, Ray index: {vis_ray_idx} / {ray_num - 1}")
-
-        # draw moving object bboxes
-        box = obj_boxes_list[vis_obj_idx]
-        draw_box(vis, [box])
-
-        # draw query ray point [vis_ray_idx]
-        obj_ray_idx = obj_ray_indices_list[vis_obj_idx][vis_ray_idx]
-        obj_point_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
-        obj_point_sphere = obj_point_sphere.translate(query_pts[obj_ray_idx], relative=False)
-        if conf_color:
-            obj_point_sphere.paint_uniform_color(mos_color_func(mos_confusion_color_indices[obj_ray_idx]))
-        else:
-            obj_point_sphere.paint_uniform_color(mos_color_func(gt_mos_labels[obj_ray_idx]))
-        vis.add_geometry(obj_point_sphere)
-
         # draw query ray
         query_lineset = open3d.geometry.LineSet()
-        vertex_query = np.vstack((query_org, query_pts[obj_ray_idx]))
+        vertex_query = np.vstack((query_org, query_pts[mov_rays_idx_list[vis_ray_idx]]))
         lines_query = [[0, 1]]
         color_query = np.tile((234 / 255, 51 / 255, 35 / 255), (1, 1))
         query_lineset.points = open3d.utility.Vector3dVector(vertex_query)
@@ -243,33 +198,30 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
         vis.add_geometry(query_lineset)
 
         # get ray samples
-        samples_mask = query_rays_idx == obj_ray_idx
+        samples_mask = query_rays_idx / uni_ds == mov_rays_idx_list[vis_ray_idx]
         depth = depth[samples_mask]
-        sample_pts = query_org + np.broadcast_to(query_dir[obj_ray_idx], (len(depth), 3)) * depth.reshape(-1, 1)
+        sample_pts = query_org + np.broadcast_to(query_dir[mov_rays_idx_list[vis_ray_idx]], (len(depth), 3)) * depth.reshape(-1, 1)
 
         # voxel down sampling for vis
-        sample_pcd = open3d.geometry.PointCloud()
-        sample_pcd.points = open3d.utility.Vector3dVector(sample_pts)
-        _, _, idx_list = sample_pcd.voxel_down_sample_and_trace(voxel_size=0.2, min_bound=query_org, max_bound=query_pts[obj_ray_idx] * 2)
-        down_idx = np.stack([i[0] for i in idx_list])
+        # sample_pcd = open3d.geometry.PointCloud()
+        # sample_pcd.points = open3d.utility.Vector3dVector(sample_pts)
+        # _, _, idx_list = sample_pcd.voxel_down_sample_and_trace(voxel_size=0.2, min_bound=query_org, max_bound=query_pts[obj_ray_idx] * 2)
+        # down_idx = np.stack([i[0] for i in idx_list])
+        # key_sensors_indices = key_sensors_indices[samples_mask][down_idx]
+        # key_rays_indices = key_rays_indices[samples_mask][down_idx]
+        # sample_pts = sample_pts[down_idx]
+        # gt_labels = labels[samples_mask][down_idx]
 
         # key rays
-        key_sensors_indices = key_sensors_indices[samples_mask][down_idx]
-        key_rays_indices = key_rays_indices[samples_mask][down_idx]
         key_pts_list = []
         key_mos_list = []
         for i in range(len(key_rays_indices)):
             key_sensor_idx = key_sensors_indices[i]
-            key_ray_idx = key_rays_indices[i]
+            key_ray_idx = int(key_rays_indices[i] / uni_ds)
             key_pts_list.append(key_rays_pts_list[key_sensor_idx][key_ray_idx])
             key_mos_list.append(key_mos_labels_list[key_sensor_idx][key_ray_idx])
         key_pts = np.stack(key_pts_list)
         key_mos = np.array(key_mos_list)
-
-        sample_pts = sample_pts[down_idx]
-        gt_labels = labels[samples_mask][down_idx]
-        if conf_color:
-            pred_bg_labels = pred_bg_labels[samples_mask][down_idx]
 
         # draw bg points and rays to sample points
         lineset_key = open3d.geometry.LineSet()
@@ -282,11 +234,7 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
             # sample point
             sample_sphere = open3d.geometry.TriangleMesh.create_sphere(radius=0.05, resolution=200)
             sample_sphere = sample_sphere.translate(sample_pts[i], relative=False)
-            if conf_color:
-                bg_confusion_color_indices = get_confusion_color(gt_labels, pred_bg_labels)
-                sample_sphere.paint_uniform_color(occ_color_func(bg_confusion_color_indices[i]))
-            else:
-                sample_sphere.paint_uniform_color(occ_color_func(gt_labels[i]))
+            sample_sphere.paint_uniform_color(occ_color_func(labels[samples_mask][i]))
             vis.add_geometry(sample_sphere)
 
             # corresponding key point
@@ -330,62 +278,33 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
             vis.update_renderer()
 
     def render_next_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag, mov_obj_num
-        vis_obj_idx = 0
+        nonlocal vis_scan_idx, vis_ray_idx, skip_flag
         vis_ray_idx = 0
         if skip_flag:
             skip_flag = False
             return None
         else:
             skip_flag = True
-            vis_sample_idx += 1
-            if vis_sample_idx >= len(sd_toks_list):
-                vis_sample_idx = len(sd_toks_list) - 1
+            vis_scan_idx += 1
+            if vis_scan_idx >= len(ref_scans_list):
+                vis_scan_idx = len(ref_scans_list) - 1
             draw(vis)
 
     def render_prev_sample(vis):
-        nonlocal vis_sample_idx, vis_obj_idx, vis_ray_idx, skip_flag, mov_obj_num
-        vis_obj_idx = 0
+        nonlocal vis_scan_idx, vis_ray_idx, skip_flag
         vis_ray_idx = 0
         if skip_flag:
             skip_flag = False
             return None
         else:
             skip_flag = True
-            vis_sample_idx -= 1
-            if vis_sample_idx <= 0:
-                vis_sample_idx = 0
-            draw(vis)
-
-
-    def render_next_obj(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag, mov_obj_num
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_obj_idx += 1
-            if vis_obj_idx >= mov_obj_num:
-                vis_obj_idx = mov_obj_num - 1
-            draw(vis)
-
-    def render_prev_obj(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag
-        vis_ray_idx = 0  # if vis prev or next obj, set the ray idx to 0
-        if skip_flag:
-            skip_flag = False
-            return None
-        else:
-            skip_flag = True
-            vis_obj_idx -= 1
-            if vis_obj_idx <= 0:
-                vis_obj_idx = 0
+            vis_scan_idx -= 1
+            if vis_scan_idx <= 0:
+                vis_scan_idx = 0
             draw(vis)
 
     def render_next_ray(vis):
-        nonlocal vis_obj_idx, vis_ray_idx, skip_flag, ray_num
+        nonlocal vis_ray_idx, skip_flag, ray_num
         if skip_flag:
             skip_flag = False
             return None
@@ -409,10 +328,8 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
             draw(vis)
 
     # render keyboard control
-    vis.register_key_callback(ord('E'), render_next_sample)
-    vis.register_key_callback(ord('Q'), render_prev_sample)
-    vis.register_key_callback(ord('D'), render_next_obj)
-    vis.register_key_callback(ord('A'), render_prev_obj)
+    vis.register_key_callback(ord('D'), render_next_sample)
+    vis.register_key_callback(ord('A'), render_prev_sample)
     vis.register_key_callback(ord('C'), render_next_ray)
     vis.register_key_callback(ord('Z'), render_prev_ray)
     vis.run()
@@ -420,17 +337,22 @@ def draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, 
 
 if __name__ == '__main__':
     open3d.utility.set_verbosity_level(open3d.utility.VerbosityLevel.Error)
-    pred_bg_dir = '../../logs/ours/bg_pretrain/100%nuscenes/vs-0.1_t-9.5_bs-4/version_1 (with iou sudden drop, up to 99 epoch)/predictions/epoch_99'
-
-
-    pred_mos_dir = '../../logs/ours/bg_pretrain(epoch-99)-mos_finetune/100%nuscenes-50%nuscenes/vs-0.1_t-9.5_bs-4/version_0/predictions/epoch_179'
 
     # parameters
-    nusc = NuScenes(dataroot="/home/ziliang/Datasets/nuScenes", version="v1.0-trainval")
+    with open('../../configs/dataset.yaml', 'r') as f:
+        cfg_dataset = yaml.safe_load(f)['sekitti']
+        cfg_dataset['root'] = "/home/ziliang" + cfg_dataset['root']
     with open('../../configs/ours.yaml', 'r') as f:
         cfg = yaml.safe_load(f)['moco']
 
     # visualization
-    source = 'all'
-    sd_toks_list = get_vis_sd_toks(nusc, source, split='train', pred_labels_dir=os.path.join(nusc.dataroot, 'mutual_obs_labels', nusc.version), label_suffix='_depth.bin')
-    draw_mov_obj_background(nusc, cfg, sd_toks_list, pred_bg_dir, pred_mos_dir, conf_color=False)
+    vis_seq = 0
+    seqstr = "{0:02d}".format(int(vis_seq))
+    path_to_seq = os.path.join(cfg_dataset['root'], seqstr)
+    scan_files, label_files = kitti_utils.load_files(os.path.join(path_to_seq, cfg_dataset['lidar']),
+                                                     cfg_dataset['root'], vis_seq)  # load all scans in a seq
+    scans_idx_list = [scan_file.split(cfg_dataset['lidar'] + "/")[1].split(".")[0] for scan_file in scan_files]
+    key_scans_idx_dict = kitti_utils.get_mutual_scans_dict(scans_idx_list, path_to_seq, cfg)
+
+    # draw
+    draw_mov_obj_background(cfg, path_to_seq, key_scans_idx_dict)

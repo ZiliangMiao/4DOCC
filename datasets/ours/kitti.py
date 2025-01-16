@@ -1,306 +1,235 @@
-import numpy as np
-import yaml
 import os
-import copy
+import time
+from collections import defaultdict, Counter
 import torch
-from torch.utils.data import Dataset, DataLoader
-from pytorch_lightning import LightningDataModule
-
-from datasets.kitti_utils import load_poses, load_calib, load_files
-from datasets.mos4d.augmentation import (
-    shift_point_cloud,
-    rotate_point_cloud,
-    jitter_point_cloud,
-    random_flip_point_cloud,
-    random_scale_point_cloud,
-    rotate_perturbation_point_cloud,
-)
+import numpy as np
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+from nuscenes.utils.splits import create_splits_logs, create_splits_scenes
+from random import sample as random_sample
+from utils.augmentation import augment_pcds
+import datasets.nusc_utils as nusc_utils
 
 
-class KittiSequentialModule(LightningDataModule):
-    """A Pytorch Lightning module for Sequential KITTI data; Contains train, valid, test data"""
+class KittiTopDataset(Dataset):
+    def __init__(self, nusc, cfg_model, cfg_dataset, split):
+        self.nusc = nusc
+        self.cfg_model = cfg_model
+        self.cfg_dataset = cfg_dataset
+        self.split = split  # "train" "val" "mini_train" "mini_val" "test"
 
-    def __init__(self, cfg):
-        super(KittiSequentialModule, self).__init__()
-        self.cfg = cfg
-
-    def prepare_data(self):
-        pass
-
-    def setup(self, stage=None):
-        """Dataloader and iterators for training, validation and test data"""
-
-        if self.cfg["MODE"] == "train" or self.cfg["MODE"] == "finetune":
-            ########## Point dataset splits
-            train_set = KittiSequentialDataset(self.cfg, split="train")
-            val_set = KittiSequentialDataset(self.cfg, split="val")
-
-            ########## Generate dataloaders and iterables
-            self.train_loader = DataLoader(
-                dataset=train_set,
-                batch_size=self.cfg["TRAIN"]["BATCH_SIZE"],
-                collate_fn=self.collate_fn,
-                shuffle=self.cfg["DATA"]["SHUFFLE"],
-                num_workers=self.cfg["TRAIN"]["NUM_WORKERS"],  # num of multi-processing
-                pin_memory=True,
-                drop_last=False,  # drop the samples left from full batch
-                timeout=0,
-            )
-            self.train_iter = iter(self.train_loader)
-            self.valid_loader = DataLoader(
-                dataset=val_set,
-                batch_size=self.cfg["TRAIN"]["BATCH_SIZE"],
-                collate_fn=self.collate_fn,
-                shuffle=False,
-                num_workers=self.cfg["TRAIN"]["NUM_WORKERS"],
-                pin_memory=True,
-                drop_last=False,
-                timeout=0,
-            )
-            self.valid_iter = iter(self.valid_loader)
-            print("Loaded {:d} training and {:d} validation set.".format(len(train_set), len(val_set)))
-
-        elif self.cfg["MODE"] == "test":
-            test_set = KittiSequentialDataset(self.cfg, split="test")
-            self.test_loader = DataLoader(
-                dataset=test_set,
-                batch_size=self.cfg["TEST"]["BATCH_SIZE"],
-                collate_fn=self.collate_fn,
-                shuffle=False,
-                num_workers=self.cfg["TEST"]["NUM_WORKERS"],
-                pin_memory=True,
-                drop_last=False,
-                timeout=0,
-            )
-            self.test_iter = iter(self.test_loader)
-            print("Loaded {:d} testing set.".format(len(test_set)))
-
-    def train_dataloader(self):
-        return self.train_loader
-
-    def val_dataloader(self):
-        return self.valid_loader
-
-    def test_dataloader(self):
-        return self.test_loader
-
-    @staticmethod
-    def collate_fn(batch):  # define how to merge a list of samples to from a mini-batch samples
-        meta = [item[0] for item in batch]
-        num_curr_pts = [item[1] for item in batch]
-        point_cloud = [item[2] for item in batch]
-        mos_label = [item[3] for item in batch]
-        return [meta, num_curr_pts, point_cloud, mos_label]
-
-class KittiSequentialDataset(Dataset):
-    """Semantic KITTI Dataset class"""
-    def __init__(self, cfg, split):
-        self.cfg = cfg
-        self.lidar_name = cfg["DATASET"]["SEKITTI"]["LIDAR_NAME"]
-        self.dataset_path = self.cfg["DATASET"]["SEKITTI"]["PATH"]
-
-        # Pose information
-        self.transform = self.cfg["DATA"]["TRANSFORM"]
-        self.poses = {}
-        self.filename_poses = cfg["DATASET"]["SEKITTI"]["POSES"]
-
-        # Semantic information
-        self.semantic_config = yaml.safe_load(open(cfg["DATASET"]["SEKITTI"]["SEMANTIC_CONFIG_FILE"]))
-        self.n_past_steps = self.cfg["DATA"]["N_PAST_STEPS"]  # use how many past scans, default = 10
-
-        self.split = split
-        if self.split == "train":
-            self.sequences = self.cfg["DATASET"]["SEKITTI"]["TRAIN"]
-        elif self.split == "val":
-            self.sequences = self.cfg["DATASET"]["SEKITTI"]["VAL"]
-        elif self.split == "test":
-            self.sequences = self.cfg["DATASET"]["SEKITTI"]["TEST"]
-        else:
-            raise Exception("Split must be train/val/test")
-
-        # Check if data and prediction frequency matches
-        self.dt_pred = self.cfg["DATA"]["DELTA_T_PRED"]  # time resolution used for prediction
-        self.dt_data = self.cfg["DATASET"]["SEKITTI"]["DELTA_T"]  # minimum time resolution of lidar scans
-        assert (
-            self.dt_pred >= self.dt_data
-        ), "DELTA_T_PREDICTION needs to be larger than DELTA_T_DATA!"
-        assert np.isclose(
-            self.dt_pred / self.dt_data, round(self.dt_pred / self.dt_data), atol=1e-5
-        ), "DELTA_T_PREDICTION needs to be a multiple of DELTA_T_DATA!"
-        self.skip = round(self.dt_pred / self.dt_data)
-
-        self.dataset_size = 0
-        self.filenames = {}  # dict: maps the sequence number to a list of scans file path
-        self.idx_mapper = {}  # dict: maps a dataset idx to a seq number and the index of the current scan
-        sample_idx = 0  # sample index of idx_mapper (a counter that crosses different sequences)
-        for seq_idx in self.sequences:
-            seqstr = "{0:04d}".format(int(seq_idx))
-            path_to_seq = os.path.join(self.dataset_path, seqstr)
-            scan_path = os.path.join(path_to_seq, self.lidar_name)
-            self.filenames[seq_idx] = load_files(scan_path)  # load all files path in a folder and sort
-            if self.transform:
-                if "SEKITTI" in {"SEKITTI", "KITTITRA", "KITTITRA_M", "APOLLO"}:
-                    self.poses[seq_idx] = self.read_kitti_poses(path_to_seq)
-                    # kitti pose: calib.txt (from lidar to camera), poses.txt (from current cam to previous cam)
-                else:
-                    self.poses[seq_idx] = self.read_poses(path_to_seq)
-                assert len(self.poses[seq_idx]) == len(self.filenames[seq_idx])
+        if split == 'train':
+            # dataset down-sampling: sequence level or sample level
+            if self.cfg_model["downsample_level"] is None:  # for test set and validation set
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
+            elif self.cfg_model["downsample_level"] == "sequence":
+                split_scenes = create_splits_scenes(verbose=True)
+                split_scenes = split_scenes[self.split]
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
+                sample_toks = nusc_utils.split_scenes_to_samples(self.nusc, ds_split_scenes)
+            elif self.cfg_model["downsample_level"] == "sample":
+                split_logs = create_splits_logs(split, self.nusc)
+                sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
             else:
-                self.poses[seq_idx] = []
-
-            # num of valid scans of current seq (we need 10 scans for prediction, so 00-08 are not valid), scan seqs begin at 09
-            num_valid_scans = max(0, len(self.filenames[seq_idx]) - self.skip * (self.n_past_steps - 1))
-            # Add to idx_mapper
-            for idx in range(num_valid_scans):  # examp: sample index 00 -> scan index 09
-                scan_idx = self.skip * (self.n_past_steps - 1) + idx
-                self.idx_mapper[sample_idx] = (seq_idx, scan_idx)  # idx_mapper[sample_idx=0] = (seq_idx=00, scan_idx=09)
-                sample_idx += 1
-            self.dataset_size += num_valid_scans
-
-    def __len__(self):  # return length of the whole dataset
-        return self.dataset_size
-
-    def __getitem__(self, sample_idx):  # define how to load each sample
-        seq_idx, scan_idx = self.idx_mapper[sample_idx]
-        # Load point clouds
-        from_idx = scan_idx - self.skip * (self.n_past_steps - 1)  # included
-        to_idx = scan_idx + 1  # not included
-        scan_indices = list(range(from_idx, to_idx, self.skip))  # [from_idx, to_idx)
-        scan_files = self.filenames[seq_idx][from_idx : to_idx : self.skip]
-        if "SEKITTI" in {"SEKITTI", "KITTITRA", "KITTITRA_M", "APOLLO"}:
-            scans_list = [self.read_kitti_point_cloud(f) for f in scan_files]
+                raise ValueError("Invalid dataset down-sampling strategy!")
         else:
-            scans_list = [self.read_point_cloud(f) for f in scan_files]
-        for i, pcd in enumerate(scans_list):
-            if self.transform:  # transform to current pose
-                from_pose = self.poses[seq_idx][scan_indices[i]]
-                to_pose = self.poses[seq_idx][scan_indices[-1]]
-                pcd = self.transform_point_cloud(pcd, from_pose, to_pose)
-            rela_time_idx = i - self.n_past_steps + 1  # -9, -8 ... 0
-            rela_timestamp = round(rela_time_idx * self.dt_pred, 3)  # -0.9, 0.8 ... 0.0 (relative timestamps)
-            scans_list[i] = self.timestamp_tensor(pcd, rela_timestamp)
-        point_cloud = torch.cat(scans_list, dim=0)  # 4D point cloud: [x y z rela_time]
+            split_logs = create_splits_logs(split, self.nusc)
+            sample_toks = nusc_utils.split_logs_to_samples(self.nusc, split_logs)
 
-        # USE CURRENT SCAN LOSS:
-        mos_labels_dir = os.path.join(self.dataset_path, str(seq_idx).zfill(4), "mos_labels")
-        assert os.path.exists(mos_labels_dir)
-        mos_labels_file = os.path.join(mos_labels_dir, str(scan_indices[-1]).zfill(6) + ".label")
-        mos_labels = torch.tensor(np.fromfile(mos_labels_file, dtype=np.uint8))
-        num_0 = torch.sum(mos_labels == 0)
-        num_1 = torch.sum(mos_labels == 1)
-        num_2 = torch.sum(mos_labels == 2)
-        num_curr_pts = len(mos_labels)
+        # TODO: temporarily remove samples that have no mutual observation samples ###################################################################
+        mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
+        mutual_obs_sd_tok_list_1 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_2 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_3 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_4 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_5 = os.listdir(mutual_obs_folder)
+        mutual_obs_sd_tok_list_6 = os.listdir(mutual_obs_folder)
+        for i in range(len(mutual_obs_sd_tok_list_1)):
+            mutual_obs_sd_tok_list_1[i] = mutual_obs_sd_tok_list_1[i].replace("_depth.bin", '')
+            mutual_obs_sd_tok_list_2[i] = mutual_obs_sd_tok_list_2[i].replace("_labels.bin", '')
+            mutual_obs_sd_tok_list_3[i] = mutual_obs_sd_tok_list_3[i].replace("_confidence.bin", '')
+            mutual_obs_sd_tok_list_4[i] = mutual_obs_sd_tok_list_4[i].replace("_rays_idx.bin", '')
+            mutual_obs_sd_tok_list_5[i] = mutual_obs_sd_tok_list_5[i].replace("_key_rays_idx.bin", '')
+            mutual_obs_sd_tok_list_6[i] = mutual_obs_sd_tok_list_6[i].replace("_key_meta.bin", '')
+        valid_sd_toks = list(set(mutual_obs_sd_tok_list_1) & set(mutual_obs_sd_tok_list_2) & set(mutual_obs_sd_tok_list_3) & set(mutual_obs_sd_tok_list_4) & set(mutual_obs_sd_tok_list_5) & set(mutual_obs_sd_tok_list_6))
+        sample_toks = [sample_tok for sample_tok in sample_toks if self.nusc.get('sample', sample_tok)['data']['LIDAR_TOP'] in valid_sd_toks]
+        ##############################################################################################################################################
 
-        # USE HISTORY SCANS LOSS
-        # mos_labels_dir = os.path.join(self.dataset_path, str(seq_idx).zfill(4), "mos_labels")
-        # assert os.path.exists(mos_labels_dir)
-        # mos_labels_list = []
-        # for i in scan_indices:
-        #     mos_labels_file = os.path.join(mos_labels_dir, str(i).zfill(6) + ".label")
-        #     scan_mos_labels = torch.Tensor(np.fromfile(mos_labels_file, dtype=np.uint32).astype(np.float32)).long()
-        #     scan_mos_labels = scan_mos_labels.reshape(-1, 1)
-        #     rela_time_idx = i - self.n_past_steps + 1
-        #     rela_timestamp = round(rela_time_idx * self.dt_pred, 3)
-        #     mos_labels_list.append(self.timestamp_tensor(scan_mos_labels, rela_timestamp))
-        # mos_labels = torch.cat(mos_labels_list, dim=0)
+        # sample tokens: drop the samples without full sequence length
+        self.sample_to_sd_toks_dict = nusc_utils.get_input_sd_toks(self.nusc, self.cfg_model, sample_toks)
 
-        meta = (seq_idx, scan_idx, scan_indices)
-        # mask ego vehicle point
-        if self.cfg["MODE"] == "train" or self.cfg["MODE"] == "finetune":
-            if self.cfg["TRAIN"]["AUGMENTATION"]:  # will not change the mapping from point to label
-                point_cloud = self.augment_data(point_cloud)
-            if self.cfg["TRAIN"]["EGO_MASK"]:
-                ego_mask = self.get_ego_mask(point_cloud)
-                time_mask = point_cloud[:, -1] == 0.0
-                point_cloud = point_cloud[~ego_mask]
-                mos_labels = mos_labels[~ego_mask[time_mask]]  # all point clouds have mos labels (different from nusc)
-                num_curr_pts = len(mos_labels)
-        return [meta, num_curr_pts, point_cloud, mos_labels]  # [[index of current sequence, current scan, all scans], all scans, all labels]
+    def __len__(self):
+        return len(self.sample_to_sd_toks_dict)
 
-    @staticmethod
-    def get_ego_mask(points):  # mask the points of ego vehicle: x [-0.8, 0.8], y [-1.5, 2.5]
-    # kitti car: length (4.084 m), width (1.730 m), height (1.562 m)
-    # https://www.cvlibs.net/datasets/kitti/setup.php
-        ego_mask = torch.logical_and(
-            torch.logical_and(-0.760 - 0.8 <= points[:, 0], points[:, 0] <= 1.950 + 0.8),
-            torch.logical_and(-0.850 - 0.2 <= points[:, 1], points[:, 1] <= 0.850 + 0.2),
-        )
-        return ego_mask
+    def __getitem__(self, batch_idx):
+        # sample
+        sample_toks_list = list(self.sample_to_sd_toks_dict.keys())
+        sample_tok = sample_toks_list[batch_idx]
+        sample = self.nusc.get('sample', sample_tok)
+        ref_sd_tok = sample['data']['LIDAR_TOP']
 
-    def transform_point_cloud(self, past_point_clouds, from_pose, to_pose):
-        transformation = torch.Tensor(np.linalg.inv(to_pose) @ from_pose)
-        NP = past_point_clouds.shape[0]
-        xyz1 = torch.hstack([past_point_clouds, torch.ones(NP, 1)]).T
-        past_point_clouds = (transformation @ xyz1).T[:, :3]
-        return past_point_clouds
+        # sample data: concat 4d point clouds
+        input_sd_toks = self.sample_to_sd_toks_dict[sample_tok]  # sequence: -1, -2 ...
+        assert len(input_sd_toks) == self.cfg_model["n_input"], "Invalid input sequence length"
+        pcd_4d_list = []  # 4D Point Cloud (relative timestamp)
+        time_idx = 1
+        ref_pts = None
+        ref_org = None
+        ref_ts = None
+        for i, sd_tok in enumerate(input_sd_toks):
+            # TODO: filter ego and outside points
+            org, pcd, ts, valid_mask = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, sd_tok)
+            if i == 0:  # reference sample data token
+                ref_org = org
+                ref_pts = pcd
+                ref_ts = ts
+            # add timestamp (0, -1, -2, ...) to pcd -> pcd_4d
+            time_idx -= 1
+            # assert time_idx == round(ts / 0.5), "relative timestamp repeated"  # TODO: has repeated corner cases
+            pcd_4d = torch.hstack([pcd, torch.ones(len(pcd)).reshape(-1, 1) * time_idx])
+            pcd_4d_list.append(pcd_4d)
+        pcds_4d = torch.cat(pcd_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
 
-    def augment_data(self, past_point_clouds):
-        past_point_clouds = rotate_point_cloud(past_point_clouds)
-        past_point_clouds = rotate_perturbation_point_cloud(past_point_clouds)
-        past_point_clouds = jitter_point_cloud(past_point_clouds)
-        past_point_clouds = shift_point_cloud(past_point_clouds)
-        past_point_clouds = random_flip_point_cloud(past_point_clouds)
-        past_point_clouds = random_scale_point_cloud(past_point_clouds)
-        return past_point_clouds
+        # ref rays params
+        num_rays = len(ref_pts)
+        rays_idx = torch.tensor(range(num_rays))
+        rays_dir = F.normalize(ref_pts - ref_org, p=2, dim=1)  # unit vector
+        rays_depth = torch.linalg.norm(ref_pts - ref_org, dim=1, keepdim=False)
 
-    def read_kitti_point_cloud(self, filename):
-        """Load point clouds from .bin file"""
-        point_cloud = np.fromfile(filename, dtype=np.float32)
-        point_cloud = torch.tensor(point_cloud.reshape((-1, 4)))
-        point_cloud = point_cloud[:, :3]
-        return point_cloud
+        # data augmentation: will not change the order of points
+        if self.split == 'train' and self.cfg_model["augmentation"]:
+            pcds_4d = augment_pcds(pcds_4d)
 
-    def read_point_cloud(self, filename):
-        """Load point clouds from .bin file"""
-        point_cloud = np.fromfile(filename, dtype=np.float32)
-        point_cloud = torch.tensor(point_cloud.reshape((-1, 3)))
-        return point_cloud
+        # load mutual observation samples
+        mutual_obs_folder = os.path.join(self.nusc.dataroot, "mutual_obs_labels", self.nusc.version)
+        mutual_obs_meta = os.path.join(mutual_obs_folder, ref_sd_tok + "_key_meta.bin")
+        mutual_sd_toks = nusc_utils.get_mutual_sd_toks_dict(self.nusc, [sample_tok], self.cfg_model)[sample_tok]
+        mo_rays_idx = os.path.join(mutual_obs_folder, ref_sd_tok + "_rays_idx.bin")
+        mo_depth = os.path.join(mutual_obs_folder, ref_sd_tok + "_depth.bin")
+        mo_labels = os.path.join(mutual_obs_folder, ref_sd_tok + "_labels.bin")
+        mo_confidence = os.path.join(mutual_obs_folder, ref_sd_tok + "_confidence.bin")
+        mutual_obs_meta = np.fromfile(mutual_obs_meta, dtype=np.uint32).reshape(-1, 2).astype(np.int64)
+        mo_rays_idx = np.fromfile(mo_rays_idx, dtype=np.uint16).astype(np.int64)
+        mo_depth = torch.from_numpy(np.fromfile(mo_depth, dtype=np.float16).astype(np.float32))
+        mo_labels = torch.from_numpy(np.fromfile(mo_labels, dtype=np.uint8).astype(np.int64))
+        mo_confidence = torch.from_numpy(np.fromfile(mo_confidence, dtype=np.float16).astype(np.float32))
+        mutual_obs_sensors_indices = np.concatenate([np.ones(meta[1], dtype=np.int64) * meta[0] for meta in mutual_obs_meta])
+        mutual_obs_sensors_timestamps = [(self.nusc.get('sample_data', sd_tok)['timestamp'] -
+                                      self.nusc.get('sample_data', ref_sd_tok)['timestamp']) / 1e6 for sd_tok in mutual_sd_toks]
+        mo_ts = torch.tensor(mutual_obs_sensors_timestamps)[mutual_obs_sensors_indices]
 
-    def read_labels(self, lidarseg_file, save_mos_flag, mos_label_file=None):
-        """Load moving object labels from .label file"""
-        if os.path.isfile(lidarseg_file):
-            labels = np.fromfile(lidarseg_file, dtype=np.uint32)
-            labels = labels.reshape((-1))
-            labels = labels & 0xFFFF  # Mask semantics in lower half
-            mapped_labels = copy.deepcopy(labels)
-            for k, v in self.semantic_config["learning_map"].items():
-                mapped_labels[labels == k] = v
-            if save_mos_flag:
-                assert mos_label_file != None
-                mapped_labels.tofile(mos_label_file)
-            selected_labels = torch.Tensor(mapped_labels.astype(np.float32)).long()
-            selected_labels = selected_labels.reshape((-1, 1))
-            return selected_labels
+        # only select background mo samples (unknown occupancy state)
+        if self.cfg_model['train_bg_mo_samples']:
+            # mask mutual obs points which depth less than ray depth
+            bg_mask = mo_depth >= rays_depth[mo_rays_idx]
+            # update valid bg samples
+            mo_rays_idx = mo_rays_idx[bg_mask]
+            mo_depth = mo_depth[bg_mask]
+            mo_ts = mo_ts[bg_mask]
+            mo_labels = mo_labels[bg_mask]
+            mo_confidence = mo_confidence[bg_mask]
+
+        # TODO: balanced down-sampling for training (still balance sampling when testing, cost a lot of gpu memory)
+        mo_unk_idx = torch.where(mo_labels == 0)[0]
+        mo_free_idx = torch.where(mo_labels == 1)[0]
+        mo_occ_idx = torch.where(mo_labels == 2)[0]
+        num_mo_unk = len(mo_unk_idx)
+        num_mo_free = len(mo_free_idx)
+        num_mo_occ = len(mo_occ_idx)
+
+        # TODO: down-sample occ and free class
+        num_ds_unk_samples = np.min((int(num_mo_occ * self.cfg_model['mo_samples_unk_pct'] / 100), num_mo_unk))
+        num_ds_free_samples = np.min((int(num_mo_occ * self.cfg_model['mo_samples_free_pct'] / 100), num_mo_free))
+        ds_mo_unk_idx = mo_unk_idx[random_sample(range(num_mo_unk), num_ds_unk_samples)]
+        ds_mo_free_idx = mo_free_idx[random_sample(range(num_mo_free), num_ds_free_samples)]
+
+        # TODO: occupied class weight
+        mo_confidence[mo_occ_idx] = mo_confidence[mo_occ_idx] * (self.cfg_model['mo_samples_free_pct'] / 100)
+
+        # update down-sampled mutual obs samples
+        ds_mo_sample_indices = torch.cat([ds_mo_unk_idx, ds_mo_free_idx, mo_occ_idx])
+        mo_rays_idx = mo_rays_idx[ds_mo_sample_indices]
+        mo_depth = mo_depth[ds_mo_sample_indices]
+        mo_ts = mo_ts[ds_mo_sample_indices]
+        mo_labels = mo_labels[ds_mo_sample_indices]
+        mo_confidence = mo_confidence[ds_mo_sample_indices]
+
+        # mutual obs points (down-sampled)
+        mo_pts = ref_org + mo_depth.view(-1, 1) * rays_dir[mo_rays_idx]
+        mo_pts_4d = torch.hstack((mo_pts, mo_ts.reshape(-1, 1)))
+
+        # TODO: ray average weight
+        # count points num on rays
+        num_mo_sample_per_ray = Counter(mo_rays_idx)
+        # average
+        samples_weight_by_ray = np.ones(num_rays)
+        samples_weight_by_ray[list(num_mo_sample_per_ray.keys())] = list(num_mo_sample_per_ray.values())
+        samples_weight_by_ray = (1. / samples_weight_by_ray).astype(np.float32)
+        mo_confidence = mo_confidence * samples_weight_by_ray[mo_rays_idx]
+
+        if self.cfg_model['train_co_samples']:
+            # sampling of current observation samples`
+            num_co_rays_free = self.cfg_model['num_co_rays_free']
+            num_co_rays_occ = self.cfg_model['num_co_rays_occ']
+
+            # stratified randomization
+            delta_free = torch.linspace(0, 1, num_co_rays_free+1)[:-1].view(-1, 1)
+            delta_occ = torch.linspace(0, 1, num_co_rays_occ+1)[:-1].view(-1, 1)
+            co_free_depth_scale = delta_free + torch.rand(num_co_rays_free, num_rays) * (1 / num_co_rays_free) # [num_co_rays_free, num_rays]
+            co_occ_depth_scale = delta_occ + torch.rand(num_co_rays_occ, num_rays) * (1 / num_co_rays_occ) # [num_co_rays_occ, num_rays]
+
+            # occupancy sampling (free points)
+            co_free_pts_depth = (co_free_depth_scale * rays_depth.repeat(num_co_rays_free, 1)).view(-1, 1)  # [ray_1, ... ray_n, ..., ray_1, ... ray_n]
+            co_free_pts = ref_org + co_free_pts_depth * rays_dir.repeat(num_co_rays_free, 1)  # [num_co_rays_free * num_rays, 1] * [num_rays * num_co_rays_free, 3]
+            co_free_rays_idx = torch.squeeze(rays_idx.repeat(num_co_rays_free, 1).view(-1, 1))
+
+            # occupancy sampling (occupied points)
+            occ_thrd = torch.full((num_co_rays_occ, num_rays), -np.log(0.9)) # -np.log(0.9) = 0.105361
+            co_occ_pts_depth = (rays_depth.repeat(num_co_rays_occ, 1) + co_occ_depth_scale * occ_thrd).view(-1, 1)  # [ray_1, ... ray_n, ..., ray_1, ... ray_n]
+            co_occ_pts = ref_org + co_occ_pts_depth * rays_dir.repeat(num_co_rays_occ, 1)  # [num_co_rays_free * num_rays, 1] * [num_rays * num_co_rays_free, 3]
+            co_occ_rays_idx = torch.squeeze(rays_idx.repeat(num_co_rays_occ, 1).view(-1, 1))
+
+            # TODO: down-sample
+            # ds_co_idx_cls = random_sample(range(num_co_ray_samples_cls * num_rays), num_co_samples_cls)
+            # co_occ_pts_depth = co_occ_pts_depth[ds_co_idx_cls]
+            # co_free_pts_depth = co_free_pts_depth[ds_co_idx_cls]
+            # co_free_pts = co_free_pts[ds_co_idx_cls]
+            # co_occ_pts = co_occ_pts[ds_co_idx_cls]
+            # co_free_rays_idx = co_free_rays_idx[ds_co_idx_cls]
+            # co_occ_rays_idx = co_occ_rays_idx[ds_co_idx_cls]
+
+            # generate co samples
+            co_free_pts_4d = torch.cat((co_free_pts, torch.full((len(co_free_pts), 1), ref_ts)), dim=1)
+            co_occ_pts_4d = torch.cat((co_occ_pts, torch.full((len(co_occ_pts), 1), ref_ts)), dim=1)
+
+            # co labels
+            co_free_labels = torch.ones(len(co_free_pts_4d), dtype=torch.int64)
+            co_occ_labels = torch.ones(len(co_occ_pts_4d), dtype=torch.int64) * 2
+            co_free_confidence = torch.ones(len(co_free_pts_4d), dtype=torch.float32)
+            co_occ_confidence = torch.squeeze(torch.exp(-(co_occ_pts_depth - rays_depth.repeat(num_co_rays_occ, 1).view(-1, 1))))
+
+            # TODO: class weight
+            co_occ_confidence = co_occ_confidence * (num_co_rays_free / num_co_rays_occ)
+            # TODO: ray avg weight
+            co_free_confidence = co_free_confidence * 1 / (num_co_rays_free + num_co_rays_occ)
+            co_occ_confidence = co_occ_confidence * 1 / (num_co_rays_free + num_co_rays_occ)
+
+            # concat and append to list
+            co_rays_idx = torch.cat((co_free_rays_idx, co_occ_rays_idx), dim=0)
+            co_pts_4d = torch.cat((co_free_pts_4d, co_occ_pts_4d), dim=0)
+            co_labels = torch.cat((co_free_labels, co_occ_labels), dim=0)
+            co_confidence = torch.cat((co_free_confidence, co_occ_confidence), dim=0)
+
+            # TODO: shuffle
+            # shuffle_idx = np.random.permutation(len(co_pts_4d))
+            # co_rays_idx = co_rays_idx[shuffle_idx]
+            # co_pts_4d = co_pts_4d[shuffle_idx]
+            # co_labels = co_labels[shuffle_idx]
+            # co_confidence = co_confidence[shuffle_idx]
+            return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence, co_rays_idx, co_pts_4d, co_labels, co_confidence)]
         else:
-            return torch.Tensor(1, 1).long()
-
-    @staticmethod
-    def timestamp_tensor(tensor, time):
-        """Add time as additional column to tensor"""
-        n_points = tensor.shape[0]
-        time = time * torch.ones((n_points, 1))
-        timestamped_tensor = torch.hstack([tensor, time])
-        return timestamped_tensor
-
-    def read_kitti_poses(self, path_to_seq):
-        pose_file = os.path.join(path_to_seq, self.filename_poses)
-        calib_file = os.path.join(path_to_seq, "calib.txt")
-        poses = np.array(load_poses(pose_file))
-        inv_frame0 = np.linalg.inv(poses[0])
-
-        # load calibrations
-        T_cam_velo = load_calib(calib_file)
-        T_cam_velo = np.asarray(T_cam_velo).reshape((4, 4))
-        T_velo_cam = np.linalg.inv(T_cam_velo)
-
-        # convert kitti poses from camera coord to LiDAR coord
-        new_poses = []
-        for pose in poses:
-            new_poses.append(T_velo_cam.dot(inv_frame0).dot(pose).dot(T_cam_velo))
-        poses = np.array(new_poses)
-        return poses
-
-    def read_poses(self, path_to_seq):
-        pose_file = os.path.join(path_to_seq, self.filename_poses)
-        poses = np.array(load_poses(pose_file))  # from current vehicle frame to global frame
-        return poses
+            return [(ref_sd_tok, mutual_sd_toks), pcds_4d, (mo_rays_idx, mo_pts_4d, mo_labels, mo_confidence)]

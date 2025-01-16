@@ -840,7 +840,7 @@ if __name__ == '__main__':
     if args.autodl:
         nusc = NuScenes(dataroot="/root/autodl-tmp/Datasets/nuScenes", version="v1.0-trainval")
     else:
-        nusc = NuScenes(dataroot="/home/user/Datasets/nuScenes", version="v1.0-trainval")
+        nusc = NuScenes(dataroot="/home/ziliang/Datasets_0/nuScenes", version="v1.0-trainval")
 
     with open('configs/ours.yaml', 'r') as f:
         cfg = yaml.safe_load(f)['moco']

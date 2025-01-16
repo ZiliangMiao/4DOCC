@@ -491,6 +491,7 @@ if __name__ == '__main__':
     # get key sample data tokens
     seq_list = cfg_dataset['train'] + cfg_dataset['val']
     for seq_idx in seq_list:
+        print(f"current sequence: {seq_idx}")
         seqstr = "{0:02d}".format(int(seq_idx))
         path_to_seq = os.path.join(cfg_dataset['root'], seqstr)
         scan_files, label_files = kitti_utils.load_files(os.path.join(path_to_seq, cfg_dataset['lidar']),
