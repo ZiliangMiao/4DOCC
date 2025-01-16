@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import torch
+from random import sample as random_sample
 from torch.utils.data import Dataset
 from utils.augmentation import augment_pcds
 from datasets.kitti_utils import load_files, read_kitti_poses, get_ego_mask, add_timestamp, get_outside_scene_mask, load_mos_labels, transform_point_cloud
@@ -68,6 +69,17 @@ class KittiMOSDataset(Dataset):
             self.samples_scans.extend(seq_to_scans[seq_idx])
             self.samples_labels.extend(seq_to_labels[seq_idx])
             self.samples_poses.extend(seq_to_poses[seq_idx])
+
+        # down-sampling
+        sample_idx_list = range(len(self.samples_scans))
+        if split == 'train':
+            # dataset down-sampling: sequence level or sample level
+            if self.cfg_model["downsample_level"] == "sequence":
+                train_data_pct = self.cfg_model["downsample_pct"] / 100
+                ds_samples_idx = random_sample(sample_idx_list, int(len(sample_idx_list) * train_data_pct))
+                self.samples_scans = [self.samples_scans[i] for i in ds_samples_idx]
+                self.samples_labels = [self.samples_labels[i] for i in ds_samples_idx]
+                self.samples_poses = [self.samples_poses[i] for i in ds_samples_idx]
 
     def __len__(self):
         assert len(self.samples_labels) == len(self.samples_scans)
