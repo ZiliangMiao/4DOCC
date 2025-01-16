@@ -1,6 +1,6 @@
 train:
   # dataset related
-  dataset_name: "nuscenes" # "sekitti", "nuscenes"
+  dataset_name: "sekitti" # "sekitti", "nuscenes"
   downsample_level: "sequence" # "sequence", "sample", "none"
   downsample_pct: 10 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
@@ -9,8 +9,8 @@ train:
 
   # data processing related
   n_input: 6
-  n_skip: 0 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  n_skip: 4 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
+  time_interval: 0.1 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   pos_dim: 4 # x, y, z, t
