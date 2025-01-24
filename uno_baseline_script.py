@@ -142,22 +142,32 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['uno', 'uno_test'], default='uno')
+    parser.add_argument("--mode", choices=['uno', 'uno_test'], default='uno')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
-    parser.add_argument('--autodl', type=bool, default=False)
+    parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
+    parser.add_argument('--mars', type=bool, help="mars server", default=False)
+    parser.add_argument('--hpc', type=bool, help="hpc server", default=False)
     args = parser.parse_args()
 
     # load config
-    with open('configs/uno.yaml', 'r') as f:
+    with open("configs/mos4d.yaml", "r") as f:
         cfg = yaml.safe_load(f)
-    with open('configs/dataset.yaml', 'r') as f:
+    with open("configs/dataset.yaml", "r") as f:
         dataset_cfg = yaml.safe_load(f)
 
     # dataset root path at different platform
     if args.autodl:
         dataset_cfg['nuscenes']['root'] = '/root/autodl-tmp' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/root/autodl-tmp' + dataset_cfg['sekitti']['root']
+    elif args.mars:
+        dataset_cfg['nuscenes']['root'] = '/home/miaozl' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/home/miaozl' + dataset_cfg['sekitti']['root']
+    elif args.hpc:
+        dataset_cfg['nuscenes']['root'] = '/lustre1/g/mech_mars' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/lustre1/g/mech_mars' + dataset_cfg['sekitti']['root']
     else:
         dataset_cfg['nuscenes']['root'] = '/home/ziliang' + dataset_cfg['nuscenes']['root']
+        dataset_cfg['sekitti']['root'] = '/home/ziliang' + dataset_cfg['sekitti']['root']
 
     # pre-training on background for motion segmentation task
     if args.mode == 'uno':
