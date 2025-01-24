@@ -14,7 +14,6 @@ from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from models.backbone import MinkUNetBackbone
 from torch_geometric.nn import radius as search_radius
 # import torch_cluster.radius as search_radius
-import open3d.ml.tf as ml3d
 
 #######################################
 # Lightning Module
