@@ -9,7 +9,7 @@ also:
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
   outside_scene_mask: True
-  outside_scene_mask_z: True
+  outside_scene_mask_z: False
   outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
 
   # data processing related
@@ -22,8 +22,6 @@ also:
   # latent
   pos_dim: 4 # x, y, z, t
   feat_dim: 128 # feature dimension of each point [128]
-  hidden_size: 16 # [16]
-  featmap_size: 0.4 # feature map resolution
 
   # sampling
   occ_thrd: 0.1

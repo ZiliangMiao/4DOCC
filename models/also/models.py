@@ -12,8 +12,10 @@ import MinkowskiEngine as ME
 from utils.metrics import ClassificationMetrics
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from models.backbone import MinkUNetBackbone
-from torch_geometric.nn import radius as search_radius
+# from torch_geometric.nn import radius as search_radius
 # import torch_cluster.radius as search_radius
+import open3d as o3d
+
 
 #######################################
 # Lightning Module
@@ -26,10 +28,9 @@ class AlsoNetwork(LightningModule):
         if train_flag:
             self.save_hyperparameters(cfg_model)
         self.cfg_model = cfg_model
-        self.n_uno_cls = self.cfg_model['num_cls']
+        self.n_cls = self.cfg_model['num_cls']
         self.pos_dim = self.cfg_model['pos_dim']
         self.feat_dim = self.cfg_model['feat_dim']
-        self.hidden_size = self.cfg_model['hidden_size']
         self.iters_per_epoch = kwargs['iters_per_epoch']
 
         # also encoder
@@ -39,10 +40,10 @@ class AlsoNetwork(LightningModule):
         self.decoder = AlsoDecoder(self.cfg_model)
 
         # metrics
-        self.ClassificationMetrics = ClassificationMetrics(self.n_uno_cls, ignore_index=[])
+        self.ClassificationMetrics = ClassificationMetrics(self.n_cls, ignore_index=[])
 
         # pytorch lightning training output
-        self.epoch_acc_conf_mat = torch.zeros(self.n_uno_cls, self.n_uno_cls)
+        self.epoch_acc_conf_mat = torch.zeros(self.n_cls, self.n_cls)
 
         # save predictions
         if not train_flag:
@@ -66,15 +67,10 @@ class AlsoNetwork(LightningModule):
             feats = sparse_featmap_batch.features_at(batch_index=batch_idx)
             feats = feats[coords[:, -1] == 0]
 
-            # batch data
-            curr_pcd = also_samples[0]
-            also_pts = also_samples[1]  # x, y, z
-            also_labels = also_samples[2]
-            also_labels_batch.append(also_labels)
-
             # decoder
-            also_probs = self.decoder(curr_pcd, feats, also_pts)
+            also_probs, also_labels = self.decoder(also_samples[0], feats, also_samples[1], also_samples[2])
             also_probs_batch.append(also_probs)
+            also_labels_batch.append(also_labels)
         return also_probs_batch, also_labels_batch
 
     def configure_optimizers(self):
@@ -92,25 +88,25 @@ class AlsoNetwork(LightningModule):
                                                   gamma=1.0)  # lr_max decrease rate
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def get_loss(self, uno_probs, uno_labels):
-        uno_labels = uno_labels.long()  # dtype of torch.nllloss must be torch.long
-        assert len(uno_labels) == len(uno_probs)
-        log_prob = torch.log(uno_probs.clamp(min=1e-15))
+    def get_loss(self, probs, labels):
+        labels = labels.long()  # dtype of torch.nllloss must be torch.long
+        assert len(labels) == len(probs)
+        log_prob = torch.log(probs.clamp(min=1e-15))
         loss_func = nn.NLLLoss()
-        loss = loss_func(log_prob, uno_labels)
+        loss = loss_func(log_prob, labels)
         return loss
 
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
         # recons_loss = F.binary_cross_entropy_with_logits(x[:, 0], also_labels.float())
-        uno_probs_batch, uno_labels_batch = self.forward(batch)  # encoder & decoder
-        uno_probs = uno_probs_batch.view(-1, self.n_uno_cls)
-        uno_labels = uno_labels_batch.view(-1)
-        pred_labels = torch.argmax(uno_probs, axis=-1)
-        loss = self.get_loss(uno_probs, uno_labels)
+        also_probs_batch, also_labels_batch = self.forward(batch)  # encoder & decoder
+        also_probs = torch.concat(also_probs_batch).view(-1, self.n_cls)
+        also_labels = torch.concat(also_labels_batch).view(-1)
+        pred_labels = torch.argmax(also_probs, axis=-1)
+        loss = self.get_loss(also_probs, also_labels)
 
         # metrics
-        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, uno_labels)
+        conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_labels, also_labels)
         iou = self.ClassificationMetrics.get_iou(conf_mat)
         free_iou, occ_iou = iou[0].item() * 100, iou[1].item() * 100
         acc = self.ClassificationMetrics.get_acc(conf_mat)
@@ -125,7 +121,7 @@ class AlsoNetwork(LightningModule):
         self.log("occ_acc", occ_acc, on_step=True, prog_bar=True, logger=True)
 
         # cuda memory clean
-        del pred_labels, uno_labels
+        del pred_labels, also_labels
         torch.cuda.empty_cache()
         return loss
 
@@ -186,12 +182,41 @@ class AlsoEncoder(nn.Module):
         return sparse_featmap
 
 
+def search_radius(points, query_points, radius):
+    """
+    Args:
+        points: (N, 3) 源点云
+        query_points: (M, 3) 查询点
+        radius: 搜索半径
+    Returns:
+        row: 查询点的索引
+        col: 源点云中邻居点的索引
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+
+    # 构建KD树
+    kdtree = o3d.geometry.KDTreeFlann(pcd)
+
+    rows = []
+    cols = []
+
+    # 对每个查询点进行半径搜索
+    for i, query in enumerate(query_points):
+        # 返回[k, idx, dist]
+        _, idx, _ = kdtree.search_radius_vector_3d(query, radius)
+        rows.extend([i] * len(idx))
+        cols.extend(idx)
+
+    return torch.tensor(rows), torch.tensor(cols)
+
+
 class AlsoDecoder(nn.Module):
     def __init__(self, cfg_model: dict):
         super().__init__()
         # feature dimension
         self.latent_size = cfg_model["feat_dim"]
-        self.out_channels = cfg_model["feat_dim"]
+        self.out_channels = 2 # [free_prob, occ_prob]
 
         # layers of the decoder
         self.fc_in = torch.nn.Linear(self.latent_size + 3, self.latent_size)
@@ -204,7 +229,7 @@ class AlsoDecoder(nn.Module):
         # radius search
         self.radius = cfg_model["radius"]
 
-    def forward(self, pcd, feats, also_pts):
+    def forward(self, pcd, feats, also_pts, also_labels):
         # get the data
         pos_source = pcd
         pos_target = also_pts
@@ -214,7 +239,7 @@ class AlsoDecoder(nn.Module):
         # idx = ml3d.ops.radius_search(pos_source, pos_target, radii,
         #                        points_row_splits=torch.LongTensor([0, len(pos_source)]),
         #                        queries_row_splits=torch.LongTensor([0, len(pos_target)]))
-        row, col = search_radius(x=pos_source, y=pos_target, r=self.radius)
+        row, col = search_radius(points=pos_source.to('cpu'), query_points=pos_target.to('cpu'), radius=self.radius)
 
         # compute reltive position between query and input point cloud and the corresponding latent vectors
         pos_relative = pos_target[row] - pos_source[col]
@@ -228,7 +253,4 @@ class AlsoDecoder(nn.Module):
             x = l(self.activation(x))
         x = self.fc_out(x)
         probs = self.softmax(x)
-
-        # reconstruction loss
-        logits = x[:, 0]
-        return logits
+        return probs, also_labels[row]
