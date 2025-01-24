@@ -17,6 +17,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # dataset
 from nuscenes.nuscenes import NuScenes
 
+from also_script import also_pretrain
 from datasets.kitti_loader import KittiDataloader
 from datasets.mos4d.kitti import KittiMOSDataset
 from utils.metrics import ClassificationMetrics
@@ -390,7 +391,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument("--mode", choices=['also', 'also_test'], default='also')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
     parser.add_argument('--mars', type=bool, help="mars server", default=False)
@@ -398,7 +399,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # load config
-    with open("configs/mos4d.yaml", "r") as f:
+    with open("configs/also.yaml", "r") as f:
         cfg = yaml.safe_load(f)
     with open("configs/dataset.yaml", "r") as f:
         dataset_cfg = yaml.safe_load(f)
@@ -420,9 +421,7 @@ if __name__ == "__main__":
     # mov_pts_statistics(dataset_cfg, cfg[args.mode])
 
     # training from scratch
-    if args.mode == 'train':
-        mos4d_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
-    elif args.mode == 'finetune':
-        mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
+    if args.mode == 'also':
+        also_pretrain(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'test':
-        mos_test(cfg[args.mode], dataset_cfg)
+        print("No ALSO Test Method!")
