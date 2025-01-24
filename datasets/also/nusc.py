@@ -38,13 +38,13 @@ class CreatePoints(object):
         # center
         center = torch.zeros((1, 3), dtype=torch.float)
 
-        # in points (todo: q_behind, occupied)
+        # in points (todo: q_behind, occupied=1)
         pos = curr_pcd[nmp_choice_in]
         dirs = F.normalize(pos, dim=1)
         pos_in = pos + self.non_manifold_dist * dirs * torch.rand((pos.shape[0], 1))
         occ_in = torch.ones(pos_in.shape[0], dtype=torch.long)
 
-        # out points (todo: q_front, free)
+        # out points (todo: q_front, free=0)
         pos = curr_pcd[nmp_choice_out]
         dirs = F.normalize(pos, dim=1)
         pos_out = pos - self.non_manifold_dist * dirs * torch.rand((pos.shape[0], 1))
@@ -122,12 +122,7 @@ class NuscAlsoDataset(Dataset):
 
         # data augmentation: will not change the order of points
         if self.split == 'train' and self.cfg_model["augmentation"]:
-            # TODO: augmentation may cause outside scene bbox
             pcds_4d = augment_pcds(pcds_4d)
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model['scene_bbox'],
-                                                        self.cfg_model['outside_scene_mask_z'],
-                                                        self.cfg_model['outside_scene_mask_ub'])
-            pcds_4d = pcds_4d[~outside_scene_mask]
 
         # generate also samples
         org, pcd, ts, _ = nusc_utils.get_transformed_pcd(self.nusc, self.cfg_model, ref_sd_tok, ref_sd_tok)
