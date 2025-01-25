@@ -10,7 +10,7 @@ also:
   ego_mask: True
   outside_scene_mask: True
   outside_scene_mask_z: False
-  outside_scene_mask_ub: False # upper bound, if true, x <= x_max, else x < x_max
+  outside_scene_mask_ub: True # upper bound, if true, x <= x_max, else x < x_max
 
   # data processing related
   n_input: 6
@@ -33,7 +33,7 @@ also:
   n_sd_per_sample: 1
 
   num_epoch: 200
-  batch_size: 16
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   num_cls: 2 # 0-free, 1-occ
   lr_start: 0.0001
@@ -42,7 +42,7 @@ also:
   weight_decay: 0.0001  # refer to UnO
 
   # device related
-  num_workers: 12
+  num_workers: 16
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
 
 
