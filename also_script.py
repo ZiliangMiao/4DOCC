@@ -7,9 +7,6 @@ import importlib
 import torch
 import numpy as np
 from nuscenes import NuScenes
-
-from sklearn.metrics import confusion_matrix
-
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor

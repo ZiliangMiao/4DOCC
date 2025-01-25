@@ -13,8 +13,7 @@ from utils.metrics import ClassificationMetrics
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from models.backbone import MinkUNetBackbone
 # from torch_geometric.nn import radius as search_radius
-# import torch_cluster.radius as search_radius
-import open3d as o3d
+import torch_cluster.radius as search_radius
 
 
 #######################################
@@ -60,18 +59,42 @@ class AlsoNetwork(LightningModule):
         sparse_featmap_batch = self.encoder(pcds_batch)
 
         # decoder
-        also_probs_batch = []
+        curr_pcds_batch = []
+        also_pts_batch = []
         also_labels_batch = []
+        feats_batch = []
+        pcds_batch_indices = []
+        also_batch_indices = []
         for batch_idx, also_samples in enumerate(also_samples_batch):
+            # curr pcd and also poitns
+            curr_pcd = also_samples[0]
+            also_pts = also_samples[1]
+            also_labels = also_samples[2]
+            curr_pcds_batch.append(curr_pcd)
+            also_pts_batch.append(also_pts)
+            also_labels_batch.append(also_labels)
+
+            # features
             coords = sparse_featmap_batch.coordinates_at(batch_index=batch_idx)
             feats = sparse_featmap_batch.features_at(batch_index=batch_idx)
             feats = feats[coords[:, -1] == 0]
+            feats_batch.append(feats)
 
-            # decoder
-            also_probs, also_labels = self.decoder(also_samples[0], feats, also_samples[1], also_samples[2])
-            also_probs_batch.append(also_probs)
-            also_labels_batch.append(also_labels)
-        return also_probs_batch, also_labels_batch
+            # batch index
+            pcds_batch_indices.append(torch.full((len(curr_pcd),), batch_idx, dtype=torch.long).to('cuda'))
+            also_batch_indices.append(torch.full((len(also_pts),), batch_idx, dtype=torch.long).to('cuda'))
+
+        # concat
+        curr_pcds_batch = torch.cat(curr_pcds_batch, dim=0)
+        also_pts_batch = torch.cat(also_pts_batch, dim=0)
+        also_labels_batch = torch.cat(also_labels_batch, dim=0)
+        feats_batch = torch.cat(feats_batch, dim=0)
+        pcds_batch_indices = torch.cat(pcds_batch_indices, dim=0)
+        also_batch_indices = torch.cat(also_batch_indices, dim=0)
+
+        # decoder
+        also_probs, also_labels = self.decoder(curr_pcds_batch, feats_batch, also_pts_batch, also_labels_batch, pcds_batch_indices, also_batch_indices)
+        return also_probs, also_labels
 
     def configure_optimizers(self):
         lr_start = self.cfg_model["lr_start"]
@@ -99,9 +122,7 @@ class AlsoNetwork(LightningModule):
     def training_step(self, batch: tuple, batch_idx, dataloader_index=0):
         # model_dict = self.state_dict()  # check state dict
         # recons_loss = F.binary_cross_entropy_with_logits(x[:, 0], also_labels.float())
-        also_probs_batch, also_labels_batch = self.forward(batch)  # encoder & decoder
-        also_probs = torch.concat(also_probs_batch).view(-1, self.n_cls)
-        also_labels = torch.concat(also_labels_batch).view(-1)
+        also_probs, also_labels = self.forward(batch)  # encoder & decoder
         pred_labels = torch.argmax(also_probs, axis=-1)
         loss = self.get_loss(also_probs, also_labels)
 
@@ -182,33 +203,33 @@ class AlsoEncoder(nn.Module):
         return sparse_featmap
 
 
-def search_radius(points, query_points, radius):
-    """
-    Args:
-        points: (N, 3) 源点云
-        query_points: (M, 3) 查询点
-        radius: 搜索半径
-    Returns:
-        row: 查询点的索引
-        col: 源点云中邻居点的索引
-    """
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-
-    # 构建KD树
-    kdtree = o3d.geometry.KDTreeFlann(pcd)
-
-    rows = []
-    cols = []
-
-    # 对每个查询点进行半径搜索
-    for i, query in enumerate(query_points):
-        # 返回[k, idx, dist]
-        _, idx, _ = kdtree.search_radius_vector_3d(query, radius)
-        rows.extend([i] * len(idx))
-        cols.extend(idx)
-
-    return torch.tensor(rows), torch.tensor(cols)
+# def search_radius(points, query_points, radius):
+#     """
+#     Args:
+#         points: (N, 3) 源点云
+#         query_points: (M, 3) 查询点
+#         radius: 搜索半径
+#     Returns:
+#         row: 查询点的索引
+#         col: 源点云中邻居点的索引
+#     """
+#     pcd = o3d.geometry.PointCloud()
+#     pcd.points = o3d.utility.Vector3dVector(points)
+#
+#     # 构建KD树
+#     kdtree = o3d.geometry.KDTreeFlann(pcd)
+#
+#     rows = []
+#     cols = []
+#
+#     # 对每个查询点进行半径搜索
+#     for i, query in enumerate(query_points):
+#         # 返回[k, idx, dist]
+#         _, idx, _ = kdtree.search_radius_vector_3d(query, radius)
+#         rows.extend([i] * len(idx))
+#         cols.extend(idx)
+#
+#     return torch.tensor(rows), torch.tensor(cols)
 
 
 class AlsoDecoder(nn.Module):
@@ -229,23 +250,32 @@ class AlsoDecoder(nn.Module):
         # radius search
         self.radius = cfg_model["radius"]
 
-    def forward(self, pcd, feats, also_pts, also_labels):
+    def forward(self, curr_pcds_batch, feats_batch, also_pts_batch, also_labels_batch, pcds_batch_indices, also_batch_indices):
         # get the data
-        pos_source = pcd
-        pos_target = also_pts
+        pos_source = curr_pcds_batch
+        pos_target = also_pts_batch
+        batch_x = pcds_batch_indices
+        batch_y = also_batch_indices
 
-        # neighborhood search
+        # ml3d search
         # radii = torch.Tensor([self.radius, self.radius, self.radius])
         # idx = ml3d.ops.radius_search(pos_source, pos_target, radii,
         #                        points_row_splits=torch.LongTensor([0, len(pos_source)]),
         #                        queries_row_splits=torch.LongTensor([0, len(pos_target)]))
-        row, col = search_radius(points=pos_source.to('cpu'), query_points=pos_target.to('cpu'), radius=self.radius)
+
+        # open3d kdtree search
+        # row, col = search_radius(points=pos_source.to('cpu'), query_points=pos_target.to('cpu'), radius=self.radius)
+
+        # torch cluster search
+        row, col = search_radius(x=pos_source, y=pos_target, r=self.radius, batch_x=batch_x, batch_y=batch_y)
 
         # compute reltive position between query and input point cloud and the corresponding latent vectors
         pos_relative = pos_target[row] - pos_source[col]
-        latents_relative = feats[col]
-
+        latents_relative = feats_batch[col]
         x = torch.cat([latents_relative, pos_relative], dim=1)
+
+        # update labels
+        labels = also_labels_batch[row]
 
         # Decoder layers
         x = self.fc_in(x.contiguous())
@@ -253,4 +283,4 @@ class AlsoDecoder(nn.Module):
             x = l(self.activation(x))
         x = self.fc_out(x)
         probs = self.softmax(x)
-        return probs, also_labels[row]
+        return probs, labels
