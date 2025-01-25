@@ -9,7 +9,9 @@ from datasets.kitti_utils import load_files, read_kitti_poses, get_ego_mask, add
 
 class KittiMOSDataset(Dataset):
     """Semantic KITTI Dataset class"""
-    def __init__(self, cfg_model, cfg_dataset, split):
+    def __init__(self, cfg_model, cfg_dataset, split, cfg_test=None):
+        if cfg_test is not None:
+            self.cfg_test = cfg_test
         self.cfg_model = cfg_model
         self.cfg_dataset = cfg_dataset['sekitti']
         self.root = self.cfg_dataset['root']
@@ -109,21 +111,36 @@ class KittiMOSDataset(Dataset):
         pcds_4d = torch.cat(pcds_4d_list, dim=0).float()  # 4D point cloud: [x y z ref_ts]
         mos_labels = load_mos_labels(label_files[-1])
 
-        # ego vehicle mask / outside scene mask
+        # data augmentation for training set
         ref_time_mask = pcds_4d[:, -1] == 0
         valid_mask = torch.squeeze(torch.full((len(pcds_4d), 1), True))
-        if self.cfg_model['ego_mask']:
-            ego_mask = get_ego_mask(pcds_4d)
-            valid_mask = torch.logical_and(valid_mask, ~ego_mask)
-        if self.cfg_model['outside_scene_mask']:
-            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
-                                                        self.cfg_model['outside_scene_mask_z'],
-                                                        self.cfg_model['outside_scene_mask_ub'])
-            valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-        pcds_4d = pcds_4d[valid_mask]
-        mos_labels = mos_labels[valid_mask[ref_time_mask]]
+        if self.split == 'train':
+            # ego vehicle mask / outside scene mask
+            if self.cfg_model['ego_mask']:
+                ego_mask = get_ego_mask(pcds_4d)
+                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+            if self.cfg_model['outside_scene_mask']:
+                outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
+                                                            self.cfg_model['outside_scene_mask_z'],
+                                                            self.cfg_model['outside_scene_mask_ub'])
+                valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+            pcds_4d = pcds_4d[valid_mask]
+            mos_labels = mos_labels[valid_mask[ref_time_mask]]
 
-        # data augmentation: will not change the order of points
-        if self.split == 'train' and self.cfg_model["augmentation"]:
-            pcds_4d = augment_pcds(pcds_4d)
-        return [ref_scan_idx, pcds_4d, mos_labels]  # [[index of current sequence, current scan, all scans], all scans, all labels]
+            # augmentation
+            if self.cfg_model["augmentation"]:
+                pcds_4d = augment_pcds(pcds_4d)
+
+        # for testing
+        elif self.split == 'val' or 'test':
+            if self.cfg_test['ego_mask']:
+                ego_mask = get_ego_mask(pcds_4d)
+                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+            if self.cfg_test['outside_scene_mask']:
+                outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
+                                                            self.cfg_model['outside_scene_mask_z'],
+                                                            self.cfg_model['outside_scene_mask_ub'])
+                valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+            pcds_4d = pcds_4d[valid_mask]
+            mos_labels = mos_labels[valid_mask[ref_time_mask]]
+        return [(ref_scan_idx, valid_mask[ref_time_mask]), pcds_4d, mos_labels]  # [[index of current sequence, current scan, all scans], all scans, all labels]

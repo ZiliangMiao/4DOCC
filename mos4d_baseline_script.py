@@ -59,7 +59,7 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
         val_dataloader = None
 
     # model
-    model = MosNetwork(model_cfg, True)
+    model = MosNetwork(model_cfg, dataset_cfg, True)
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -166,7 +166,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
         val_dataloader = None
 
     # load pre-trained encoder to fine-tuning model
-    finetune_model = MosNetwork(model_cfg, True)
+    finetune_model = MosNetwork(model_cfg, dataset_cfg, True)
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -226,8 +226,8 @@ def mos_test(cfg_test, cfg_dataset):
         dataloader.setup()
         test_dataloader = dataloader.test_dataloader()
     elif dataset_name == 'sekitti':
-        train_set = KittiMOSDataset(cfg_model, dataset_cfg, split='train')  # 'train', 'val', 'test'
-        val_set = KittiMOSDataset(cfg_model, dataset_cfg, split='val')
+        train_set = KittiMOSDataset(cfg_model, dataset_cfg, split='train', cfg_test=cfg_test)  # 'train', 'val', 'test'
+        val_set = KittiMOSDataset(cfg_model, dataset_cfg, split='val', cfg_test=cfg_test)
         dataloader = KittiDataloader(cfg_model, train_set, val_set, False)
         dataloader.setup()
         test_dataloader = dataloader.test_dataloader()
@@ -266,10 +266,10 @@ def mos_test(cfg_test, cfg_dataset):
 
         # model
         if dataset_name == 'nuscenes':
-            model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc, metric_obj=cfg_test["metric_obj"])
+            model = MosNetwork(cfg_model, cfg_dataset, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc, metric_obj=cfg_test["metric_obj"])
             iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
         elif dataset_name == 'sekitti':
-            model = MosNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, metric_obj=cfg_test["metric_obj"])
+            model = MosNetwork(cfg_model, cfg_dataset, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, metric_obj=cfg_test["metric_obj"])
             iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
         else:
             model = None
@@ -279,22 +279,22 @@ def mos_test(cfg_test, cfg_dataset):
         trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
         trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
 
-        # metric-1: object-level detection rate
-        det_rate = model.det_mov_obj_cnt / (model.mov_obj_num + 1e-15)
-        logger.info('Metric-1 moving object detection rate: %.3f' % (det_rate * 100))
+        # metric: object-level detection rate
+        # det_rate = model.det_mov_obj_cnt / (model.mov_obj_num + 1e-15)
+        # logger.info('Metric-1 moving object detection rate: %.3f' % (det_rate * 100))
 
-        # metric-2: object-level iou
+        # metric-1: object-level iou
         obj_iou_mean = torch.mean(torch.tensor(model.object_iou_list)).item()
-        logger.info('Metric-2 object-level avg. moving iou: %.3f' % (obj_iou_mean * 100))
+        logger.info('Metric-1 object-level avg. moving iou: %.3f' % (obj_iou_mean * 100))
 
-        # metric-3: sample-level iou
-        sample_iou_mean = torch.mean(torch.tensor(model.sample_iou_list)).item()
-        logger.info('Metric-3 sample-level avg. moving iou: %.3f' % (sample_iou_mean * 100))
+        # metric: sample-level iou
+        # sample_iou_mean = torch.mean(torch.tensor(model.sample_iou_list)).item()
+        # logger.info('Metric-3 sample-level avg. moving iou: %.3f' % (sample_iou_mean * 100))
 
-        # metric-4: point-level iou
+        # metric-2: point-level iou
         point_iou = iou_metric.get_iou(model.accumulated_conf_mat)
-        logger.info('Metric-4 point-level moving iou: %.3f' % (point_iou[2] * 100))
-        logger.info('Metric-4 point-level static iou: %.3f' % (point_iou[1] * 100))
+        logger.info('Metric-2 point-level moving iou: %.3f' % (point_iou[2] * 100))
+        logger.info('Metric-2 point-level static iou: %.3f' % (point_iou[1] * 100))
 
         # statistics
         logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
@@ -307,9 +307,7 @@ def mos_test(cfg_test, cfg_dataset):
         })
         df = pd.concat([df, new_row], ignore_index=True)
         # save the updated dataframe to excel
-        df.to_excel(excel_file, index=False)        
-
-
+        df.to_excel(excel_file, index=False)
 
 
 def mov_pts_statistics(cfg_dataset, cfg_model):
@@ -390,7 +388,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='train')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'test'], default='test')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
     parser.add_argument('--mars', type=bool, help="mars server", default=False)

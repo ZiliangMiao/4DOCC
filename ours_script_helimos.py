@@ -206,7 +206,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     val_dataloader = dataloader.val_dataloader()
 
     # load pre-trained encoder to fine-tuning model
-    finetune_model = MosNetwork(model_cfg, True)
+    finetune_model = MosNetwork(model_cfg, dataset_cfg, True)
 
     # lr_monitor
     lr_monitor = LearningRateMonitor(logging_interval="step")
