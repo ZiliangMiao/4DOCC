@@ -245,7 +245,8 @@ class MosNetwork(LightningModule):
                 for obj in unq_obj:
                     obj_mask = obj_labels == obj
                     gt_obj_mos = mos_labels[obj_mask]
-                    if torch.sum(gt_obj_mos) == 0:  # static object
+                    mov_pts_mask = gt_obj_mos == 2
+                    if torch.sum(mov_pts_mask) == 0:  # static object
                         continue
                     else:
                         mov_obj_num += 1
