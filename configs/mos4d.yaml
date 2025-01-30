@@ -2,7 +2,7 @@ train:
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "nuscenes"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 1 # use 10% of training dataset to train the model
+  downsample_pct: 5 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
   use_mlp_decoder: False
@@ -21,8 +21,8 @@ train:
   outside_scene_mask_ub: True
 
   # training related
-  num_epoch: 300
-  batch_size: 1
+  num_epoch: 500
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001
   lr_epoch: 1
@@ -35,18 +35,18 @@ train:
 
 
 finetune:
-  pretrain_method: "ours/moco_51151_5e-5" # "ours/moco_51151_5e-5"
+  pretrain_method: "ours/moco_51151_5e-5 (v0)" # "ours/moco_51151_5e-5"
   pretrain_dataset: "100%nuscenes"
   pretrain_params: "vs-0.1_t-3.0_bs-8"
   pretrain_version: 0
-  pretrain_epoch: 59
+  pretrain_epoch: 19
   pretrain_featdim: 128
   use_mlp_decoder: True
 
   # dataset related
   dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 1 # use 10% of training dataset to train the model
+  downsample_pct: 5 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
@@ -65,7 +65,7 @@ finetune:
 
   # training related
   num_epoch: 500
-  batch_size: 16
+  batch_size: 4
   acc_batches: 1 # accumulate gradients over k batches before stepping into the optimizer
   lr_start: 0.0001  # refer to mos4d [1e-4]
   lr_epoch: 1 # refer to mos4d [1]
@@ -81,7 +81,7 @@ test:
   metric_obj: True
   ego_mask: True
   outside_scene_mask: True
-  model_dir: '/home/ziliang/Projects/4DOCC/logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-10%sekitti/vs-0.1_t-3.0_bs-2/version_0'
-  test_epoch: [109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299] # 469, 479, 489, 499 # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
-  test_dataset: 'sekitti'
+  model_dir: './logs/ours/moco_51151_5e-5 (v0)(epoch-19)-mos_finetune/100%nuscenes-5%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  test_dataset: 'nuscenes'
   num_devices: 1
