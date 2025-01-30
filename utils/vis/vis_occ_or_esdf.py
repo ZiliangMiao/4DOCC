@@ -1,17 +1,13 @@
-(window_name='occ4d mos results', width=2560, height=1360, left=2560, top=0)
-    uno_vis.create_window(window_name='uno mos results', width=2560, height=1360, left=0, top=1510)
-    ours_vis.create_window(window_name='ours mos results'import json
+import json
 import multiprocessing
 import os
 import os.path
 import subprocess
 import threading
 import warnings
-
 import numpy as np
 import open3d as o3d
 from tqdm import tqdm
-from plyfile import PlyData, PlyElement
 import matplotlib.pyplot as plt
 import argparse
 from nuscenes.nuscenes import NuScenes
