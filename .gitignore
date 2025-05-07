@@ -25,3 +25,4 @@ lightning_logs
 slurm/*
 slurm
 
+slurm/
