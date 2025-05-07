@@ -1,16 +1,16 @@
 train:
   # dataset related
-  dataset_name: "nuscenes" # "sekitti", "nuscenes"
+  dataset_name: "sekitti" # "sekitti", "nuscenes"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 5 # use 10% of training dataset to train the model
+  downsample_pct: 100 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
   use_mlp_decoder: False
 
   # data processing related
   n_input: 6
-  n_skip: 0 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  n_skip: 4 # n_skip=0 for nusc; n_skip=4 for kitti time interval 0.5
+  time_interval: 0.1 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
   pos_dim: 4 # x, y, z, t
@@ -30,32 +30,35 @@ train:
   weight_decay: 0.0001
 
   # device related
-  num_workers: 24
+  num_workers: 8
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+
+  # resume path
+  resume_path: "/scr/u/miaozl/Projects/4DOCC/logs/mos_baseline/mos4d_shuffle/100%nuscenes/vs-0.1_t-3.0_bs-16/version_3"
 
 
 finetune:
-  pretrain_method: "ours/moco_51151_5e-5 (v0)" # "ours/moco_51151_5e-5"
+  pretrain_method: "forecast_baseline/occ4d" # "ours/moco_51151_5e-5 (v0)", "forecast_baseline/uno", "forecast_baseline/occ4d"
   pretrain_dataset: "100%nuscenes"
-  pretrain_params: "vs-0.1_t-3.0_bs-8"
+  pretrain_params: "vs-0.1_t-3.0_bs-2"
   pretrain_version: 0
-  pretrain_epoch: 19
+  pretrain_epoch: 49
   pretrain_featdim: 128
-  use_mlp_decoder: True
+  use_mlp_decoder: False
 
   # dataset related
-  dataset_name: "nuscenes" # "sekitti", "KITTITRA", "KITTITRA_M", "APOLLO", "nuscenes", "WAYMO_M", "AVIA"
+  dataset_name: "sekitti" # "sekitti", "nuscenes"
   downsample_level: "sequence" # "sequence", "sample", "none"
-  downsample_pct: 5 # use 10% of training dataset to train the model
+  downsample_pct: 100 # use 10% of training dataset to train the model
   shuffle: True # not used, random sampler default shuffle?
   augmentation: True
 
   # data processing related
   n_input: 6
-  n_skip: 0
+  n_skip: 4
   scene_bbox: [-70.0, -70.0, -4.5, 70.0, 70.0, 4.5] # valid point cloud range
   quant_size: 0.1 # used for discretization in x,y,z when creating a sparse tensor
-  time_interval: 0.5 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
+  time_interval: 0.1 # sample data time interval, nusc: 0.05, kitti: 0.1; sample time interval: nusc: 0.5
   pos_dim: 4 # x, y, z, t
   transform: True # if true, the points are pose-aligned before feeding to the model
   ego_mask: True
@@ -73,15 +76,18 @@ finetune:
   weight_decay: 0.0001 # refer to mos4d [1e-4]
 
   # device related
-  num_workers: 24
+  num_workers: 8
   num_devices: 1 # int: number of cuda devices to use; list: specify which devices to use [0, 1, 2, 3]
+
+  # resume path
+  resume_path: "/scr/u/miaozl/Projects/4DOCC/logs/forecast_baseline/uno(epoch-49)-mos_finetune/100%nuscenes-100%nuscenes/vs-0.1_t-3.0_bs-16/version_1"
 
 
 test:
   metric_obj: True
   ego_mask: True
   outside_scene_mask: True
-  model_dir: './logs/ours/moco_51151_5e-5 (v0)(epoch-19)-mos_finetune/100%nuscenes-5%nuscenes/vs-0.1_t-3.0_bs-4/version_0'
-  test_epoch: [109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499] # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
-  test_dataset: 'nuscenes'
+  model_dir: '/scr/u/miaozl/Projects/4DOCC/logs/forecast_baseline/also(epoch-199)-mos_finetune/100%nuscenes-100%sekitti/vs-0.1_t-3.0_bs-4/version_0'
+  test_epoch: [109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499] # 469, 479, 489, 499 # [9, 19, 29, 39, 49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199, 209, 219, 229, 239, 249, 259, 269, 279, 289, 299, 309, 319, 329, 339, 349, 359, 369, 379, 389, 399, 409, 419, 429, 439, 449, 459, 469, 479, 489, 499, 509, 519, 529, 539, 549, 559, 569, 579, 589, 599]
+  test_dataset: 'sekitti'
   num_devices: 1

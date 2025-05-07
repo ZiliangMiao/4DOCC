@@ -14,6 +14,8 @@ import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.strategies import DDPStrategy
+
 # dataset
 from nuscenes.nuscenes import NuScenes
 
@@ -28,6 +30,11 @@ from datasets.mos4d.nusc import NuscMosDataset
 
 
 def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
+    if resume_version != -1:  # resume training
+        resume_model_cfg = yaml.safe_load(open(os.path.join(model_cfg['resume_path'], "hparams.yaml")))
+        resume_ckpt_path = os.path.join(model_cfg['resume_path'], 'checkpoints', 'last.ckpt')
+        model_cfg = resume_model_cfg
+        
     # params
     dataset_name = model_cfg['dataset_name']
     downsample_pct = model_cfg['downsample_pct']
@@ -82,6 +89,7 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
     trainer = Trainer(
         accelerator="gpu",
         strategy="ddp",
+        num_nodes=1,
         devices=model_cfg["num_devices"],
         logger=tb_logger,
         log_every_n_steps=1,
@@ -92,10 +100,11 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_version):
 
     # training
     if resume_version != -1:  # resume training
-        resume_model_cfg = yaml.safe_load(open(os.path.join(train_dir, model_params, f'version_{resume_version}', "hparams.yaml")))
-        assert set(model_cfg) == set(resume_model_cfg)
-        resume_ckpt_path = os.path.join(train_dir, model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(model, train_dataloader, ckpt_path=resume_ckpt_path)
+        # resume_model_cfg = yaml.safe_load(open(os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', "hparams.yaml")))
+        # assert set(model_cfg) == set(resume_model_cfg), "resume training: cfg dict keys are not the same."
+        # assert model_cfg == resume_model_cfg, f"resume training: cfg keys have different values."
+        # resume_ckpt_path = os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
     else:
         trainer.fit(model, train_dataloader)
 
@@ -125,6 +134,11 @@ def load_pretrained_encoder(ckpt_path, model, use_mlp_decoder:bool):
 
 
 def mos_finetune(model_cfg, dataset_cfg, resume_version):
+    if resume_version != -1:  # resume training
+        resume_model_cfg = yaml.safe_load(open(os.path.join(model_cfg['resume_path'], "hparams.yaml")))
+        resume_ckpt_path = os.path.join(model_cfg['resume_path'], 'checkpoints', 'last.ckpt')
+        model_cfg = resume_model_cfg
+     
     # pre-training checkpoint path
     pre_method = model_cfg["pretrain_method"]
     pre_dataset = model_cfg["pretrain_dataset"]
@@ -186,9 +200,11 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
     )
 
     # trainer
+    ddp = DDPStrategy(process_group_backend="nccl")
     trainer = Trainer(
         accelerator="gpu",
-        strategy="ddp",
+        strategy=ddp,
+        num_nodes=1,
         devices=model_cfg["num_devices"],
         logger=tb_logger,
         log_every_n_steps=1,
@@ -199,11 +215,11 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
 
     # training
     if resume_version != -1:  # resume training
-        resume_model_cfg = yaml.safe_load(open(os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', "hparams.yaml")))
-        assert set(model_cfg) == set(resume_model_cfg), "resume training: cfg dict keys are not the same."
-        assert model_cfg == resume_model_cfg, f"resume training: cfg keys have different values."
-        resume_ckpt_path = os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
         trainer.fit(finetune_model, train_dataloader, ckpt_path=resume_ckpt_path)
+        # resume_model_cfg = yaml.safe_load(open(os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', "hparams.yaml")))
+        # assert set(model_cfg) == set(resume_model_cfg), "resume training: cfg dict keys are not the same."
+        # assert model_cfg == resume_model_cfg, f"resume training: cfg keys have different values."
+        # resume_ckpt_path = os.path.join(finetune_dir, finetune_model_params, f'version_{resume_version}', 'checkpoints', 'last.ckpt')
     else:
         finetune_model = load_pretrained_encoder(pretrain_ckpt_path, finetune_model, model_cfg['use_mlp_decoder'])
         trainer.fit(finetune_model, train_dataloader)
