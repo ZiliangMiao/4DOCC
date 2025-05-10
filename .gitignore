@@ -22,4 +22,7 @@ backup
 lightning_logs/
 lightning_logs
 
+slurm/*
+slurm
+
 slurm/

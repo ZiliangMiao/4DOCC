@@ -3,7 +3,7 @@ nuscenes: # ours label
   root: "/Datasets_0/nuScenes"  # /root/autodl-tmp/Datasets/nuScenes /home/user/Datasets/nuScenes
   version: "v1.0-trainval" # "v1.0-mini"
 sekitti:
-  root: "/Datasets_0/SeKITTI/dataset/sequences" # labeled by PRPonn, seq 00-21
+  root: "/Datasets/SeKITTI/dataset/sequences" # labeled by PRPonn, seq 00-21
   poses: "poses.txt"
   lidar: "velodyne"
   train: [0, 1, 2, 3, 4, 5, 6, 7, 9, 10] # [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]
