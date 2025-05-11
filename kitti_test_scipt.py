@@ -20,7 +20,7 @@ def kitti_test(cfg_test, cfg_dataset):
     os.makedirs(log_dir, exist_ok=True)
 
     # construct model
-    test_epoch = cfg_test["test_epoch"][0]
+    test_epoch = cfg_test["eval_epoch"][0]
     ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
     trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_test["num_devices"], deterministic=True)
 

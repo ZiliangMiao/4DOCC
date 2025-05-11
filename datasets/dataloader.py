@@ -2,15 +2,14 @@ from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
 
-class KittiDataloader(LightningDataModule):
-    """A Pytorch Lightning module for Sequential KITTI data; Contains train, valid, test data"""
-
-    def __init__(self, cfg_model, train_set, val_set, train_flag: bool):
-        super(KittiDataloader, self).__init__()
+class Dataloader(LightningDataModule):
+    def __init__(self, cfg_model, train_set, val_set, train_flag: bool, nusc=None):
+        super(Dataloader, self).__init__()
         self.cfg_model = cfg_model
         self.train_set = train_set
         self.val_set = val_set
         self.train_flag = train_flag
+        self.nusc = nusc
         self.train_loader = None
         self.val_loader = None
         self.test_loader = None
@@ -29,19 +28,15 @@ class KittiDataloader(LightningDataModule):
         return [meta_info, pcds_4d, samples]
 
     def setup(self, stage=None):
-        """Dataloader and iterators for training, validation and test data"""
-        # train_data_pct = self.cfg_model["downsample_pct"] / 100
         train_loader = DataLoader(
             dataset=self.train_set,
             batch_size=self.cfg_model["batch_size"],
             collate_fn=self.collate_fn,
-            num_workers=self.cfg_model["num_workers"],  # num of multi-processing
+            num_workers=self.cfg_model["num_workers"],
             shuffle=self.cfg_model["shuffle"],
             pin_memory=True,
-            drop_last=True,  # drop the samples left from full batch
+            drop_last=True,
             timeout=0,
-            # sampler=sampler.WeightedRandomSampler(weights=torch.ones(len(train_set)),
-            #                                       num_samples=int(train_data_pct * len(train_set))),
         )
         val_loader = DataLoader(
             dataset=self.val_set,
@@ -50,7 +45,7 @@ class KittiDataloader(LightningDataModule):
             num_workers=self.cfg_model["num_workers"],
             shuffle=False,
             pin_memory=True,
-            drop_last=False,  # TODO: may be a bug for uno or occ4d test
+            drop_last=False,
             timeout=0,
         )
 

@@ -218,7 +218,7 @@ class MinkOccForecastNet(LightningModule):
             model_dataset = self.cfg["model"]["model_dataset"]
             model_name = self.cfg["model"]["model_name"]  # for test.cfg only
             model_version = self.cfg["model"]["model_version"]
-            test_epoch = self.cfg["model"]["test_epoch"]
+            test_epoch = self.cfg["model"]["eval_epoch"]
             model_dir = os.path.join("../../logs", "pretrain", model_dataset, model_name, model_version)
             self.vis_dir = os.path.join(model_dir, "results", f"epoch_{test_epoch}", "visualization")
             # log file directory

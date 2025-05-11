@@ -45,7 +45,7 @@ class MutualObsPretrainNetwork(LightningModule):
         # save predictions
         if not train_flag:
             self.model_dir = kwargs['model_dir']
-            self.test_epoch = kwargs['test_epoch']
+            self.test_epoch = kwargs['eval_epoch']
 
             # logger
             self.test_logger = kwargs['test_logger']

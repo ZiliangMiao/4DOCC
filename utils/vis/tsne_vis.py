@@ -4,7 +4,7 @@ import yaml
 from nuscenes.nuscenes import NuScenes
 from sklearn.manifold import TSNE
 from datasets.mos4d.nusc import NuscMosDataset
-from datasets.nusc_loader import NuscDataloader
+from datasets.dataloader import Dataloader
 from models.mos4d.models import MosNetwork
 from mos4d_baseline_script import load_pretrained_encoder
 
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
     train_set = NuscMosDataset(nusc, cfg['finetune'], dataset_cfg, 'train')
     val_set = NuscMosDataset(nusc, cfg['finetune'], dataset_cfg, 'val')
-    dataloader = NuscDataloader(nusc, cfg['finetune'], train_set, val_set, True)
+    dataloader = Dataloader(cfg['finetune'], train_set, val_set, True)
     dataloader.setup()
     train_dataloader_list = list(dataloader.train_dataloader())
 

@@ -19,7 +19,7 @@ from models.ours.models import MutualObsPretrainNetwork
 from models.mos4d.models import MosNetwork
 # dataset
 from nuscenes.nuscenes import NuScenes
-from datasets.nusc_loader import NuscDataloader
+from datasets.dataloader import Dataloader
 from datasets.ours.nusc import NuscMoCoDataset
 from datasets.helimos.helimos import HeLiMOSDataloader, HeLiMOSDataset
 from datasets.mos4d.nusc import NuscMosDataset
@@ -99,7 +99,7 @@ def background_pretrain(model_cfg, dataset_cfg, resume_version):
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
     train_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'train')
     val_set = NuscMoCoDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
+    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
@@ -252,7 +252,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_version):
 def bg_test(cfg_test, cfg_dataset):
     # test checkpoint
     model_dir = cfg_test['model_dir']
-    test_epoch = cfg_test["test_epoch"]
+    test_epoch = cfg_test["eval_epoch"]
     ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
 
     # model
@@ -260,12 +260,12 @@ def bg_test(cfg_test, cfg_dataset):
     model = MutualObsPretrainNetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
     # dataloader
-    test_dataset = cfg_test['test_dataset']
+    test_dataset = cfg_test['eval_dataset']
     assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
     nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
     train_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'train')
     val_set = NuscMoCoDataset(nusc, cfg_model, cfg_dataset, 'val')
-    dataloader = NuscDataloader(nusc, cfg_model, train_set, val_set, False)
+    dataloader = Dataloader(cfg_model, train_set, val_set, True, nusc)
     dataloader.setup()
     test_dataloader = dataloader.test_dataloader()
 

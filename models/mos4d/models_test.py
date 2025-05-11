@@ -40,7 +40,7 @@ class MosNetwork(LightningModule):
 
         # save predictions
         self.model_dir = kwargs['model_dir']
-        self.test_epoch = kwargs['test_epoch']
+        self.test_epoch = kwargs['eval_epoch']
         self.pred_dir = os.path.join(self.model_dir, f"sequences_epoch_{self.test_epoch}", str(kwargs['test_seq']).zfill(2), "predictions")
         os.makedirs(self.pred_dir, exist_ok=True)
 

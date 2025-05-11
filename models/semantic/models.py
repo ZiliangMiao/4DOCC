@@ -52,7 +52,7 @@ class SemanticNetwork(LightningModule):
         # save predictions
         if not train_flag:
             self.model_dir = kwargs['model_dir']
-            self.test_epoch = kwargs['test_epoch']
+            self.test_epoch = kwargs['eval_epoch']
             self.test_logger = kwargs['test_logger']
             self.nusc = kwargs['nusc']
             self.pred_dir = os.path.join(self.model_dir, "predictions", f"epoch_{self.test_epoch}")

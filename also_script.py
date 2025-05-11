@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 import argparse
 from utils.deterministic import set_deterministic
 from datasets.also.nusc import NuscAlsoDataset
-from datasets.nusc_loader import NuscDataloader
+from datasets.dataloader import Dataloader
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import Trainer
 from models.also.models import AlsoNetwork
@@ -141,7 +141,7 @@ def also_pretrain(model_cfg, dataset_cfg, resume_version):
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
     train_set = NuscAlsoDataset(nusc, model_cfg, dataset_cfg, 'train')
     val_set = NuscAlsoDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = NuscDataloader(nusc, model_cfg, train_set, val_set, True)
+    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
     dataloader.setup()
     train_dataloader = dataloader.train_dataloader()
     val_dataloader = dataloader.val_dataloader()
