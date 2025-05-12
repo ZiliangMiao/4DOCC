@@ -11,117 +11,13 @@ import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor
 
-
 # ours
 import argparse
 from utils.deterministic import set_deterministic
 from datasets.also.nusc import NuscAlsoDataset
-from datasets.dataloader import Dataloader
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import Trainer
 from models.also.models import AlsoNetwork
-
-
-
-# class Fuck(pl.LightningModule):
-#
-#     def __init__(self, config):
-#         super().__init__()
-#
-#
-#     def forward(self, data):
-#         outputs = self.backbone(data)
-#
-#         if isinstance(outputs, dict):
-#             for k, v in outputs.items():
-#                 data[k] = v
-#         else:
-#             data["latents"] = outputs
-#
-#         return_data = self.decoder(data)
-#
-#         return return_data
-#
-#     def compute_confusion_matrix(self, output_data):
-#         outputs = output_data["predictions"].squeeze(-1)
-#         occupancies = output_data["occupancies"].float()
-#
-#         output_np = (torch.sigmoid(outputs).cpu().detach().numpy() > 0.5).astype(int)
-#         target_np = occupancies.cpu().numpy().astype(int)
-#         cm = confusion_matrix(
-#             target_np.ravel(), output_np.ravel(), labels=list(range(2))
-#         )
-#         return cm
-#
-#     def compute_loss(self, output_data, prefix):
-#
-#         loss = 0
-#         loss_values = {}
-#         for key, value in output_data.items():
-#             if "loss" in key and (self.config["loss"][key + "_lambda"] > 0):
-#                 loss = loss + self.config["loss"][key + "_lambda"] * value
-#                 self.log(prefix + "/" + key, value.item(), on_step=True, on_epoch=False, prog_bar=True, logger=False)
-#                 loss_values[key] = value.item()
-#
-#         # log also the total loss
-#         self.log(prefix + "/loss", loss.item(), on_step=True, on_epoch=False, prog_bar=True, logger=False)
-#
-#         if self.train_cm.sum() > 0: # TODO
-#             # self.log(prefix + "/iou", metrics.stats_iou_per_class(self.train_cm)[0], on_step=True, on_epoch=False,
-#             #          prog_bar=True, logger=False)
-#
-#         return loss, loss_values
-#
-#     def on_train_epoch_start(self) -> None:
-#         self.train_cm = np.zeros((2, 2))
-#         return super().on_train_epoch_start()
-#
-#     def training_step(self, data, batch_idx):
-#
-#         if batch_idx % 10 == 0:
-#             torch.cuda.empty_cache()
-#
-#         output_data = self.forward(data)
-#         loss, individual_losses = self.compute_loss(output_data, prefix="train")
-#         cm = self.compute_confusion_matrix(output_data)
-#         self.train_cm += cm
-#
-#         individual_losses["loss"] = loss
-#
-#         return individual_losses
-#
-#     def compute_log_data(self, outputs, cm, prefix):
-#
-#         # compute iou
-#         iou = metrics.stats_iou_per_class(cm)[0]
-#         self.log(prefix + "/iou", iou, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-#
-#         log_data = {}
-#         keys = outputs[0].keys()
-#         for key in keys:
-#             if "loss" not in key:
-#                 continue
-#             if key == "loss":
-#                 loss = np.mean([d[key].item() for d in outputs])
-#             else:
-#                 loss = np.mean([d[key] for d in outputs])
-#             log_data[key] = loss
-#
-#         log_data["iou"] = iou
-#         log_data["steps"] = self.global_step
-#
-#         return log_data
-#
-#     def training_epoch_end(self, outputs):
-#
-#         log_data = self.compute_log_data(outputs, self.train_cm, prefix="train")
-#
-#         os.makedirs(self.logger.log_dir, exist_ok=True)
-#         logs_file(os.path.join(self.logger.log_dir, "logs_train.csv"), self.current_epoch, log_data)
-#
-#         if (self.global_step > 0) and (not self.config["interactive_log"]):
-#             desc = "Train " + self.get_description_string(log_data)
-#             print(wblue(desc))
 
 
 def also_pretrain(model_cfg, dataset_cfg, resume_version):
@@ -138,13 +34,9 @@ def also_pretrain(model_cfg, dataset_cfg, resume_version):
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
+    from datasets.dataloader import build_dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscAlsoDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscAlsoDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'train', nusc)
 
     # pretrain model
     pretrain_model = AlsoNetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))

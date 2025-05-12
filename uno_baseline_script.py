@@ -7,15 +7,12 @@ from datetime import datetime
 import yaml
 import numpy as np
 import torch
+from nuscenes import NuScenes
 from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 # models
 from models.uno.models import UnONetwork
-# dataset
-from nuscenes.nuscenes import NuScenes
-from datasets.dataloader import Dataloader
-from datasets.uno.nusc import NuscUnODataset
 # lib
 from utils.deterministic import set_deterministic
 from utils.metrics import ClassificationMetrics
@@ -35,13 +32,9 @@ def uno_pretrain(model_cfg, dataset_cfg, resume_version):
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
+    from datasets.dataloader import build_dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscUnODataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscUnODataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'train', nusc)
 
     # pretrain model
     pretrain_model = UnONetwork(model_cfg, True, iters_per_epoch=len(train_dataloader))
@@ -97,14 +90,9 @@ def uno_test(cfg_test, cfg_dataset):  # TODO: need to be modified
     model = UnONetwork(cfg_model, False, model_dir=model_dir, test_epoch=test_epoch)
 
     # dataloader
-    test_dataset = cfg_test['eval_dataset']
-    assert test_dataset == 'nuscenes'
-    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscUnODataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscUnODataset(nusc, cfg_model, cfg_dataset, 'val')
-    dataloader = Dataloader(cfg_model, train_set, val_set, True, nusc)
-    dataloader.setup()
-    test_dataloader = dataloader.test_dataloader()
+    from datasets.dataloader import build_dataloader
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    test_dataloader = build_dataloader(cfg_model, dataset_cfg, 'test', nusc)
 
     # logger
     log_folder = os.path.join(model_dir, 'results')

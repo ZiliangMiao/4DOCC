@@ -4,7 +4,6 @@ import yaml
 from nuscenes.nuscenes import NuScenes
 from sklearn.manifold import TSNE
 from datasets.mos4d.nusc import NuscMosDataset
-from datasets.dataloader import Dataloader
 from models.mos4d.models import MosNetwork
 from mos4d_baseline_script import load_pretrained_encoder
 
@@ -46,11 +45,11 @@ if __name__ == '__main__':
 
     # get data
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscMosDataset(nusc, cfg['finetune'], dataset_cfg, 'train')
-    val_set = NuscMosDataset(nusc, cfg['finetune'], dataset_cfg, 'val')
-    dataloader = Dataloader(cfg['finetune'], train_set, val_set, True)
-    dataloader.setup()
-    train_dataloader_list = list(dataloader.train_dataloader())
+
+    # dataloader
+    from datasets.dataloader import build_dataloader
+    train_dataloader = build_dataloader(cfg['finetune'], dataset_cfg, 'finetune', nusc)
+    train_dataloader_list = list(train_dataloader)
 
     # load pretrained encoder
     pretrain_ckpt_path = "/home/ziliang/Projects/4DOCC/logs/ours/moco_51151_5e-5 (v0)/100%nuscenes/vs-0.1_t-3.0_bs-8/version_0/checkpoints/epoch=49.ckpt"

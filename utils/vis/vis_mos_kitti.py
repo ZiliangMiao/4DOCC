@@ -114,7 +114,7 @@ def render_mos_samples(vis_dataset, vis_cfg, vis_gt):
         pcd_file = vis_dataset.samples_scans[scan_idx][-1]
         pcd = np.fromfile(pcd_file, dtype=np.float32)
         pcd = torch.tensor(pcd.reshape((-1, 4)))[:, :3]
-        kitti_scan_idx = pcd_file.split(".")[0][-6:]
+        kitti_scan_idx = pcd_file.mode(".")[0][-6:]
         print("Rendering sample: " + str(scan_idx) + "; Scan index: " + str(kitti_scan_idx))
 
         # mos labels
@@ -251,7 +251,7 @@ if __name__ == '__main__':
     cfg_dataset['sekitti']['root'] = '/home/ziliang' + cfg_dataset['sekitti']['root']
 
     # todo: update kitti vis sequence
-    vis_dataset = KittiMOSDataset(cfg_model, cfg_dataset, split='vis')
+    vis_dataset = KittiMOSDataset(cfg_model, cfg_dataset, mode='vis')
 
     # render mos samples
     render_mos_samples(vis_dataset, cfg_vis, vis_gt=True)

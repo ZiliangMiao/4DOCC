@@ -9,17 +9,22 @@ from datasets.kitti_utils import load_files, read_kitti_poses, get_ego_mask, add
 
 class KittiMOSDataset(Dataset):
     """Semantic KITTI Dataset class"""
-    def __init__(self, cfg_model, cfg_dataset, split, cfg_test=None):
-        if cfg_test is not None:
-            self.cfg_test = cfg_test
+    def __init__(self, cfg_model, cfg_dataset, mode):
         self.cfg_model = cfg_model
         self.cfg_dataset = cfg_dataset['sekitti']
         self.root = self.cfg_dataset['root']
         self.lidar = self.cfg_dataset['lidar']
-        self.split = split
-        self.sequence = self.cfg_dataset[self.split]  # "train": [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]; "val": [8]; "test": [8]
+        self.mode = mode
 
-        # get all scans in a kitti sequence
+        # get sequences
+        if self.mode in ['train', 'val']:
+            self.sequence = self.cfg_dataset['train']  # "train": [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]; "val": [8]
+        elif self.mode in ['test']:
+            self.sequence = self.cfg_dataset['val']
+        else:
+            raise ValueError("Invalid mode.")
+
+        # get all scans in kitti sequences
         seq_to_scans = {}  # dict: maps the sequence number to a list of scans file path
         seq_to_labels = {}
         seq_to_poses = {}
@@ -74,14 +79,20 @@ class KittiMOSDataset(Dataset):
 
         # down-sampling
         sample_idx_list = range(len(self.samples_scans))
-        if split == 'train':
-            # dataset down-sampling: sequence level or sample level
-            if self.cfg_model["downsample_level"] == "sequence":
+        if self.mode == 'train':
+            if self.cfg_model["downsample_level"] == "sequence":  # TODO: KITTI can only conduct sample level down-sampling, since there is only few sequences
                 train_data_pct = self.cfg_model["downsample_pct"] / 100
                 ds_samples_idx = random_sample(sample_idx_list, int(len(sample_idx_list) * train_data_pct))
                 self.samples_scans = [self.samples_scans[i] for i in ds_samples_idx]
                 self.samples_labels = [self.samples_labels[i] for i in ds_samples_idx]
                 self.samples_poses = [self.samples_poses[i] for i in ds_samples_idx]
+        elif self.mode == 'val':
+            # uniform sample a subset in org training set as validation set
+            num_samples = int(len(self.samples_scans) * 0.2)  # TODO: 20% training set as validation set
+            step = len(self.samples_scans) // num_samples
+            self.samples_scans = self.samples_scans[::step][:num_samples]
+            self.samples_labels = self.samples_labels[::step][:num_samples]
+            self.samples_poses = self.samples_poses[::step][:num_samples]
 
     def __len__(self):
         assert len(self.samples_labels) == len(self.samples_scans)
@@ -91,6 +102,7 @@ class KittiMOSDataset(Dataset):
         scan_files = self.samples_scans[batch_idx]
         label_files = self.samples_labels[batch_idx]
         poses = self.samples_poses[batch_idx]
+        seq_idx = scan_files[-1].split('sequences/')[-1].split('/')[0]
         ref_scan_idx = scan_files[-1].split(".")[0][-6:]
 
         # get transformed point clouds
@@ -114,33 +126,20 @@ class KittiMOSDataset(Dataset):
         # data augmentation for training set
         ref_time_mask = pcds_4d[:, -1] == 0
         valid_mask = torch.squeeze(torch.full((len(pcds_4d), 1), True))
-        if self.split == 'train':
-            # ego vehicle mask / outside scene mask
-            if self.cfg_model['ego_mask']:
-                ego_mask = get_ego_mask(pcds_4d)
-                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
-            if self.cfg_model['outside_scene_mask']:
-                outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
-                                                            self.cfg_model['outside_scene_mask_z'],
-                                                            self.cfg_model['outside_scene_mask_ub'])
-                valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-            pcds_4d = pcds_4d[valid_mask]
-            mos_labels = mos_labels[valid_mask[ref_time_mask]]
+        
+        # ego vehicle mask / outside scene mask
+        if self.cfg_model['ego_mask']:
+            ego_mask = get_ego_mask(pcds_4d)
+            valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+        if self.cfg_model['outside_scene_mask']:
+            outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
+                                                        self.cfg_model['outside_scene_mask_z'],
+                                                        self.cfg_model['outside_scene_mask_ub'])
+            valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+        pcds_4d = pcds_4d[valid_mask]
+        mos_labels = mos_labels[valid_mask[ref_time_mask]]
 
-            # augmentation
-            if self.cfg_model["augmentation"]:
-                pcds_4d = augment_pcds(pcds_4d)
-
-        # for testing
-        elif self.split == 'val' or 'test':
-            if self.cfg_test['ego_mask']:
-                ego_mask = get_ego_mask(pcds_4d)
-                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
-            if self.cfg_test['outside_scene_mask']:
-                outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
-                                                            self.cfg_model['outside_scene_mask_z'],
-                                                            self.cfg_model['outside_scene_mask_ub'])
-                valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-            pcds_4d = pcds_4d[valid_mask]
-            mos_labels = mos_labels[valid_mask[ref_time_mask]]
-        return [(ref_scan_idx, valid_mask[ref_time_mask]), pcds_4d, mos_labels]  # [[index of current sequence, current scan, all scans], all scans, all labels]
+        # data augmentation: will not change the order of points
+        if self.mode == 'train' and self.cfg_model["augmentation"]:
+            pcds_4d = augment_pcds(pcds_4d)
+        return [(seq_idx, ref_scan_idx, valid_mask[ref_time_mask]), pcds_4d, mos_labels]  # [[index of current sequence, current scan, all scans], all scans, all labels]

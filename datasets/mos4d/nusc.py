@@ -15,33 +15,46 @@ from utils.augmentation import augment_pcds
 
 
 class NuscMosDataset(Dataset):
-    def __init__(self, nusc, cfg_model, cfg_dataset, split):
+    def __init__(self, nusc, cfg_model, cfg_dataset, mode):
         self.nusc = nusc
         self.cfg_model = cfg_model
         self.cfg_dataset = cfg_dataset
-        self.split = split  # "train" "val" "mini_train" "mini_val" "test"
+        self.mode = mode
 
-        if split == 'train':
+        if self.mode == 'train':
+            nusc_split = 'train'
             # dataset down-sampling: sequence level or sample level
             if self.cfg_model["downsample_level"] is None:  # for test set and validation set
-                split_logs = create_splits_logs(split, self.nusc)
+                split_logs = create_splits_logs(nusc_split, self.nusc)
                 sample_toks = split_logs_to_samples(self.nusc, split_logs)
             elif self.cfg_model["downsample_level"] == "sequence":
-                split_scenes = create_splits_scenes(verbose=True)
-                split_scenes = split_scenes[self.split]
+                split_scenes = create_splits_scenes(verbose=False)
+                split_scenes = split_scenes[nusc_split]
                 train_data_pct = self.cfg_model["downsample_pct"] / 100
                 ds_split_scenes = random_sample(split_scenes, int(len(split_scenes) * train_data_pct))
                 sample_toks = split_scenes_to_samples(self.nusc, ds_split_scenes)
             elif self.cfg_model["downsample_level"] == "sample":
-                split_logs = create_splits_logs(split, self.nusc)
+                split_logs = create_splits_logs(nusc_split, self.nusc)
                 sample_toks = split_logs_to_samples(self.nusc, split_logs)
                 train_data_pct = self.cfg_model["downsample_pct"] / 100
                 sample_toks = random_sample(sample_toks, int(len(sample_toks) * train_data_pct))
             else:
                 raise ValueError("Invalid dataset down-sampling strategy!")
-        else:
-            split_logs = create_splits_logs(split, self.nusc)
+        elif self.mode == 'val':
+            nusc_split = 'train'
+            # down-sampling a subset for validation using uniform sampling
+            split_scenes = create_splits_scenes(verbose=False)
+            split_scenes = split_scenes[nusc_split]
+            num_scenes = int(len(split_scenes) * 0.1)  # TODO: 10% training set as validation set
+            step = len(split_scenes) // num_scenes
+            ds_split_scenes = split_scenes[::step][:num_scenes]  # uniform sampling with step
+            sample_toks = split_scenes_to_samples(self.nusc, ds_split_scenes)
+        elif self.mode == 'test':
+            nusc_split = 'val'
+            split_logs = create_splits_logs(nusc_split, self.nusc)
             sample_toks = split_logs_to_samples(self.nusc, split_logs)
+        else:
+            raise ValueError("Invalid dataset mode!")
 
         # sample tokens: drop the samples without full sequence length
         if cfg_model['time_interval'] == 0.5:  # sample level input
@@ -120,6 +133,6 @@ class NuscMosDataset(Dataset):
         mos_labels = mos_labels[valid_mask[ref_time_mask]]
 
         # data augmentation: will not change the order of points
-        if self.split == 'train' and self.cfg_model["augmentation"]:
+        if self.mode == 'train' and self.cfg_model["augmentation"]:
             pcds_4d = augment_pcds(pcds_4d)
         return [ref_sd_tok, pcds_4d, mos_labels]

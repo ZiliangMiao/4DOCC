@@ -351,7 +351,7 @@ if __name__ == '__main__':
     path_to_seq = os.path.join(cfg_dataset['root'], seqstr)
     scan_files, label_files = kitti_utils.load_files(os.path.join(path_to_seq, cfg_dataset['lidar']),
                                                      cfg_dataset['root'], vis_seq)  # load all scans in a seq
-    scans_idx_list = [scan_file.split(cfg_dataset['lidar'] + "/")[1].split(".")[0] for scan_file in scan_files]
+    scans_idx_list = [scan_file.mode(cfg_dataset['lidar'] + "/")[1].mode(".")[0] for scan_file in scan_files]
     key_scans_idx_dict = kitti_utils.get_mutual_scans_dict(scans_idx_list, path_to_seq, cfg)
 
     # draw

@@ -1,21 +1,46 @@
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
+from datasets.mos4d.kitti import KittiMOSDataset
+from datasets.mos4d.nusc import NuscMosDataset
+
+
+def build_dataloader(model_cfg, dataset_cfg, mode, nusc=None):
+    if model_cfg['dataset_name'] == 'nuscenes':
+        train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
+        val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
+        test_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'test')
+        dataloader = Dataloader(model_cfg, train_set, val_set, test_set, mode, nusc=nusc)
+    elif model_cfg['dataset_name'] == 'sekitti':
+        train_set = KittiMOSDataset(model_cfg, dataset_cfg, mode='train')
+        val_set = KittiMOSDataset(model_cfg, dataset_cfg, mode='val')
+        test_set = KittiMOSDataset(model_cfg, dataset_cfg, mode='test')
+        dataloader = Dataloader(model_cfg, train_set, val_set, test_set, mode)
+    else:
+        print("Not a supported dataset.")
+        return None
+    dataloader.setup()
+    if mode == 'test':
+        return dataloader.test_dataloader()
+    elif mode == 'val':
+        return dataloader.val_dataloader()
+    elif mode in ['train', 'finetune']:
+        return dataloader.train_dataloader()
+    else:
+        return None
 
 
 class Dataloader(LightningDataModule):
-    def __init__(self, cfg_model, train_set, val_set, train_flag: bool, nusc=None):
+    def __init__(self, cfg_model, train_set, val_set, test_set, mode: str, nusc=None):
         super(Dataloader, self).__init__()
         self.cfg_model = cfg_model
         self.train_set = train_set
         self.val_set = val_set
-        self.train_flag = train_flag
+        self.test_set = test_set
+        self.mode = mode
         self.nusc = nusc
         self.train_loader = None
         self.val_loader = None
         self.test_loader = None
-        self.train_iter = None
-        self.val_iter = None
-        self.test_iter = None
 
     def prepare_data(self):
         pass
@@ -48,17 +73,26 @@ class Dataloader(LightningDataModule):
             drop_last=False,
             timeout=0,
         )
+        test_loader = DataLoader(
+            dataset=self.test_set,
+            batch_size=self.cfg_model["batch_size"],
+            collate_fn=self.collate_fn,
+            num_workers=self.cfg_model["num_workers"],
+            shuffle=False,
+            pin_memory=True,
+            drop_last=False,
+            timeout=0,
+        )
 
-        if self.train_flag:
+        if self.mode in ["train", "finetune"]:
             self.train_loader = train_loader
+            print("Loaded {:d} training samples.".format(len(self.train_loader.dataset)))
+        elif self.mode == "val":  # validation, using part of org training set
             self.val_loader = val_loader
-            self.train_iter = iter(self.train_loader)
-            self.val_iter = iter(self.val_loader)
-            print("Loaded {:d} training and {:d} validation samples.".format(len(self.train_set), len(self.val_set)))
-        else:  # test (use validation set)
-            self.test_loader = val_loader
-            self.test_iter = iter(self.test_loader)
-            print("Loaded {:d} test samples.".format(len(self.val_set)))
+            print("Loaded {:d} validation samples.".format(len(self.val_loader.dataset)))
+        elif self.mode == "test":  # test, using org validation set
+            self.test_loader = test_loader
+            print("Loaded {:d} test samples.".format(len(self.test_loader.dataset)))
 
     def train_dataloader(self):
         return self.train_loader

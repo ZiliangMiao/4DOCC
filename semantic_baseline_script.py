@@ -20,7 +20,6 @@ from nuscenes.nuscenes import NuScenes
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
 from models.semantic.models import SemanticNetwork
-from datasets.dataloader import Dataloader
 from datasets.semantic.nusc import NuscSemanticDataset
 
 
@@ -37,13 +36,9 @@ def semantic_baseline_train(model_cfg, dataset_cfg, resume_version):
     model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
+    from datasets.dataloader import build_dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'train', nusc)
 
     # model
     model = SemanticNetwork(model_cfg, True)
@@ -134,13 +129,9 @@ def semantic_finetune(model_cfg, dataset_cfg, resume_version):
     finetune_model_params = f"vs-{quant_size}_t-{time}_bs-{batch_size}"
 
     # dataloader
+    from datasets.dataloader import build_dataloader
     nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-    train_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'train')
-    val_set = NuscSemanticDataset(nusc, model_cfg, dataset_cfg, 'val')
-    dataloader = Dataloader(model_cfg, train_set, val_set, True, nusc)
-    dataloader.setup()
-    train_dataloader = dataloader.train_dataloader()
-    val_dataloader = dataloader.val_dataloader()
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'finetune', nusc)
 
     # load pre-trained encoder to fine-tuning model
     finetune_model = SemanticNetwork(model_cfg, True)
@@ -194,14 +185,9 @@ def semantic_test(cfg_test, cfg_dataset):
     os.makedirs(log_dir, exist_ok=True)
 
     # dataloader
-    test_dataset = cfg_test['eval_dataset']
-    assert test_dataset == 'nuscenes'  # TODO: only support nuscenes test now.
-    nusc = NuScenes(dataroot=cfg_dataset["nuscenes"]["root"], version=cfg_dataset["nuscenes"]["version"])
-    train_set = NuscSemanticDataset(nusc, cfg_model, cfg_dataset, 'train')
-    val_set = NuscSemanticDataset(nusc, cfg_model, cfg_dataset, 'val')
-    dataloader = Dataloader(cfg_model, train_set, val_set, True, nusc)
-    dataloader.setup()
-    test_dataloader = dataloader.test_dataloader()
+    from datasets.dataloader import build_dataloader
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    test_dataloader = build_dataloader(cfg_model, dataset_cfg, 'test', nusc)
 
     for test_epoch in cfg_test["eval_epoch"]:
         # logger

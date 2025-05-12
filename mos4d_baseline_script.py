@@ -18,38 +18,11 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
 # data
 from nuscenes.nuscenes import NuScenes
-from datasets.mos4d.kitti import KittiMOSDataset
-from datasets.mos4d.nusc import NuscMosDataset
-from datasets.dataloader import Dataloader
 from datasets.nusc_utils import split_logs_to_samples, get_input_sd_toks, get_transformed_pcd
 
 # utils
 from utils.metrics import ClassificationMetrics
 from utils.deterministic import set_deterministic
-
-
-def build_dataloader(dataset_name, model_cfg, dataset_cfg, mode, cfg_test=None):
-    if dataset_name == 'nuscenes':
-        nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
-        train_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'train')
-        val_set = NuscMosDataset(nusc, model_cfg, dataset_cfg, 'val')
-        dataloader = Dataloader(model_cfg, train_set, val_set, mode in ['train', 'finetune'], nusc=nusc)
-    elif dataset_name == 'sekitti':
-        train_set = KittiMOSDataset(model_cfg, dataset_cfg, split='train', cfg_test=cfg_test) if mode == 'test' else KittiMOSDataset(model_cfg, dataset_cfg, split='train')
-        val_set = KittiMOSDataset(model_cfg, dataset_cfg, split='val', cfg_test=cfg_test) if mode == 'test' else KittiMOSDataset(model_cfg, dataset_cfg, split='val')
-        dataloader = Dataloader(model_cfg, train_set, val_set, mode in ['train', 'finetune'])
-    else:
-        print("Not a supported dataset.")
-        return None
-    dataloader.setup()
-    if mode == 'test':
-        return dataloader.test_dataloader()
-    elif mode == 'val':
-        return dataloader.val_dataloader()
-    elif mode in ['train', 'finetune']:
-        return dataloader.train_dataloader(), dataloader.val_dataloader()
-    else:
-        return None
 
 
 def build_trainer(model_cfg, log_dir, model_params, callbacks):
@@ -65,7 +38,7 @@ def build_trainer(model_cfg, log_dir, model_params, callbacks):
         accumulate_grad_batches=model_cfg["acc_batches"],
         callbacks=callbacks,
     )
-    return trainer, tb_logger
+    return trainer
 
 
 def mos4d_baseline_train(model_cfg, dataset_cfg, resume_training:bool):
@@ -82,7 +55,9 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_training:bool):
     model_params = f"vs-{model_cfg['quant_size']}_t-{time}_bs-{model_cfg['batch_size']}"
 
     # dataloader
-    train_dataloader, val_dataloader = build_dataloader(model_cfg['dataset_name'], model_cfg, dataset_cfg, 'train')
+    from datasets.dataloader import build_dataloader
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"], verbose=False)
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'train', nusc)
 
     # model
     model = MosNetwork(model_cfg, dataset_cfg, True)
@@ -102,7 +77,7 @@ def mos4d_baseline_train(model_cfg, dataset_cfg, resume_training:bool):
     )
 
     # trainer and tensorboard logger
-    trainer, tb_logger = build_trainer(model_cfg, train_dir, model_params, [lr_monitor, checkpoint_saver])
+    trainer = build_trainer(model_cfg, train_dir, model_params, [lr_monitor, checkpoint_saver])
 
     # training
     if resume_training:
@@ -160,7 +135,9 @@ def mos_finetune(model_cfg, dataset_cfg, resume_training:bool):
     finetune_model_params = f"vs-{model_cfg['quant_size']}_t-{time}_bs-{model_cfg['batch_size']}"
 
     # dataloader
-    train_dataloader, val_dataloader = build_dataloader(dataset_name, model_cfg, dataset_cfg, 'finetune')
+    from datasets.dataloader import build_dataloader
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"], verbose=False)
+    train_dataloader = build_dataloader(model_cfg, dataset_cfg, 'finetune', nusc=nusc)
 
     # load pre-trained encoder to fine-tuning model
     finetune_model = MosNetwork(model_cfg, dataset_cfg, True)
@@ -180,7 +157,7 @@ def mos_finetune(model_cfg, dataset_cfg, resume_training:bool):
     )
 
     # trainer and tensorboard logger
-    trainer, tb_logger = build_trainer(model_cfg, finetune_dir, finetune_model_params, [lr_monitor, checkpoint_saver])
+    trainer = build_trainer(model_cfg, finetune_dir, finetune_model_params, [lr_monitor, checkpoint_saver])
 
     # training
     if resume_training:  # resume training
@@ -190,101 +167,90 @@ def mos_finetune(model_cfg, dataset_cfg, resume_training:bool):
         trainer.fit(finetune_model, train_dataloader)
 
 
-def mos_eval(cfg, cfg_dataset):
+def mos_eval(mode, cfg_eval, cfg_dataset):
     '''
     This function is for MOS evaluation, using both object-wise recall and IoU_w/o metrics. Used for both validation and testing
     Args:
-        cfg:
+        cfg_eval:
         cfg_dataset:
 
     Returns:
 
     '''
-    # model config
-    model_dir = cfg['model_dir']
+    # path
+    model_dir = cfg_eval['model_dir']
+    if mode == 'val':
+        results_dir = os.path.join(model_dir, 'val_results')
+    elif mode == 'test':
+        results_dir = os.path.join(model_dir, 'test_results')
+    else:
+        print("Not a valid evaluation mode.")
+        return None
+    os.makedirs(results_dir, exist_ok=True)
+
+    # config
     cfg_model = yaml.safe_load(open(os.path.join(model_dir, "hparams.yaml")))
-    log_dir = os.path.join(model_dir, 'results')
-    os.makedirs(log_dir, exist_ok=True)
 
     # dataloader
-    dataset_name = cfg['eval_dataset']
-    test_dataloader, train_set, val_set, nusc = build_dataloader(dataset_name, cfg_model, cfg_dataset, 'test', cfg)
+    from datasets.dataloader import build_dataloader
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"], verbose=False)
+    eval_dataloader = build_dataloader(cfg_model, cfg_dataset, mode, nusc)
     
-    # create excel file
-    excel_file = os.path.join(log_dir, 'metrics.xlsx')
+    # create xlsx file
+    excel_file = os.path.join(results_dir, 'results.xlsx')
     if not os.path.exists(excel_file):
-        # set column names
-        df = pd.DataFrame(columns=['epoch', 'obj iou', 'iou'])
+        df = pd.DataFrame(columns=['epoch', 'recall', 'iou'])
         df.to_excel(excel_file, index=False)
     else:
         df = pd.read_excel(excel_file)
 
-    for test_epoch in cfg["eval_epoch"]:
-        # logger
+    # evaluation
+    for epoch in cfg_eval["eval_epoch"]:
         date = datetime.now().strftime('%m%d')  # %m%d-%H%M
-        log_file = os.path.join(log_dir, f"epoch_{test_epoch}_{date}.txt")
+        log_file = os.path.join(results_dir, f"epoch_{epoch}_{date}.txt")
         formatter = logging.Formatter(fmt='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
         stream_handler = logging.StreamHandler()
-        logger = logging.getLogger(f'test epoch {test_epoch} logger')
+        logger = logging.getLogger(f'test epoch {epoch} logger')
         logger.setLevel(logging.INFO)
         logger.addHandler(file_handler)
         logger.addHandler(stream_handler)
-        logger.info(str(cfg))
+        logger.info(str(cfg_eval))
         logger.info(log_file)
 
-        # test checkpoint
-        ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={test_epoch}.ckpt")
+        # checkpoint
+        ckpt_path = os.path.join(model_dir, "checkpoints", f"epoch={epoch}.ckpt")
 
         # model
-        if dataset_name == 'nuscenes':
-            model = MosNetwork(cfg_model, cfg_dataset, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, nusc=nusc, metric_obj=cfg["metric_obj"])
-            iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
-        elif dataset_name == 'sekitti':
-            model = MosNetwork(cfg_model, cfg_dataset, False, model_dir=model_dir, test_epoch=test_epoch, test_logger=logger, metric_obj=cfg["metric_obj"])
-            iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
-        else:
-            model = None
-            iou_metric = None
+        model = MosNetwork(cfg_model, cfg_dataset, False, model_dir=model_dir, eval_epoch=epoch, logger=logger, save_pred=cfg_eval['save_pred'], nusc=nusc)
+        iou_metric = ClassificationMetrics(n_classes=3, ignore_index=0)
 
         # predict
-        trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg["num_devices"], deterministic=True)
-        trainer.predict(model, dataloaders=test_dataloader, return_predictions=True, ckpt_path=ckpt_path)
-
-        # metric: object-level detection rate
-        # det_rate = model.det_mov_obj_cnt / (model.mov_obj_num + 1e-15)
-        # logger.info('Metric-1 moving object detection rate: %.3f' % (det_rate * 100))
+        trainer = Trainer(accelerator="gpu", strategy="ddp", devices=cfg_eval["num_devices"], deterministic=True)
+        trainer.predict(model, dataloaders=eval_dataloader, return_predictions=True, ckpt_path=ckpt_path)
 
         # metric-1: object-level iou
-        obj_iou_mean = torch.mean(torch.tensor(model.object_iou_list)).item()
-        logger.info('Metric-1 object-level avg. moving iou: %.3f' % (obj_iou_mean * 100))
-
-        # metric: sample-level iou
-        # sample_iou_mean = torch.mean(torch.tensor(model.sample_iou_list)).item()
-        # logger.info('Metric-3 sample-level avg. moving iou: %.3f' % (sample_iou_mean * 100))
+        obj_recall = torch.mean(torch.tensor(model.object_iou_list)).item()
+        logger.info('Metric-1 object-level recall: %.3f' % (obj_recall * 100))
 
         # metric-2: point-level iou
         point_iou = iou_metric.get_iou(model.accumulated_conf_mat)
         logger.info('Metric-2 point-level moving iou: %.3f' % (point_iou[2] * 100))
         logger.info('Metric-2 point-level static iou: %.3f' % (point_iou[1] * 100))
 
-        # statistics
-        logger.info(f'Number of validation samples: {len(val_set)}, Number of samples without moving points: {model.no_mov_sample_num}')
-
         # append new row to dataframe
         new_row = pd.DataFrame({
-            'epoch': [test_epoch],
-            'obj iou': [obj_iou_mean * 100], 
+            'epoch': [epoch],
+            'recall': [obj_recall * 100],
             'iou': [point_iou[2].item() * 100]
         })
         df = pd.concat([df, new_row], ignore_index=True)
-        # save the updated dataframe to excel
-        df.to_excel(excel_file, index=False)
+        df.to_excel(excel_file, index=False)  # save the updated dataframe to excel
 
 
 def mov_pts_statistics(cfg_dataset, cfg_model):
-    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"])
+    nusc = NuScenes(dataroot=dataset_cfg["nuscenes"]["root"], version=dataset_cfg["nuscenes"]["version"], verbose=False)
     split_logs = create_splits_logs('train', nusc)
     split_logs_val = create_splits_logs('val', nusc)
     split_logs = split_logs + split_logs_val
@@ -390,12 +356,49 @@ if __name__ == "__main__":
 
     # mov_pts_statistics(dataset_cfg, cfg[args.mode])
 
-    # training from scratch
+    # training
     if args.mode == 'train':  # train set = full org train set
         mos4d_baseline_train(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'finetune':  # finetune train set = subset of org train set
         mos_finetune(cfg[args.mode], dataset_cfg, args.resume_version)
     elif args.mode == 'val':  # val set = a subset of org train set
-        mos_eval(cfg[args.mode], dataset_cfg)
+        mos_eval(args.mode, cfg[args.mode], dataset_cfg)
     elif args.mode == 'test':  # test set = org val set
-        mos_eval(cfg[args.mode], dataset_cfg)
+        mos_eval(args.mode, cfg[args.mode], dataset_cfg)
+
+
+    # def plot_metrics_vs_epoch():
+    #     import pandas as pd
+    #     import matplotlib.pyplot as plt
+    #
+    #     # 读取test和validation的Excel文件
+    #     test_file_path = "/home/ziliang/Projects/4DOCC/logs/iccv/nusc10/511-49-nusc10-iccv/vs-0.1_t-3.0_bs-4/version_0/results/metrics.xlsx"
+    #     val_file_path = "/home/ziliang/Projects/4DOCC/logs/iccv/nusc10/511-49-nusc10-iccv/vs-0.1_t-3.0_bs-4/version_0/val_results/results.xlsx"
+    #     df_test = pd.read_excel(test_file_path)
+    #     df_val = pd.read_excel(val_file_path)
+    #
+    #     # 创建图形
+    #     plt.figure(figsize=(12, 8))
+    #
+    #     # 绘制test set的结果
+    #     plt.plot(df_test.iloc[:, 0], df_test.iloc[:, 1], 'b-', label='Test Recall', marker='o')
+    #     plt.plot(df_test.iloc[:, 0], df_test.iloc[:, 2], 'r-', label='Test IoU', marker='s')
+    #
+    #     # 绘制validation set的结果
+    #     plt.plot(df_val.iloc[:, 0], df_val.iloc[:, 1], 'b--', label='Val Recall', marker='^')
+    #     plt.plot(df_val.iloc[:, 0], df_val.iloc[:, 2], 'r--', label='Val IoU', marker='v')
+    #
+    #     # 设置图形属性
+    #     plt.xlabel('Epoch')
+    #     plt.ylabel('Metric')
+    #     plt.title('Metrics vs Epoch (Test & Validation Sets)')
+    #     plt.grid(True)
+    #     plt.legend()
+    #
+    #     # 保存图形
+    #     # plt.savefig('metrics_vs_epoch.png', dpi=300, bbox_inches='tight')
+    #     plt.show()
+    #     plt.close()
+    # # 调用函数
+    # plot_metrics_vs_epoch()
+    
