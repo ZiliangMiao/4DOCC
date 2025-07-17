@@ -12,6 +12,7 @@ import MinkowskiEngine as ME
 from datasets.kitti_utils import load_mos_labels
 from models.backbone import MinkUNetBackbone
 from utils.metrics import ClassificationMetrics
+from datasets.nusc_utils import get_ego_mask
 
 
 #######################################
@@ -147,12 +148,12 @@ class MosNetwork(LightningModule):
         # iterate each sample
         for meta_info, pcds_4d, mos_probs, mos_labels in zip(meta_batch, pcds_batch, mos_probs_batch, mos_labels_batch):
             # meta
-            sd_tok = None
+            scan_idx = None  # for nuScenes, scan_idx is sd_tok
             seq_idx = None
-            scan_idx = None
             valid_mask = None
             if self.cfg_model['dataset_name'] == 'nuscenes':
-                sd_tok = meta_info
+                scan_idx = meta_info[0]
+                valid_mask = meta_info[1].to('cpu')
             elif self.cfg_model['dataset_name'] == 'sekitti':
                 seq_idx = meta_info[0]
                 scan_idx = meta_info[1]
@@ -166,44 +167,52 @@ class MosNetwork(LightningModule):
             if self.cfg_model['dataset_name'] == 'nuscenes':
                 mov_obj_num = 0
                 ref_time_mask = pcds_4d[:, -1] == 0
-                pcd = pcds_4d[ref_time_mask].cpu().numpy()
-                sample_data = self.nusc.get('sample_data', sd_tok)
+                pcd = pcds_4d[ref_time_mask].cpu().numpy()  # valid points
+                ego_mask = get_ego_mask(pcd)
+                sample_data = self.nusc.get('sample_data', scan_idx)
                 sample = self.nusc.get("sample", sample_data['sample_token'])
-                _, bbox_list, _ = self.nusc.get_sample_data(sd_tok, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
+                _, bbox_list, _ = self.nusc.get_sample_data(scan_idx, selected_anntokens=sample['anns'], use_flat_vehicle_coordinates=False)
                 for ann_tok, box in zip(sample['anns'], bbox_list):
                     ann = self.nusc.get('sample_annotation', ann_tok)
-                    if ann['num_lidar_pts'] == 0: continue
-                    obj_pts_mask = points_in_box(box, pcd[:, :3].T)
-                    if np.sum(obj_pts_mask) == 0:  # not lidar points in obj bbox
+
+                    # TODO: check whether there is a ego vehicle
+                    if ann['category_name'] == 'vehicle.ego':
+                        a = 1
+
+                    # If no lidar points in object bbox
+                    obj_pts_mask = points_in_box(box, pcd[~ego_mask][:, :3].T)  # TODO: filter the ego points when get points in bbox
+                    obj_pts_num = np.sum(obj_pts_mask)
+                    if ann['num_lidar_pts'] == 0 or obj_pts_num == 0:
                         continue
 
-                    # gt and pred object labels
-                    gt_obj_labels = mos_labels[obj_pts_mask]
+                    # Moving object
+                    gt_obj_labels = mos_labels[~ego_mask][obj_pts_mask]
                     mov_pts_mask = gt_obj_labels == 2
-                    if torch.sum(mov_pts_mask) == 0:  # static object
-                        continue
-                    else:
+                    if torch.sum(mov_pts_mask) >= 0.5 * obj_pts_num: # TODO:
                         mov_obj_num += 1
 
-                    # metric-1: object-level recall
-                    pred_obj_mos = pred_labels[obj_pts_mask]
-                    obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_mos, gt_obj_labels)
-                    obj_iou = self.ClassificationMetrics.get_iou(obj_conf_mat)
-                    obj_mov_iou = obj_iou[2].item()
-                    self.object_iou_list.append(obj_mov_iou)
+                        # Metric-1: average recall of all moving objects
+                        pred_obj_labels = pred_labels[~ego_mask][obj_pts_mask]
+                        obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_labels, gt_obj_labels)
+                        obj_iou = self.ClassificationMetrics.get_iou(obj_conf_mat)
+                        obj_mov_iou = obj_iou[2].item()
+                        self.object_iou_list.append(obj_mov_iou)
+                        self.eval_logger.info(f"Val sd tok: %s, Recall_obj: %.3f", scan_idx, obj_mov_iou)
 
-                # metric-1: point-level iou
+                    # TODO: additionally calculate the ego vehicle recall (use semantic label to segment the ego points)
+
+                # Metric-2: point-level iou (withou ego points)
                 self.mov_obj_num += mov_obj_num
                 sample_mov_iou, sample_conf_mat = self.compute_sample_iou(pred_labels, mos_labels)
                 self.accumulated_conf_mat += sample_conf_mat
 
                 # save predicted labels
                 if self.save_pred:
-                    mos_pred_file = os.path.join(self.pred_dir, f"{scan_idx}_mos_pred.label")
+                    mos_pred_file = os.path.join(self.pred_dir, f"{scan_idx}.label")
                     self.save_pred_labels(mos_probs, mos_pred_file)
 
                 # logger
-                self.eval_logger.info(f"Val sd tok: %s, Sample IoU: %.3f, Moving obj num: %d", sd_tok, sample_mov_iou * 100, mov_obj_num)
+                self.eval_logger.info(f"Val sd tok: %s, Sample IoU: %.3f, Moving obj num: %d", scan_idx, sample_mov_iou * 100, mov_obj_num)
 
             elif self.cfg_model['dataset_name'] == 'sekitti':
                 # get file path
@@ -218,6 +227,16 @@ class MosNetwork(LightningModule):
                 obj_labels = obj_labels.astype(np.int32)[valid_mask]
                 unq_obj = np.unique(obj_labels)
 
+                # TODO: check ego points
+                # scan_file = os.path.join(path_to_seq, 'velodyne', scan_idx.zfill(6) + ".bin")
+                # pcd = np.fromfile(scan_file, dtype=np.float32).reshape(-1, 4)[:, :3]
+                # ego_mask = np.logical_and(
+                #     np.logical_and(-0.760 - 0.8 <= pcd[:, 0], pcd[:, 0] <= 1.950 + 0.8),
+                #     np.logical_and(-0.850 - 0.2 <= pcd[:, 1], pcd[:, 1] <= 0.850 + 0.2),
+                # )
+                # ego_semantic_label = scan_labels[ego_mask]
+                # ego_mos_label = mos_labels[ego_mask]
+
                 # loop each instance
                 mov_obj_num = 0
                 for obj in unq_obj:
@@ -230,8 +249,8 @@ class MosNetwork(LightningModule):
                         mov_obj_num += 1
 
                     # metric-1: object-level recall
-                    pred_obj_mos = pred_labels[obj_mask]
-                    obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_mos, gt_obj_mos)
+                    pred_obj_labels = pred_labels[obj_mask]
+                    obj_conf_mat = self.ClassificationMetrics.compute_conf_mat(pred_obj_labels, gt_obj_mos)
                     obj_iou = self.ClassificationMetrics.get_iou(obj_conf_mat)
                     obj_mov_iou = obj_iou[2].item()
                     self.object_iou_list.append(obj_mov_iou)
@@ -243,7 +262,7 @@ class MosNetwork(LightningModule):
 
                 # save predicted labels
                 if self.save_pred:
-                    mos_pred_file = os.path.join(self.pred_dir, f"{scan_idx}_mos_pred.label")
+                    mos_pred_file = os.path.join(self.pred_dir, f"{scan_idx}.label")
                     self.save_pred_labels(mos_probs, mos_pred_file)
 
                 # logger

@@ -119,20 +119,33 @@ class NuscMosDataset(Dataset):
         mos_labels = torch.tensor(np.fromfile(mos_label_file, dtype=np.uint8))
 
         # TODO: make the ray index same to ray_intersection_cuda.py, they should have the same filter params
+        # Filter all the outside scene points for both train, val, and test
         ref_time_mask = pcds_4d[:, -1] == 0
         valid_mask = torch.squeeze(torch.full((len(pcds_4d), 1), True))
-        if self.cfg_model['ego_mask']:
-            ego_mask = get_ego_mask(pcds_4d)
-            valid_mask = torch.logical_and(valid_mask, ~ego_mask)
         if self.cfg_model['outside_scene_mask']:
             outside_scene_mask = get_outside_scene_mask(pcds_4d, self.cfg_model["scene_bbox"],
                                                         self.cfg_model['outside_scene_mask_z'],
                                                         self.cfg_model['outside_scene_mask_ub'])
             valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
-        pcds_4d = pcds_4d[valid_mask]
-        mos_labels = mos_labels[valid_mask[ref_time_mask]]
 
-        # data augmentation: will not change the order of points
-        if self.mode == 'train' and self.cfg_model["augmentation"]:
-            pcds_4d = augment_pcds(pcds_4d)
-        return [ref_sd_tok, pcds_4d, mos_labels]
+        # Data augmentation and ego mask for train
+        if self.mode == 'train':
+            if self.cfg_model['ego_mask']:
+                ego_mask = get_ego_mask(pcds_4d)
+                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+            pcds_4d = pcds_4d[valid_mask]
+            mos_labels = mos_labels[valid_mask[ref_time_mask]]
+
+            if self.cfg_model["augmentation"]:
+                pcds_4d = augment_pcds(pcds_4d) # will not change the order of points
+
+        # TODO: test data processing
+        if self.mode == 'val' or 'test':
+            eval_test = True
+            if not eval_test:
+                ego_mask = get_ego_mask(pcds_4d)
+                valid_mask = torch.logical_and(valid_mask, ~ego_mask)
+            pcds_4d = pcds_4d[valid_mask]
+            mos_labels = mos_labels[valid_mask[ref_time_mask]]
+
+        return [(ref_sd_tok, valid_mask[ref_time_mask]), pcds_4d, mos_labels]

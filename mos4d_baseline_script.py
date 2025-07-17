@@ -327,7 +327,7 @@ if __name__ == "__main__":
 
     # mode
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=['train', 'finetune', 'val', 'test'], default='val')
+    parser.add_argument("--mode", choices=['train', 'finetune', 'val', 'test'], default='test')
     parser.add_argument('--resume_version', type=int, default=-1)  # -1: not resuming
     parser.add_argument('--autodl', type=bool, help="autodl server", default=False)
     parser.add_argument('--mars', type=bool, help="mars server", default=False)

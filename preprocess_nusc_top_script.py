@@ -565,10 +565,11 @@ class QueryRays(object):
             com_norm = torch.cross(ints_query_rays_dir, ints_key_rays_dir)  # cuda
 
             # intersection points
+            # line param equation, q = a + r * d
             rays_org_vec = torch.broadcast_to(key_rays.get_ray_start() - self.ray_start, (len(query_rays_ints_idx), 3))  # cuda
             q = (torch.sum(torch.cross(rays_org_vec, ints_key_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
             k = (torch.sum(torch.cross(rays_org_vec, ints_query_rays_dir) * com_norm, dim=1) / torch.sum(com_norm * com_norm, dim=1))  # cuda
-            valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= cfg['max_range']),
+            valid_ints_mask = torch.logical_and(torch.logical_and(q >= 0, q <= cfg['max_range']),  # intersect within valid lidar range, r in [0, r_max]
                                                 torch.logical_and(k >= 0, k <= cfg['max_range']))  # cuda
             query_rays_ints_idx = query_rays_ints_idx[valid_ints_mask]  # cuda
             key_rays_ints_idx = key_rays_ints_idx[valid_ints_mask]  # cuda
@@ -892,14 +893,14 @@ if __name__ == '__main__':
             key_meta_info_uint32 = key_meta_info.astype(np.uint32)
 
             # save labels
-            labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
-            os.makedirs(labels_folder, exist_ok=True)
-            depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
-            labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
-            confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
-            query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
-            key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
-            key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
+            # labels_folder = os.path.join(nusc.dataroot, 'labels_cuda', nusc.version)
+            # os.makedirs(labels_folder, exist_ok=True)
+            # depth_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_depth.bin"))
+            # labels_uint8.tofile(os.path.join(labels_folder, query_sd_tok + "_labels.bin"))
+            # confidence_fp16.tofile(os.path.join(labels_folder, query_sd_tok + "_confidence.bin"))
+            # query_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_rays_idx.bin"))
+            # key_rays_idx_uint16.tofile(os.path.join(labels_folder, query_sd_tok + "_key_rays_idx.bin"))
+            # key_meta_info_uint32.tofile(os.path.join(labels_folder, query_sd_tok + "_key_meta.bin"))
 
             # clear cuda memory
             del depth, labels, confidence, query_rays_idx, key_rays_idx, key_meta_info, query_rays, key_rays_list

@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from typing import List
 from pyquaternion import Quaternion
@@ -109,10 +110,18 @@ def get_sample_data_level_seq_input(nusc, cfg_model, sample_toks: List[str], dir
 def get_ego_mask(pcd):
     # nuscenes car: length (4.084 m), width (1.730 m), height (1.562 m)
     # https://forum.nuscenes.org/t/dimensions-of-the-ego-vehicle-used-to-gather-data/550
-    ego_mask = torch.logical_and(
-        torch.logical_and(-0.865 <= pcd[:, 0], pcd[:, 0] <= 0.865),
-        torch.logical_and(-1.5 <= pcd[:, 1], pcd[:, 1] <= 2.5),
-    )
+    if type(pcd) == torch.Tensor:
+        ego_mask = torch.logical_and(
+            torch.logical_and(-0.865 <= pcd[:, 0], pcd[:, 0] <= 0.865),
+            torch.logical_and(-1.5 <= pcd[:, 1], pcd[:, 1] <= 2.5),
+        )
+    elif type(pcd) == np.ndarray:
+        ego_mask = np.logical_and(
+            np.logical_and(-0.865 <= pcd[:, 0], pcd[:, 0] <= 0.865),
+            np.logical_and(-1.5 <= pcd[:, 1], pcd[:, 1] <= 2.5),
+        )
+    else:
+        raise TypeError("not a valid type for pcd")
     return ego_mask
 
 

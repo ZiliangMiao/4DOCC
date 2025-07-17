@@ -176,7 +176,7 @@ def compare_mos_labels(nusc, vis_cfg, sample_toks):
         points = LidarPointCloud.from_file(os.path.join(nusc.dataroot, sample_data['filename'])).points[:3, :]
 
         # labels
-        v0_labels_file = os.path.join(nusc.dataroot, 'mos_labels_v0', nusc.version, sd_tok + "_mos.label")
+        v0_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
         v0_labels = np.fromfile(v0_labels_file, dtype=np.uint8)
         v1_labels_file = os.path.join(nusc.dataroot, 'mos_labels', nusc.version, sd_tok + "_mos.label")
         v1_labels = np.fromfile(v1_labels_file, dtype=np.uint8)
@@ -368,10 +368,14 @@ def compare_mos_results(nusc, sd_toks_list, vis_cfg):
         # points
         pcl_path = os.path.join(nusc.dataroot, sample_data['filename'])
         points = LidarPointCloud.from_file(pcl_path).points.T # [num_points, 4]
-        ego_mask = get_ego_mask(torch.tensor(points))
-        outside_scene_mask = get_outside_scene_mask(torch.tensor(points), vis_cfg['mos']['scene_bbox'],
+        valid_mask = torch.squeeze(torch.full((len(points), 1), True))
+        if True:
+            outside_scene_mask = get_outside_scene_mask(torch.tensor(points), vis_cfg['mos']['scene_bbox'],
                                                                           mask_z=False, upper_bound=True)
-        valid_mask = torch.logical_and(~ego_mask, ~outside_scene_mask)
+            valid_mask = torch.logical_and(valid_mask, ~outside_scene_mask)
+        if False:
+            ego_mask = get_ego_mask(torch.tensor(points))
+            valid_mask = torch.logical_and(valid_mask, ~ego_mask)
         points = points[valid_mask]
 
         # labels
