@@ -262,3 +262,33 @@ def test_cuda_matches_cpu():
         assert torch.equal(ref[k], out[k].cpu()), k
     for k in ["depth", "nbr_depth", "w_conf"]:
         assert torch.allclose(ref[k], out[k].cpu(), atol=1e-5), k
+
+
+def test_coplanar_closed_form_and_sign_of_A():
+    """Design doc 2.2 step 5-6: closed-form s_lo / s_hi for coplanar beams, A < 0 iff kappa tan(alpha/2) < tau."""
+    g = torch.Generator().manual_seed(0)
+    for trial in range(400):
+        kap = [1.0, 0.5][trial % 2]
+        cfg = TopLabelConfig(sep_scale=kap)
+        tau = cfg.tau
+        alpha = 10 ** torch.empty(1).uniform_(-3.5, 0, generator=g).item()
+        phi = torch.rand(1, generator=g).item() * 2 * math.pi
+        d_i = torch.tensor([math.cos(phi), math.sin(phi), 0.0], dtype=F64)
+        d_j = torch.tensor([math.cos(phi + alpha), math.sin(phi + alpha), 0.0], dtype=F64)
+        s_star = 5 + 40 * torch.rand(1, generator=g).item()
+        t_star = 5 + 40 * torch.rand(1, generator=g).item()
+        a = s_star * d_i - t_star * d_j
+        iv = _iv(d_i, d_j, a, cfg)
+        c, sn = math.cos(alpha), math.sin(alpha)
+        s_lo = (s_star * (kap * sn + tau * c) - tau * t_star) / (kap * sn + tau * (1 + c))
+        bounded = kap * math.tan(alpha / 2) > tau
+        assert ((kap * sn) ** 2 - (tau * (1 + c)) ** 2 > 0) == bounded
+        s_hi = (s_star * (kap * sn - tau * c) + tau * t_star) / (kap * sn - tau * (1 + c)) if bounded else BIG
+        # domain: min_range <= s <= BIG, min_range <= t(s) = c s - v <= BIG
+        v = float(torch.dot(d_j, a))
+        lo = max(s_lo, cfg.min_range, (cfg.min_range + v) / c)
+        hi = min(s_hi, BIG, (BIG + v) / c)
+        assert bool(iv["valid"]) == (lo <= hi)
+        if lo <= hi:
+            assert abs(float(iv["s_lo"]) - lo) < 1e-7 * s_star
+            assert abs(float(iv["s_hi"]) - hi) < 1e-7 * max(s_star, hi)
